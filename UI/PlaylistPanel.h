@@ -176,16 +176,21 @@ public:
                juce::Justification::centredRight);
 
     // Track name (remaining area)
-    g.setColour(row == currentTrackIndex
-                    ? juce::Colours::white
-                    : juce::Colours::white.withAlpha(0.85f));
+    auto textColour = row == currentTrackIndex
+                          ? juce::Colours::white
+                          : juce::Colours::white.withAlpha(0.85f);
+    if (track->missing)
+      textColour = juce::Colours::white.withAlpha(0.45f);
+    g.setColour(textColour);
 
     // Use the configured playlist font
     if (laf)
       g.setFont(laf->getPlaylistFont(fontSize, row == currentTrackIndex));
     else
       g.setFont(juce::FontOptions(fontSize));
-    g.drawText(track->name, area.reduced(8, 0),
+    auto trackName =
+        track->missing ? track->name + L" [Missing]" : track->name;
+    g.drawText(trackName, area.reduced(8, 0),
                juce::Justification::centredLeft, true);
   }
 
@@ -384,13 +389,16 @@ private:
     fileChooser->launchAsync(
         juce::FileBrowserComponent::openMode |
             juce::FileBrowserComponent::canSelectMultipleItems,
-        [this](const juce::FileChooser &fc) {
+        [safeThis = juce::Component::SafePointer<PlaylistPanel>(this)](
+            const juce::FileChooser &fc) {
+          if (safeThis == nullptr)
+            return;
           juce::StringArray files;
           for (auto &f : fc.getResults())
             files.add(f.getFullPathName());
-          if (!files.isEmpty() && listener)
-            listener->playlistFilesDropped(files);
-          refresh();
+          if (!files.isEmpty() && safeThis->listener)
+            safeThis->listener->playlistFilesDropped(files);
+          safeThis->refresh();
         });
   }
 
@@ -399,16 +407,18 @@ private:
     juce::AlertWindow::showOkCancelBox(
         juce::AlertWindow::QuestionIcon, L"清空列表", L"确定要移除所有曲目吗？",
         L"确定", L"取消", this,
-        juce::ModalCallbackFunction::create([this](int result) {
-          if (result == 1) {
-            playlistManager.clear();
-            currentTrackIndex = -1;
+        juce::ModalCallbackFunction::create(
+            [safeThis = juce::Component::SafePointer<PlaylistPanel>(this)](
+                int result) {
+          if (result == 1 && safeThis != nullptr) {
+            safeThis->playlistManager.clear();
+            safeThis->currentTrackIndex = -1;
             // 清除上次加载的播放列表路径，防止下次启动时自动加载旧文件
             getAppSettings().setLastPlaylistPath("");
-            refresh();
+            safeThis->refresh();
             // 通知 MainContentComponent 重置播放索引
-            if (listener)
-              listener->playlistLoaded();
+            if (safeThis->listener)
+              safeThis->listener->playlistLoaded();
           }
         }));
   }
@@ -417,11 +427,15 @@ private:
     fileChooser = std::make_unique<juce::FileChooser>(L"保存播放列表",
                                                       juce::File(), "*.json");
     fileChooser->launchAsync(juce::FileBrowserComponent::saveMode,
-                             [this](const juce::FileChooser &fc) {
+                             [safeThis = juce::Component::SafePointer<
+                                  PlaylistPanel>(this)](
+                                 const juce::FileChooser &fc) {
+                               if (safeThis == nullptr)
+                                 return;
                                auto r = fc.getResult();
                                if (r != juce::File()) {
                                  auto file = r.withFileExtension(".json");
-                                 if (playlistManager.save(file)) {
+                                 if (safeThis->playlistManager.save(file)) {
                                    getAppSettings().setLastPlaylistPath(
                                        file.getFullPathName());
                                  }
@@ -440,11 +454,15 @@ private:
           L"检测到上次使用的播放列表，是否直接加载？\n" +
               lastFile.getFileName(),
           L"加载最近", L"选择其他", L"取消", this,
-          juce::ModalCallbackFunction::create([this, lastFile](int result) {
+          juce::ModalCallbackFunction::create(
+              [safeThis = juce::Component::SafePointer<PlaylistPanel>(this),
+               lastFile](int result) {
             if (result == 1) { // 是 (加载最近)
-              performLoad(lastFile);
+              if (safeThis != nullptr)
+                safeThis->performLoad(lastFile);
             } else if (result == 2) { // 否 (选择其他)
-              showLoadFileChooser();
+              if (safeThis != nullptr)
+                safeThis->showLoadFileChooser();
             }
             // result == 0 (取消) -> 不执行任何操作
           }));
@@ -457,10 +475,14 @@ private:
     fileChooser = std::make_unique<juce::FileChooser>(L"加载播放列表",
                                                       juce::File(), "*.json");
     fileChooser->launchAsync(juce::FileBrowserComponent::openMode,
-                             [this](const juce::FileChooser &fc) {
+                             [safeThis = juce::Component::SafePointer<
+                                  PlaylistPanel>(this)](
+                                 const juce::FileChooser &fc) {
+                               if (safeThis == nullptr)
+                                 return;
                                auto file = fc.getResult();
                                if (file.existsAsFile()) {
-                                 performLoad(file);
+                                 safeThis->performLoad(file);
                                }
                              });
   }
@@ -470,6 +492,12 @@ private:
       getAppSettings().setLastPlaylistPath(file.getFullPathName());
       currentTrackIndex = -1;
       refresh();
+      if (playlistManager.hasMissingFiles()) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon, L"播放列表包含缺失文件",
+            L"已加载播放列表，但其中部分 MIDI 文件当前不存在。\n"
+            L"这些条目已被保留，并在列表中标记为 Missing。");
+      }
       // 通知 MainContentComponent 重置播放索引
       if (listener)
         listener->playlistLoaded();

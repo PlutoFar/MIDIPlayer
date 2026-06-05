@@ -22,7 +22,6 @@ public:
     juce::Logger::writeToLog(fullMessage);
 
     // 同时输出到 DBG() 以便在 IDE 中查看
-    DBG(fullMessage);
   }
 
   static void init() {

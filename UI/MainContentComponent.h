@@ -97,22 +97,8 @@ class MainContentComponent : public juce::Component,
                              public BackgroundSettingsDialog::Listener,
                              public juce::AsyncUpdater {
 public:
-  /**
-      UI 看门狗线程。
-
-      维护要点：
-      - 该线程独立于消息线程运行。
-      - 它定期检查 lastHeartbeatTime（由计时器回调在主线程更新）。
-      - 如果发现 3 秒钟内没有心跳，判定 UI 冻结。
-      - 恢复机制：紧急停止 BackgroundComponent
-     的高负载操作，并向消息队列发送异步恢复信号。
-  */
   MainContentComponent(AudioEngine &e)
-      : engine(e), navigation(fluentLookAndFeel), playlistPanel(playlist),
-        watchdog(*this) {
-    lastHeartbeatTime.store(juce::Time::getMillisecondCounter());
-    isWatchdogDialogActive.store(false);
-    watchdog.startThread();
+      : engine(e), navigation(fluentLookAndFeel), playlistPanel(playlist) {
     setLookAndFeel(&fluentLookAndFeel);
     engine.addChangeListener(this);
     setWantsKeyboardFocus(true);
@@ -121,9 +107,12 @@ public:
     // Background (covers entire window)
     addAndMakeVisible(background);
     background.toBack();
-    background.onAccentColorChanged = [this](juce::Colour c) {
-      onAccentColorChanged(c);
-    };
+    background.onAccentColorChanged =
+        [safeThis = juce::Component::SafePointer<MainContentComponent>(this)](
+            juce::Colour c) {
+          if (safeThis != nullptr)
+            safeThis->onAccentColorChanged(c);
+        };
 
     // Navigation sidebar (collapsible)
     addAndMakeVisible(navigation);
@@ -262,33 +251,35 @@ public:
     fluentLookAndFeel.updateAccentColor(savedColor);
 
     // Apply Windows 11 style and handle audio initialization alerts
-    juce::Timer::callAfterDelay(150, [this]() {
-      if (auto *topLevel = getTopLevelComponent())
+    runLater(150, [](MainContentComponent &self) {
+      if (auto *topLevel = self.getTopLevelComponent())
         Win11Helpers::applyWin11Style(topLevel);
 
       // 如果正在通过文件关联打开 MIDI 文件，跳过通用音频设备警告，
       // 由 openMidiFileFromShell 流程统一处理错误提示，避免对话框堆叠。
-      if (pendingShellOpen)
+      if (self.pendingShellOpen)
         return;
 
-      if (engine.isFirstRunAudio()) {
+      if (self.engine.isFirstRunAudio()) {
         // First run - no audio settings found. Guide user to settings.
         juce::AlertWindow::showOkCancelBox(
             juce::AlertWindow::QuestionIcon, L"首次运行 - 音频设置",
             L"检测到当前未配置音频输出设备。为了正确加载乐器插件，建议"
             L"立即进行音频配置。",
             L"立即设置", L"以后再说", nullptr,
-            juce::ModalCallbackFunction::create([this](int result) {
-              if (result == 1) // OK clicked
-                showAudioSettings();
+            juce::ModalCallbackFunction::create(
+                [safeThis = juce::Component::SafePointer<MainContentComponent>(
+                     &self)](int result) {
+                  if (result == 1 && safeThis != nullptr)
+                    safeThis->showAudioSettings();
             }));
-      } else if (!engine.hasAudioDevice()) {
+      } else if (!self.engine.hasAudioDevice()) {
         // Not first run, but no audio device available at all
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon, L"音频设备不可用",
             L"未检测到可用的音频输出设备，请检查您的音频设备是否正常工作。"
             L"\n\n您可以在侧栏「设置」中手动配置音频输出。");
-      } else if (engine.wasDeviceRestoredWithFallback()) {
+      } else if (self.engine.wasDeviceRestoredWithFallback()) {
         // Saved device was missing at startup, fell back to default
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::InfoIcon, L"音频设备已重置",
@@ -299,11 +290,14 @@ public:
     addAndMakeVisible(modeToast);
 
     // 启动时自动加载上次使用的播放列表文件
-    juce::Timer::callAfterDelay(
-        200, [this]() { playlistPanel.autoLoadLastPlaylist(); });
+    runLater(200, [](MainContentComponent &self) {
+      self.playlistPanel.autoLoadLastPlaylist();
+    });
 
     // 文件关联提示（排在音频设置提示之后）
-    juce::Timer::callAfterDelay(500, [this]() { showFileAssociationPrompt(); });
+    runLater(500, [](MainContentComponent &self) {
+      self.showFileAssociationPrompt();
+    });
   }
 
   ~MainContentComponent() override {
@@ -316,26 +310,15 @@ public:
 
   void timerCallback() override {
     static uint32_t lastCallTime = 0;
-    static uint32_t freezeDiagCounter = 0;
     auto now = juce::Time::getMillisecondCounter();
-
-    // 每500次调用输出一次心跳日志（约16秒一次），减少日志量
-    if (++freezeDiagCounter >= 500) {
-      LOG_DEBUG("[FREEZE_DIAG] timerCallback heartbeat #" +
-                juce::String(freezeDiagCounter));
-      freezeDiagCounter = 0;
-    }
 
     if (lastCallTime != 0) {
       auto interval = now - lastCallTime;
-      if (interval > 100) {
-        LOG_DEBUG("TIMER LAG: interval was " + juce::String(interval) + " ms");
-      }
+      (void)interval;
     }
     lastCallTime = now;
 
     SCOPED_TIMER_SLOW("MainContentComponent::timerCallback", 20);
-    lastHeartbeatTime.store(juce::Time::getMillisecondCounter());
 
     auto &player = engine.getMidiPlayer();
     auto currentTime = juce::Time::getMillisecondCounter();
@@ -374,19 +357,8 @@ public:
 
     // 检查播放结束标志（仅在用户未拖动进度条时）。
     // 延迟检查防止在用户快速跳转时触发“下一曲”，避免状态冲突和播放中断。
-    if (!isUserDraggingProgress && player.hasFinished()) {
-      LOG_DEBUG("[FREEZE_DIAG] TC: calling handleTrackEnd");
+    if (!isUserDraggingProgress && player.hasFinished())
       handleTrackEnd();
-      LOG_DEBUG("[FREEZE_DIAG] TC: handleTrackEnd returned");
-    }
-
-    // 只在 timerCallback 执行时间异常时输出完成日志，避免每次都输出导致日志爆炸
-    auto tcEndTime = juce::Time::getMillisecondCounter();
-    auto tcDuration = tcEndTime - now;
-    if (tcDuration > 20) { // 超过20ms视为慢速执行
-      LOG_DEBUG("[FREEZE_DIAG] TC completed (slow: " +
-                juce::String(tcDuration) + "ms)");
-    }
 
     // 根据插件加载状态禁用/启用交通控制按钮
     bool hasPlugin = engine.getVst3Instance() != nullptr;
@@ -424,41 +396,22 @@ public:
       repaint();
     }
 
-    // Update watchdog heartbeat here (in Message Thread) instead of paint()
-    // This ensures detection works even if window is minimized or covered.
-    // lastHeartbeatTime.store(juce::Time::getMillisecondCounter()); // MOVED
-    // to top
   }
 
-  void handleFreezeRecovery() {
-    LOG_DEBUG("!!! UI WATCHDOG TRIGGERED RECOVERY !!!");
-    // Prevent multiple dialogs stacking up
-    if (isWatchdogDialogActive.load())
-      return;
+/*
 
-    isWatchdogDialogActive.store(true);
 
-    // 1. Emergency Reset Background
-    background.emergencyReset();
-
-    // 2. Resume playback if it was supposed to be playing
-    if (lastPlayingState || engine.getMidiPlayer().getPlaying()) {
-      engine.getMidiPlayer().setPlaying(true);
-    }
-
-    // 3. Force Repaint
-    repaint();
-
-    // 4. Notify User
-    juce::AlertWindow::showMessageBoxAsync(
         juce::AlertWindow::WarningIcon, L"界面响应恢复",
         L"检测到界面长时间未响应，已自动尝试恢复。", L"OK", nullptr,
-        juce::ModalCallbackFunction::create([this](int) {
-          // Reset flag when dialog is closed
-          isWatchdogDialogActive.store(false);
+        juce::ModalCallbackFunction::create(
+            [safeThis = juce::Component::SafePointer<MainContentComponent>(
+                 this)](int) {
+              if (safeThis != nullptr)
+                safeThis->isWatchdogDialogActive.store(false);
         }));
   }
 
+*/
   void paint(juce::Graphics &g) override {
     SCOPED_TIMER_SLOW("MainContentComponent::paint", 10);
     auto &colors = fluentLookAndFeel.getColors();
@@ -829,7 +782,12 @@ public:
   }
 
   // 当播放列表被加载或清空时调用，重置播放索引
-  void playlistLoaded() override { currentTrackIndex = -1; }
+  void playlistLoaded() override {
+    setCurrentTrackIndex(-1);
+    auto lastPath = getAppSettings().getLastPlaylistPath();
+    currentPlaylistFile =
+        lastPath.isNotEmpty() ? juce::File(lastPath) : juce::File();
+  }
 
   // 拖拽排序后同步播放索引，确保切歌逻辑使用正确的位置
   void playlistTrackReordered(int newCurrentIndex) override {
@@ -837,7 +795,6 @@ public:
   }
 
   void playlistTrackDoubleClicked(int index) {
-    LOG_DEBUG("Playlist double-clicked index: " + juce::String(index));
     if (engine.getVst3Instance() == nullptr) {
       juce::AlertWindow::showMessageBoxAsync(
           juce::AlertWindow::WarningIcon, L"无法播放",
@@ -849,17 +806,16 @@ public:
     isHandlingTrackEnd = false;
     engine.getMidiPlayer().setPlaying(false);
 
-    currentTrackIndex = index;
+    setCurrentTrackIndex(index);
     if (const auto *track = playlist.getTrack(index)) {
       if (loadMidiFile(track->file)) {
-        playlistPanel.setCurrentTrackIndex(index);
         // 延迟播放，给 VSL 插件时间处理重置消息
         ++trackSwitchGeneration;
         int gen = trackSwitchGeneration;
-        juce::Timer::callAfterDelay(100, [this, gen]() {
-          if (trackSwitchGeneration != gen)
+        runLater(100, [gen](MainContentComponent &self) {
+          if (self.trackSwitchGeneration != gen)
             return;
-          engine.getMidiPlayer().setPlaying(true);
+          self.engine.getMidiPlayer().setPlaying(true);
         });
       }
     }
@@ -933,8 +889,7 @@ public:
       if (currentlyPlaying && currentPlayingFile.existsAsFile()) {
         int newIndex = playlist.findTrackIndex(currentPlayingFile);
         if (newIndex != -1 && newIndex != currentTrackIndex) {
-          currentTrackIndex = newIndex;
-          playlistPanel.setCurrentTrackIndex(newIndex);
+          setCurrentTrackIndex(newIndex);
         }
       }
 
@@ -1047,6 +1002,31 @@ public:
   }
 
 private:
+  void setCurrentTrackIndex(int index) {
+    currentTrackIndex = index;
+    if (index >= 0)
+      playlistPanel.setCurrentTrackIndex(index);
+    else
+      playlistPanel.deselectAllRows();
+  }
+
+  void runLater(int delayMs, std::function<void(MainContentComponent &)> fn) {
+    auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
+    juce::Timer::callAfterDelay(
+        delayMs, [safeThis, fn = std::move(fn)]() mutable {
+          if (safeThis != nullptr)
+            fn(*safeThis);
+        });
+  }
+
+  void runAsync(std::function<void(MainContentComponent &)> fn) {
+    auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
+    juce::MessageManager::callAsync([safeThis, fn = std::move(fn)]() mutable {
+      if (safeThis != nullptr)
+        fn(*safeThis);
+    });
+  }
+
   void setupIconButton(juce::Button &btn, const juce::String &,
                        const juce::String &tooltip) {
     addAndMakeVisible(btn);
@@ -1221,10 +1201,11 @@ private:
     juce::AlertWindow::showOkCancelBox(
         juce::AlertWindow::QuestionIcon, L"确认卸载", L"确定要卸载当前插件吗？",
         L"卸载", L"取消", this,
-        juce::ModalCallbackFunction::create([this](int result) {
-          if (result != 0) {
-            unloadPlugin();
-          }
+        juce::ModalCallbackFunction::create(
+            [safeThis = juce::Component::SafePointer<MainContentComponent>(
+                 this)](int result) {
+              if (result != 0 && safeThis != nullptr)
+                safeThis->unloadPlugin();
         }));
   }
 
@@ -1240,7 +1221,12 @@ public:
   // Returns true if saved (or user accepted SaveAs), false if cancelled/failed
   bool savePlaylist() {
     if (currentPlaylistFile.existsAsFile()) {
-      return playlist.save(currentPlaylistFile);
+      if (playlist.save(currentPlaylistFile)) {
+        getAppSettings().setLastPlaylistPath(
+            currentPlaylistFile.getFullPathName());
+        return true;
+      }
+      return false;
     } else {
       return savePlaylistAs();
     }
@@ -1252,35 +1238,15 @@ public:
         juce::File(getAppSettings().getLastMidiDirectory())
             .getChildFile("playlist.json"),
         "*.json");
-
-    // Note: Since we are likely called from closeButtonPressed, we need
-    // synchronous behavior or careful async.
-    // However, closeButtonPressed in Main.cpp usually expects a return value
-    // immediately or handles async quit.
-    // For now, we'll use a modal loop or assume this is triggered by a button
-    // (Manual Save).
-    // If triggered by Exit Prompt, the Exit Prompt itself (AlertWindow) is
-    // handling the flow. Use browseForFileToSave for synchronous if needed, OR
-    // launchAsync.
-    // Given Juce 7/8 trends, async is preferred. But for 'closeButtonPressed'
-    // it's tricky.
-    // We will use synchronous browse for simplicity in this specific "Save As"
-    // flow if allowed, otherwise we might need a workaround for exit.
-    // Let's use launchAsync with a callback that updates the file.
-    // BUT: If this is called from Exit Prompt, we need to know the result to
-    // proceed closing.
-    // Refactoring: The Exit Prompt in Main.cpp will be the one driving this.
-    // If "Save" is clicked, Main.cpp calls savePlaylist().
-    // If savePlaylist returns false (e.g. cancelled SaveAs), we shouldn't quit?
-    // User requirement: "options to save, discard, or cancel".
-    // If Save is chosen -> Save.
-    // If SaveAs is needed -> Show dialog.
-    // If user cancels SaveAs -> Cancel exit?
-
-    // Ideally use browseForFileToSave (modal) for simplicity on Desktop.
+    // Save As needs a synchronous result for the current close/save flow.
     if (fileChooser->browseForFileToSave(true)) {
       currentPlaylistFile = fileChooser->getResult();
-      return playlist.save(currentPlaylistFile);
+      if (playlist.save(currentPlaylistFile)) {
+        getAppSettings().setLastPlaylistPath(
+            currentPlaylistFile.getFullPathName());
+        return true;
+      }
+      return false;
     }
     return false;
   }
@@ -1317,8 +1283,10 @@ public:
       // 延迟执行加载，让提示框先显示出来
       auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
       juce::Timer::callAfterDelay(10, [safeThis, desc, idx, loadingWindow]() {
-        if (safeThis == nullptr)
+        if (safeThis == nullptr) {
+          loadingWindow->exitModalState(0);
           return;
+        }
 
         if (safeThis->engine.loadPlugin(desc)) {
           safeThis->openPluginBtn.setEnabled(true);
@@ -1375,12 +1343,10 @@ public:
               inst->getName(), editor, w, h);
         }
       } catch (const std::exception &e) {
-        DBG("Plugin editor creation failed: " + juce::String(e.what()));
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon, L"插件窗口打开失败",
             L"无法创建插件编辑器窗口，请尝试重新加载插件。");
       } catch (...) {
-        DBG("Plugin editor creation failed with unknown exception");
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon, L"插件窗口打开失败",
             L"无法创建插件编辑器窗口，请尝试重新加载插件。");
@@ -1452,8 +1418,7 @@ public:
     // 先停止当前播放，防止 finishedFlag 在新曲目加载后被误读
     engine.getMidiPlayer().setPlaying(false);
 
-    currentTrackIndex =
-        playlist.getNextIndex(currentTrackIndex);
+    setCurrentTrackIndex(playlist.getNextIndex(currentTrackIndex));
 
     // If -1 (end of list in sequential), we stop.
     if (currentTrackIndex == -1) {
@@ -1463,14 +1428,14 @@ public:
 
     if (const auto *track = playlist.getTrack(currentTrackIndex)) {
       if (loadMidiFile(track->file)) {
-        playlistPanel.setCurrentTrackIndex(currentTrackIndex);
+        setCurrentTrackIndex(currentTrackIndex);
         // 延迟播放，给 VSL 插件时间处理重置消息
         ++trackSwitchGeneration;
         int gen = trackSwitchGeneration;
-        juce::Timer::callAfterDelay(100, [this, gen]() {
-          if (trackSwitchGeneration != gen)
+        runLater(100, [gen](MainContentComponent &self) {
+          if (self.trackSwitchGeneration != gen)
             return; // 被更新的操作取代
-          engine.getMidiPlayer().setPlaying(true);
+          self.engine.getMidiPlayer().setPlaying(true);
         });
       }
     }
@@ -1487,21 +1452,21 @@ public:
     // 先停止当前播放
     engine.getMidiPlayer().setPlaying(false);
 
-    currentTrackIndex = playlist.getPreviousIndex(currentTrackIndex);
+    setCurrentTrackIndex(playlist.getPreviousIndex(currentTrackIndex));
     if (currentTrackIndex == -1) {
       stopPlayback();
       return;
     }
     if (const auto *track = playlist.getTrack(currentTrackIndex)) {
       if (loadMidiFile(track->file)) {
-        playlistPanel.setCurrentTrackIndex(currentTrackIndex);
+        setCurrentTrackIndex(currentTrackIndex);
         // 延迟播放，给 VSL 插件时间处理重置消息
         ++trackSwitchGeneration;
         int gen = trackSwitchGeneration;
-        juce::Timer::callAfterDelay(100, [this, gen]() {
-          if (trackSwitchGeneration != gen)
+        runLater(100, [gen](MainContentComponent &self) {
+          if (self.trackSwitchGeneration != gen)
             return; // 被更新的操作取代
-          engine.getMidiPlayer().setPlaying(true);
+          self.engine.getMidiPlayer().setPlaying(true);
         });
       }
     }
@@ -1514,39 +1479,37 @@ public:
     isHandlingTrackEnd = true;
     ++trackSwitchGeneration;
     int myGeneration = trackSwitchGeneration;
-    LOG_DEBUG("MainContentComponent::handleTrackEnd - Starting switch");
     SCOPED_TIMER_ALWAYS("MainContentComponent::handleTrackEnd");
     engine.getMidiPlayer().setPlaying(false);
     engine.getMidiPlayer().seekTo(0);
 
-    juce::MessageManager::callAsync([this, myGeneration]() {
+    runAsync([myGeneration](MainContentComponent &self) {
       // 如果代数不匹配，说明用户已经手动切歌，放弃此次自动切歌
-      if (trackSwitchGeneration != myGeneration) {
-        isHandlingTrackEnd = false;
+      if (self.trackSwitchGeneration != myGeneration) {
+        self.isHandlingTrackEnd = false;
         return;
       }
 
       // Use PlaylistManager's Mode logic
-      int next = playlist.getNextIndex(currentTrackIndex);
+      int next = self.playlist.getNextIndex(self.currentTrackIndex);
       if (next != -1) {
-        currentTrackIndex = next;
+        self.setCurrentTrackIndex(next);
         // Load and play
-        if (const auto *track = playlist.getTrack(currentTrackIndex)) {
-          if (loadMidiFile(track->file)) {
-            playlistPanel.setCurrentTrackIndex(currentTrackIndex);
+        if (const auto *track = self.playlist.getTrack(self.currentTrackIndex)) {
+          if (self.loadMidiFile(track->file)) {
             // 延迟启动播放，给 VSL 插件时间处理重置消息
-            juce::Timer::callAfterDelay(100, [this, myGeneration]() {
-              if (trackSwitchGeneration != myGeneration)
+            self.runLater(100, [myGeneration](MainContentComponent &delayedSelf) {
+              if (delayedSelf.trackSwitchGeneration != myGeneration)
                 return; // 已被其他操作取代
-              engine.getMidiPlayer().setPlaying(true);
-              isHandlingTrackEnd = false;
+              delayedSelf.engine.getMidiPlayer().setPlaying(true);
+              delayedSelf.isHandlingTrackEnd = false;
             });
             return;
           }
         }
       }
       // 没有下一曲或加载失败时重置标志
-      isHandlingTrackEnd = false;
+      self.isHandlingTrackEnd = false;
     });
   }
 
@@ -1587,13 +1550,17 @@ public:
 
     fileChooser->launchAsync(
         juce::FileBrowserComponent::openMode,
-        [this](const juce::FileChooser &fc) {
+        [safeThis = juce::Component::SafePointer<MainContentComponent>(this)](
+            const juce::FileChooser &fc) {
+          if (safeThis == nullptr)
+            return;
+
           auto result = fc.getResult();
           if (result.existsAsFile()) {
             getAppSettings().setLastMidiDirectory(
                 result.getParentDirectory().getFullPathName());
-            if (loadMidiFile(result)) {
-              engine.getMidiPlayer().setPlaying(true);
+            if (safeThis->loadMidiFile(result)) {
+              safeThis->engine.getMidiPlayer().setPlaying(true);
             }
           }
         });
@@ -1808,22 +1775,21 @@ public:
         // 文件已在列表中，直接定位到它
         int idx = playlist.findTrackIndex(file);
         if (idx >= 0) {
-          currentTrackIndex = idx;
-          playlistPanel.setCurrentTrackIndex(idx);
+          setCurrentTrackIndex(idx);
         }
       } else {
         // 添加到列表末尾
         playlist.addFile(file);
         playlistPanel.refresh();
-        currentTrackIndex = playlist.size() - 1;
-        playlistPanel.setCurrentTrackIndex(currentTrackIndex);
+        setCurrentTrackIndex(playlist.size() - 1);
       }
 
       if (loadMidiFile(file)) {
         if (engine.getVst3Instance() != nullptr) {
           // 已有插件，加载并播放
-          juce::Timer::callAfterDelay(
-              150, [this]() { engine.getMidiPlayer().setPlaying(true); });
+          runLater(150, [](MainContentComponent &self) {
+            self.engine.getMidiPlayer().setPlaying(true);
+          });
         } else {
           // 没有加载乐器插件 → 尝试自动加载上次使用的插件
           tryLoadLastPluginWithDialog();
@@ -1833,18 +1799,18 @@ public:
       // === 场景A：冷启动，播放列表为空 ===
       playlist.clear();
       currentPlaylistFile = juce::File();
-      currentTrackIndex = -1;
+      setCurrentTrackIndex(-1);
 
       playlist.addFile(file);
       playlistPanel.refresh();
-      currentTrackIndex = 0;
-      playlistPanel.setCurrentTrackIndex(0);
+      setCurrentTrackIndex(0);
 
       if (loadMidiFile(file)) {
         if (engine.getVst3Instance() != nullptr) {
           // 已有插件，直接播放
-          juce::Timer::callAfterDelay(
-              150, [this]() { engine.getMidiPlayer().setPlaying(true); });
+          runLater(150, [](MainContentComponent &self) {
+            self.engine.getMidiPlayer().setPlaying(true);
+          });
         } else {
           // 尝试自动加载上次使用的插件
           tryLoadLastPluginWithDialog();
@@ -1875,9 +1841,11 @@ public:
           L"未检测到可用的音频输出设备，无法加载乐器插件。"
           L"\n\n请先在音频设置中配置输出设备。",
           L"打开设置", L"取消", nullptr,
-          juce::ModalCallbackFunction::create([this](int result) {
-            if (result == 1)
-              showAudioSettings();
+          juce::ModalCallbackFunction::create(
+              [safeThis = juce::Component::SafePointer<MainContentComponent>(
+                   this)](int result) {
+                if (result == 1 && safeThis != nullptr)
+                  safeThis->showAudioSettings();
           }));
       return;
     }
@@ -1979,9 +1947,13 @@ public:
 
   void showFontSettings() {
     auto *content = new FontSettingsContent(fluentLookAndFeel);
-    content->onSettingsChanged = [this]() {
-      playlistPanel.refresh();
-      playlistPanel.repaint();
+    content->onSettingsChanged =
+        [safeThis = juce::Component::SafePointer<MainContentComponent>(this)]() {
+          if (safeThis == nullptr)
+            return;
+
+          safeThis->playlistPanel.refresh();
+          safeThis->playlistPanel.repaint();
     };
 
     juce::DialogWindow::LaunchOptions options;
@@ -2033,7 +2005,6 @@ public:
           openPluginBtn.setEnabled(true);
           contentLabel.setText(L"已加载: " + list.getTypes()[i].name,
                                juce::dontSendNotification);
-          DBG("Auto-loaded last plugin: " + list.getTypes()[i].name);
         }
         return;
       }
@@ -2445,17 +2416,12 @@ public:
   public:
     SeekUpdater(MainContentComponent &o) : owner(o) {}
     void handleAsyncUpdate() override {
-      LOG_DEBUG("[FREEZE_DIAG] SeekUpdater::handleAsyncUpdate - start");
       SCOPED_TIMER_ALWAYS("MainContentComponent::performSeek");
       double dur = owner.engine.getMidiPlayer().getDurationInSamples();
       if (dur > 0) {
         double val = owner.pendingSeekValue.load();
-        LOG_DEBUG("[FREEZE_DIAG] SeekUpdater: calling seekTo(" +
-                  juce::String(val * dur) + ")");
         owner.engine.getMidiPlayer().seekTo(val * dur);
-        LOG_DEBUG("[FREEZE_DIAG] SeekUpdater: seekTo returned");
       }
-      LOG_DEBUG("[FREEZE_DIAG] SeekUpdater::handleAsyncUpdate - end");
     }
 
   private:
@@ -2464,46 +2430,6 @@ public:
 
   SeekUpdater seekUpdater{*this};
   std::atomic<double> pendingSeekValue{0.0};
-
-  class UIWatchdog : public juce::Thread {
-  public:
-    UIWatchdog(MainContentComponent &o)
-        : juce::Thread("UIWatchdog"), owner(o) {}
-
-    void run() override {
-      while (!threadShouldExit()) {
-        auto currentTime = juce::Time::getMillisecondCounter();
-        auto lastHeartbeat = owner.lastHeartbeatTime.load();
-        auto diff = currentTime - lastHeartbeat;
-
-        if (diff > 5000) { // Log warning at 5s
-          static uint32_t lastWarnTime = 0;
-          if (currentTime - lastWarnTime > 5000) {
-            LOG_DEBUG("CRITICAL: UI HEARTBEAT LAG: " + juce::String(diff) +
-                      " ms");
-            lastWarnTime = currentTime;
-          }
-        }
-
-        if (diff > 30000) { // 30 seconds timeout
-          if (!owner.isWatchdogDialogActive.load()) {
-            LOG_DEBUG("!!! UI WATCHDOG: MT FREEZE DETECTED !!!");
-            // 使用 SafePointer 防止组件销毁后访问悬空指针
-            auto safeOwner =
-                juce::Component::SafePointer<MainContentComponent>(&owner);
-            juce::MessageManager::callAsync([safeOwner]() {
-              if (safeOwner != nullptr)
-                safeOwner->handleFreezeRecovery();
-            });
-          }
-        }
-        wait(500);
-      }
-    }
-
-  private:
-    MainContentComponent &owner;
-  };
 
   // Spinner for scan progress - optimized to only run when visible
   class SpinnerComponent : public juce::Component, public juce::Timer {
@@ -2586,10 +2512,6 @@ public:
   bool isHandlingTrackEnd = false;
   int trackSwitchGeneration = 0;
   bool pendingShellOpen = false;
-
-  std::atomic<int64_t> lastHeartbeatTime{0};
-  std::atomic<bool> isWatchdogDialogActive{false};
-  UIWatchdog watchdog;
 
   juce::File currentPlaylistFile;
 

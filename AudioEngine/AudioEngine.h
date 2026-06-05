@@ -17,6 +17,7 @@
     - 负责保存和恢复音频设备设置，确保用户体验的一连贯性。
 */
 class AudioEngine : public juce::AudioProcessor,
+                    private juce::AsyncUpdater,
                     public juce::ChangeListener,
                     public juce::ChangeBroadcaster {
 public:
@@ -63,12 +64,9 @@ public:
     if (file.existsAsFile()) {
       if (auto xml = juce::XmlDocument::parse(file)) {
         result = deviceManager.initialise(0, 2, xml.get(), true);
-        if (result.isEmpty()) {
-          DBG("Restored audio device from XML");
+        if (result.isEmpty())
           return;
-        }
       }
-      DBG("Failed to restore saved audio device from XML: " + result);
       // Saved device not found, fallback to default
       result = deviceManager.initialiseWithDefaultDevices(0, 2);
       if (result.isEmpty() && deviceManager.getCurrentAudioDevice() != nullptr)
@@ -79,10 +77,8 @@ public:
       return;
     }
 
-    if (result.isNotEmpty()) {
+    if (result.isNotEmpty())
       lastInitError = result;
-      DBG("Audio device init error: " + result);
-    }
   }
 
   /**
@@ -148,7 +144,7 @@ public:
     }
 
     suspendProcessing(false);
-    sendChangeMessage();
+    broadcastChange();
   }
 
   /**
@@ -158,6 +154,8 @@ public:
 
   ~AudioEngine() override {
     // Clean shutdown order is important
+    cancelPendingUpdate();
+    pluginList.removeChangeListener(this);
     deviceManager.removeChangeListener(this);
     deviceManager.removeAudioCallback(&devicePlayer);
     devicePlayer.setProcessor(nullptr);
@@ -205,12 +203,6 @@ public:
     if (mainGraph != nullptr)
       mainGraph->processBlock(buffer, midiMessages);
 
-    // Throttled logging for audio callback
-    static int logCounter = 0;
-    if (++logCounter >= 2000) {
-      // LOG_DEBUG("AudioEngine::processBlock - Audio thread alive");
-      logCounter = 0;
-    }
 
     // 处理淡出效果以防止音频爆音
     // 当停止播放时，应用一个简短的增益衰减坡度（Gain
@@ -345,7 +337,8 @@ public:
       }
     }
 
-    sendChangeMessage();
+    saveKnownPluginList();
+    broadcastChange();
   }
 
   /**
@@ -371,7 +364,8 @@ public:
       }
     }
 
-    sendChangeMessage();
+    saveKnownPluginList();
+    broadcastChange();
   }
 
   /**
@@ -394,7 +388,8 @@ public:
   */
   void clearPluginList() {
     pluginList.clear();
-    sendChangeMessage();
+    saveKnownPluginList();
+    broadcastChange();
   }
 
   /**
@@ -444,7 +439,6 @@ public:
         formatManager.createPluginInstance(description, sr, bs, error);
 
     if (instance == nullptr) {
-      DBG("Plugin load error: " + error);
       lastPluginError = L"无法加载插件: " + error;
       suspendProcessing(false);
       return false;
@@ -478,6 +472,8 @@ public:
 
     // Resume audio processing
     suspendProcessing(false);
+    lastPluginError.clear();
+    broadcastChange();
 
     return true;
   }
@@ -520,11 +516,7 @@ public:
       auto tree = juce::XmlDocument::parse(xmlFile);
       if (tree != nullptr && tree->hasTagName("KNOWNPLUGINS")) {
         pluginList.recreateFromXml(*tree);
-        DBG("Loaded " + juce::String(pluginList.getNumTypes()) +
-            " plugins from cache");
       } else {
-        // Invalid or corrupt XML, delete the file
-        DBG("Invalid Plugins.xml format, deleting...");
         xmlFile.deleteFile();
       }
     } catch (...) {
@@ -553,15 +545,11 @@ public:
         // Successfully written, now replace original
         tempFile.moveFileTo(xmlFile);
         backupFile.deleteFile(); // Clean up backup
-        DBG("Saved " + juce::String(pluginList.getNumTypes()) +
-            " plugins to cache");
       } else {
         // Write failed, keep backup
         tempFile.deleteFile();
-        DBG("Failed to write Plugins.xml");
       }
     } catch (...) {
-      DBG("Exception while saving plugin list");
     }
   }
 
@@ -581,14 +569,13 @@ public:
 
         if (result.isEmpty() &&
             deviceManager.getCurrentAudioDevice() != nullptr) {
-          DBG("Auto-recovered to default audio device");
           saveAudioDeviceSettings();
         } else {
-          DBG("Failed to auto-recover audio device: " + result);
+          lastInitError = result;
         }
       }
     }
-    sendChangeMessage();
+    broadcastChange();
   }
 
   /**
@@ -656,6 +643,19 @@ public:
   void setStateInformation(const void *, int) override {}
 
 private:
+  void broadcastChange() {
+    auto *messageManager = juce::MessageManager::getInstanceWithoutCreating();
+    if (messageManager == nullptr)
+      return;
+
+    if (messageManager->isThisTheMessageThread())
+      sendChangeMessage();
+    else
+      triggerAsyncUpdate();
+  }
+
+  void handleAsyncUpdate() override { sendChangeMessage(); }
+
   juce::AudioDeviceManager deviceManager;
   juce::AudioProcessorPlayer devicePlayer;
   juce::AudioPluginFormatManager formatManager;

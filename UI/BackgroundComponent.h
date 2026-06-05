@@ -60,7 +60,6 @@ public:
     }
 
     lastLoadedPath = path;
-    LOG_DEBUG("BackgroundComponent::loadAsync - Path: " + path);
 
     if (isFirstLoad && path.isNotEmpty()) {
       // Stage 2 Fix: Load synchronously on first startup to avoid black screen
@@ -121,12 +120,19 @@ public:
     auto bounds = getLocalBounds();
 
     // 尝试非阻塞获取锁，避免在paint中永久等待
-    if (!imageLock.tryEnter()) {
-      LOG_DEBUG(
-          "[FREEZE_DIAG] BackgroundComponent::paint - waiting for imageLock");
-      imageLock.enter();
-      LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::paint - imageLock acquired "
-                "after wait");
+    juce::Image currentImage;
+    juce::Image previousImageCopy;
+    juce::Image originalImageCopy;
+    float imageTransitionAlpha = 1.0f;
+    bool transitioningImage = false;
+
+    if (imageLock.tryEnter()) {
+      currentImage = processedImage;
+      previousImageCopy = previousImage;
+      originalImageCopy = originalImage;
+      imageTransitionAlpha = transitionAlpha;
+      transitioningImage = isTransitioningImage;
+      imageLock.exit();
     }
 
     // 1. Draw solid background
@@ -148,17 +154,17 @@ public:
       }
     };
 
-    if (isTimerRunning()) {
+    if (transitioningImage) {
       // Drawing previous image fading out
-      drawImageWithAlpha(previousImage, 1.0f - transitionAlpha);
+      drawImageWithAlpha(previousImageCopy, 1.0f - imageTransitionAlpha);
       // Drawing current image fading in
-      drawImageWithAlpha(processedImage, transitionAlpha);
+      drawImageWithAlpha(currentImage, imageTransitionAlpha);
     } else {
       // Normal constant state
-      if (!processedImage.isNull()) {
-        drawImageWithAlpha(processedImage, 1.0f);
-      } else if (!originalImage.isNull()) {
-        drawImageWithAlpha(originalImage, 1.0f);
+      if (!currentImage.isNull()) {
+        drawImageWithAlpha(currentImage, 1.0f);
+      } else if (!originalImageCopy.isNull()) {
+        drawImageWithAlpha(originalImageCopy, 1.0f);
       }
     }
 
@@ -168,7 +174,6 @@ public:
     g.fillRect(bounds);
 
     // 释放手动获取的锁
-    imageLock.exit();
   }
 
   // Timer callback for smooth transitions
@@ -246,29 +251,24 @@ public:
 
   // Watchdog Emergency Reset
   void emergencyReset() {
-    LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - start");
     cancelPendingWork();
-    LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - "
-              "cancelPendingWork done");
+
+    stopTimer();
+    isTransitioningImage = false;
+    isTransitioningColor = false;
+    transitionAlpha = 1.0f;
+    shouldStopNow.store(false);
 
     // 使用 tryEnter 避免在紧急重置时死锁
-    if (!imageLock.tryEnter()) {
-      LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - imageLock "
-                "busy, skipping lock");
+    if (imageLock.tryEnter()) {
       // 不等待锁，直接重置状态
     } else {
-      // Hard stop all animations
-      stopTimer();
-      isTransitioningImage = false;
-      isTransitioningColor = false;
-      transitionAlpha = 1.0f;
-      shouldStopNow.store(false);
+      previousImage = juce::Image();
       imageLock.exit();
     }
 
     // Clear heavy resources if needed, otherwise just reset state
     loadingLabel.setVisible(false);
-    LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - end");
   }
 
   // Thread-safe request to stop from Watchdog
@@ -381,14 +381,9 @@ private:
         }
 
         if (doLoad) {
-          LOG_DEBUG("BackgroundWorkerThread: Starting load task: " + loadPath);
           processLoadTask(loadPath);
-          LOG_DEBUG("BackgroundWorkerThread: Finished load task");
         } else if (doEffect) {
-          LOG_DEBUG("BackgroundWorkerThread: Starting effect task, type: " +
-                    juce::String((int)type));
           processEffectTask(imgToProcess, type, radius);
-          LOG_DEBUG("BackgroundWorkerThread: Finished effect task");
         } else {
           // No work, wait for signal
           wait(100);
@@ -404,16 +399,19 @@ private:
 
     void processLoadTask(const juce::String &path) {
       auto file = juce::File(path);
+      auto safeComponent =
+          juce::Component::SafePointer<BackgroundComponent>(&component);
 
       if (path.isEmpty()) {
         lastExtractedPath = ""; // Reset
         // Clear image and reset color
-        juce::MessageManager::callAsync([this]() {
-          if (!threadShouldExit()) {
-            component.onImageLoaded(juce::Image());
-            component.onColorExtracted(
-                {juce::Colour(0xFF0078D4)}); // Reset to default
-          }
+        juce::MessageManager::callAsync([safeComponent]() {
+          if (safeComponent == nullptr)
+            return;
+
+          safeComponent->onImageLoaded(juce::Image());
+          safeComponent->onColorExtracted(
+              {juce::Colour(0xFF0078D4)}); // Reset to default
         });
         return;
       }
@@ -438,9 +436,9 @@ private:
         if (!threadShouldExit() && !img.isNull()) {
           // Monet Color Extraction (Palette)
           if (getAppSettings().getMonetEnabled()) {
-            juce::MessageManager::callAsync([this]() {
-              if (!threadShouldExit())
-                component.loadingLabel.setText(L"分析主题色...",
+            juce::MessageManager::callAsync([safeComponent]() {
+              if (safeComponent != nullptr)
+                safeComponent->loadingLabel.setText(L"分析主题色...",
                                                juce::dontSendNotification);
             });
 
@@ -450,9 +448,11 @@ private:
             });
 
             if (!abortCurrentTask && !threadShouldExit() && !palette.empty()) {
-              juce::MessageManager::callAsync([this, palette]() {
-                if (!threadShouldExit())
-                  component.onColorExtracted(palette);
+              juce::MessageManager::callAsync([safeComponent, palette]() {
+                if (safeComponent == nullptr)
+                  return;
+
+                safeComponent->onColorExtracted(palette);
               });
             }
           }
@@ -477,20 +477,22 @@ private:
             return;
 
           // Store original and trigger effect processing
-          juce::MessageManager::callAsync([this, img]() {
-            if (!threadShouldExit()) {
-              component.onImageLoaded(img);
-            }
+          juce::MessageManager::callAsync([safeComponent, img]() {
+            if (safeComponent == nullptr)
+              return;
+
+            safeComponent->onImageLoaded(img);
           });
         }
       } else {
         // File not found - treat as clear
-        juce::MessageManager::callAsync([this]() {
-          if (!threadShouldExit()) {
-            component.onImageLoaded(juce::Image());
-            component.onColorExtracted(
-                {juce::Colour(0xFF0078D4)}); // Reset to default
-          }
+        juce::MessageManager::callAsync([safeComponent]() {
+          if (safeComponent == nullptr)
+            return;
+
+          safeComponent->onImageLoaded(juce::Image());
+          safeComponent->onColorExtracted(
+              {juce::Colour(0xFF0078D4)}); // Reset to default
         });
       }
     }
@@ -500,6 +502,8 @@ private:
       if (threadShouldExit() || source.isNull())
         return;
 
+      auto safeComponent =
+          juce::Component::SafePointer<BackgroundComponent>(&component);
       juce::Image result;
 
       auto cancelCheck = [this]() {
@@ -523,10 +527,11 @@ private:
       }
 
       if (!threadShouldExit() && !result.isNull()) {
-        juce::MessageManager::callAsync([this, result]() {
-          if (!threadShouldExit()) {
-            component.onEffectApplied(result);
-          }
+        juce::MessageManager::callAsync([safeComponent, result]() {
+          if (safeComponent == nullptr)
+            return;
+
+          safeComponent->onEffectApplied(result);
         });
       }
     }
@@ -1130,42 +1135,29 @@ private:
 
   void cancelPendingWork() {
     if (workerThread != nullptr) {
-      LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - signaling thread to exit");
-      workerThread->signalThreadShouldExit();
-      workerThread->notify();
+      workerThread->stopThread(2000);
 
       // 减少等待时间避免长时间阻塞UI
       // 如果线程没能在500ms内退出，强制继续（线程会自行清理）
-      if (!workerThread->waitForThreadToExit(500)) {
-        LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - WARNING: thread did not "
-                  "exit in 500ms");
-      }
       workerThread.reset();
-      LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - done");
     }
   }
 
   // Callbacks from worker thread (called on message thread)
   void onImageLoaded(const juce::Image &img) {
-    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - start");
     {
       const juce::ScopedLock sl(imageLock);
-      LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - lock acquired");
       originalImage = img;
     }
-    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - lock released");
     if (materialType == MaterialType::None)
       loadingLabel.setVisible(false);
     applyEffects();
     repaint();
-    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - end");
   }
 
   void onEffectApplied(const juce::Image &img) {
-    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - start");
     {
       const juce::ScopedLock sl(imageLock);
-      LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - lock acquired");
       // Start transition: previous is what we currently show
       previousImage = processedImage.isNull() ? originalImage : processedImage;
       processedImage = img;
@@ -1179,13 +1171,10 @@ private:
         isTransitioningImage = true; // Enable transition in timer
       }
     }
-    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - lock released");
-
     loadingLabel.setVisible(false);
     if (isTransitioningImage || isTransitioningColor)
       startTimerHz(60);
     repaint();
-    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - end");
   }
 
 private:

@@ -14,9 +14,9 @@ public:
   void prepareToPlay(double, int) override {}
   void releaseResources() override {}
 
-  void processBlock(juce::AudioBuffer<float> &,
+  void processBlock(juce::AudioBuffer<float> &buffer,
                     juce::MidiBuffer &midiMessages) override {
-    player.processBlock(midiMessages, getBlockSize());
+    player.processBlock(midiMessages, buffer.getNumSamples());
   }
 
   const juce::String getName() const override { return "MidiPlayerNode"; }

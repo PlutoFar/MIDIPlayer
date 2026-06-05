@@ -13,6 +13,7 @@ public:
     juce::File file;
     juce::String name;
     double durationSeconds = 0.0;
+    bool missing = false;
   };
 
   struct ChangeLog {
@@ -52,9 +53,6 @@ public:
       @return true if file was added successfully
   */
   bool addFile(const juce::File &file, bool allowDuplicates = false) {
-    if (!file.existsAsFile())
-      return false;
-
     if (!file.hasFileExtension(".mid;.midi"))
       return false;
 
@@ -63,7 +61,8 @@ public:
       return false;
     }
 
-    tracks.add({file, file.getFileNameWithoutExtension(), 0.0});
+    tracks.add(
+        {file, file.getFileNameWithoutExtension(), 0.0, !file.existsAsFile()});
     changeLog.added++;
     return true;
   }
@@ -143,7 +142,8 @@ public:
     if (index < 0 || index >= tracks.size())
       return false;
     auto &t = tracks.getReference(index);
-    if (!t.file.existsAsFile())
+    t.missing = !t.file.existsAsFile();
+    if (t.missing)
       return false;
     t.name = t.file.getFileNameWithoutExtension();
     t.durationSeconds = 0.0;
@@ -212,8 +212,11 @@ public:
 
       for (const auto &t : *trackArray) {
         juce::File trackFile(t.toString());
-        if (trackFile.existsAsFile())
-          addFile(trackFile);
+        if (!trackFile.hasFileExtension(".mid;.midi"))
+          continue;
+
+        tracks.add({trackFile, trackFile.getFileNameWithoutExtension(), 0.0,
+                    !trackFile.existsAsFile()});
       }
 
       changeLog.reset(); // Don't count loaded tracks as "new"
@@ -246,6 +249,12 @@ public:
   int getNextIndex(int currentIndex) const {
     if (tracks.isEmpty())
       return -1;
+
+    if (currentIndex < 0)
+      return 0;
+
+    if (currentIndex >= tracks.size())
+      currentIndex = tracks.size() - 1;
 
     switch (currentMode) {
     case PlaybackMode::LoopSingle:
@@ -284,6 +293,12 @@ public:
     if (tracks.isEmpty())
       return -1;
 
+    if (currentIndex >= tracks.size())
+      currentIndex = tracks.size() - 1;
+
+    if (currentIndex < 0)
+      return currentMode == PlaybackMode::LoopList ? tracks.size() - 1 : -1;
+
     // Previous is usually just index - 1, but handle wrapping for loops
     if (currentMode == PlaybackMode::LoopList ||
         currentMode == PlaybackMode::LoopSingle) {
@@ -310,6 +325,12 @@ private:
 public:
   const ChangeLog &getChangeLog() const { return changeLog; }
   bool hasChanges() const { return changeLog.hasChanges(); }
+  bool hasMissingFiles() const {
+    for (const auto &track : tracks)
+      if (track.missing)
+        return true;
+    return false;
+  }
 
   juce::String getChangeSummary() const {
     juce::StringArray details;
