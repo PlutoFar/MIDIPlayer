@@ -1,0 +1,11 @@
+build/
+dist/
+JUCE/
+*.suo
+*.user
+*.VC.db
+*.VC.VC.opendb
+*.log
+*.ilk
+*.pdb
+*.tlog/
