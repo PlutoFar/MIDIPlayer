@@ -35,8 +35,12 @@ juce_add_gui_app(ModernMidiPlayer
 # Source Files
 # ============================================================================
 file(GLOB_RECURSE SourceFiles 
-    "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.cpp" 
-    "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Main.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/AudioEngine/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Midi/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Playlist/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/UI/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Utils/*.h"
 )
 
 target_sources(ModernMidiPlayer PRIVATE
@@ -44,7 +48,7 @@ target_sources(ModernMidiPlayer PRIVATE
 )
 
 target_include_directories(ModernMidiPlayer PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 # ============================================================================

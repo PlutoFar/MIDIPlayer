@@ -1,75 +1,95 @@
 # Modern MIDI Player
 
-一个符合 Windows 11 UI 规范的独立 VST3i MIDI 播放器，使用 C++ 和 JUCE 框架开发。
+Modern MIDI Player 是一个基于 C++17 和 JUCE 的 Windows 桌面 MIDI 播放器。它可以加载 VST3 虚拟乐器，把 MIDI 文件作为播放源，并通过播放列表、音频设备设置和界面自定义功能提供一个独立的 MIDI 播放环境。
 
-![Windows 11](https://img.shields.io/badge/Windows%2011-Fluent-0078D4)
-![C++17](https://img.shields.io/badge/C%2B%2B-17-blue)
-![JUCE](https://img.shields.io/badge/JUCE-7.0%2B-orange)
+![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4)
+![C++](https://img.shields.io/badge/C%2B%2B-17-blue)
+![JUCE](https://img.shields.io/badge/JUCE-required-orange)
 
-## ✨ 功能特性
+## Features
 
-- **VST3 宿主**：加载任意 VST3i 虚拟乐器插件
-- **ASIO 支持**：低延迟音频输出
-- **播放列表**：拖放 MIDI 文件，支持四种播放模式
-- **自定义背景**：支持高斯模糊、Aero、Acrylic 效果
-- **Monet 配色**：从背景图自动提取主题色
-- **88键钢琴可视化**：实时音符高亮显示
-- **便携模式**：支持 U 盘随身携带
+- VST3 instrument hosting and plugin scanning
+- MIDI file playback with playlist management
+- Sequential, list loop, single loop, and shuffle playback modes
+- Drag-and-drop MIDI file import
+- WASAPI/ASIO audio device configuration through JUCE
+- Portable mode support through `portable.dat`
+- Local settings storage for audio devices, plugins, window state, fonts, and background options
+- Windows `.mid` / `.midi` file association support
+- Custom background image, blur, overlay, and theme color extraction
+- Windows 11 inspired UI with sidebar navigation and playlist panel
 
-## 📁 项目结构
+## Project Layout
 
+```text
+.
+├── AudioEngine/      # Audio device, VST3 scanning, plugin loading, audio graph
+├── Midi/             # MIDI sequencing and playback timing
+├── Playlist/         # Playlist data model and JSON save/load logic
+├── Resources/        # Application resources
+├── UI/               # Main window, controls, playlist panel, settings dialogs
+├── Utils/            # Settings, logging, and Windows helper utilities
+├── CMakeLists.txt    # CMake build definition
+├── HELP.txt          # End-user help text
+└── Main.cpp          # JUCE application entry point
 ```
-Source/
-├── Main.cpp                # 应用入口
-├── AudioEngine/            # 音频处理与 VST3 管理
-├── Midi/                   # MIDI 播放逻辑
-├── Playlist/               # 播放列表管理
-├── UI/                     # 界面组件
-│   ├── MainContentComponent.h
-│   ├── BackgroundComponent.h
-│   ├── PlaylistPanel.h
-│   └── MidiVisualizer.h
-└── Utils/                  # 工具类
+
+## Requirements
+
+- Windows 10 or Windows 11
+- CMake 3.15 or newer
+- Visual Studio 2022 with the C++ desktop workload
+- JUCE framework source tree
+- VST3 instrument plugins for sound output
+- Optional: ASIO driver and ASIO SDK if ASIO support is needed
+
+JUCE is intentionally not committed to this repository. Clone it into a `JUCE` folder at the project root before configuring CMake:
+
+```powershell
+git clone https://github.com/juce-framework/JUCE.git JUCE
 ```
 
-## 🛠️ 构建说明
+## Build
 
-### 前置条件
-- CMake 3.22+
-- Visual Studio 2022 (MSVC v143)
-- JUCE Framework 7.0+ (已包含在项目中)
+From the repository root:
 
-### 构建步骤
-
-```bash
-# 配置
+```powershell
 cmake -B build -G "Visual Studio 17 2022"
-
-# 编译
 cmake --build build --config Release
-
-# 运行
-.\build\ModernMidiPlayer_artefacts\Release\"Modern MIDI Player.exe"
 ```
 
-## 🎮 快速开始
+The executable will be generated under:
 
-1. 点击 **扫描插件** 扫描 VST3 乐器
-2. 从下拉菜单选择虚拟乐器
-3. 将 MIDI 文件拖入窗口
-4. 点击 **播放**
+```text
+build/ModernMidiPlayer_artefacts/Release/
+```
 
-### 快捷键
+## Quick Start
 
-| 按键 | 功能 |
-|------|------|
-| Space | 播放/暂停 |
-| ← / → | 上一曲/下一曲 |
+1. Install a VST3 instrument plugin.
+2. Launch `Modern MIDI Player.exe`.
+3. Scan for VST3 plugins or choose a plugin from the discovered list.
+4. Add MIDI files by using the playlist controls or dragging files into the window.
+5. Choose an audio device in the audio settings if playback is silent.
+6. Press play.
 
-## 📄 许可证
+## Portable Mode
 
-MIT License
+Create a file named `portable.dat` next to the executable to enable portable mode.
 
----
+In portable mode, settings are stored in a local `Settings/` folder, and the app also checks a local `VST3/` folder next to the executable.
 
-*Developed with ❤️ using JUCE Framework*
+## Runtime Data
+
+Generated runtime data should not be committed. This includes:
+
+- `build/`
+- `dist/`
+- `Settings/`
+- playlist JSON files
+- downloaded or cloned `JUCE/`
+- packaged executables and debug artifacts
+
+## Notes
+
+This project is currently focused on Windows. Some code paths use Windows-specific APIs for visual effects, shell integration, and file association.
