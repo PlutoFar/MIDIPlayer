@@ -262,10 +262,7 @@ public:
             fill = colors.controlBackground;
         }
       } else {
-        // Transparent button logic (minimalist)
-        // Draw NOTHING. The component (TransparentButton/AnimatedIconButton)
-        // handles its own visual state (opacity/scaling).
-        // Drawing here creates a redundant "mask".
+        // Transparent buttons draw their own icon and interaction state.
       }
 
       if (fill != juce::Colours::transparentBlack) {

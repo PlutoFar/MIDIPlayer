@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Utils/UserSettings.h"
+#include "CustomControls.h"
 #include "CustomLookAndFeel.h"
 class FluentLookAndFeel;
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -461,13 +462,6 @@ private:
       startTimerHz(60);
   }
 
-  // Transparent button for collapse
-  class TransparentButton : public juce::Button {
-  public:
-    TransparentButton() : juce::Button("") {}
-    void paintButton(juce::Graphics &, bool, bool) override {}
-  };
-
   FluentLookAndFeel &fluentLookAndFeel;
   Listener *listener = nullptr;
 
@@ -476,7 +470,7 @@ private:
   std::vector<juce::Rectangle<int>> itemBounds;
   std::vector<juce::Rectangle<int>> footerBounds;
 
-  TransparentButton collapseBtn;
+  InvisibleButton collapseBtn;
 
   juce::String selectedItemId = "library";
   juce::String hoveredItemId;

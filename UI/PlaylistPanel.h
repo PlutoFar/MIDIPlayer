@@ -7,9 +7,6 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <vector>
 
-/**
-    PlaylistPanel: Fluent-styled playlist for Windows 11.
-*/
 class PlaylistPanel : public juce::Component,
                       public juce::ListBoxModel,
                       public juce::FileDragAndDropTarget,
@@ -19,10 +16,10 @@ public:
   class Listener {
   public:
     virtual ~Listener() = default;
-    virtual void playlistTrackSelected(int index) = 0;
     virtual void playlistTrackDoubleClicked(int index) = 0;
     virtual void playlistFilesDropped(const juce::StringArray &files) = 0;
-    virtual void playlistLoaded() = 0; // 播放列表加载/重置通知
+    virtual void playlistSaveRequested() = 0;
+    virtual void playlistLoaded(const juce::File &file) = 0;
     virtual void
     playlistTrackReordered(int newCurrentIndex) = 0; // 拖拽排序后同步播放索引
   };
@@ -59,7 +56,10 @@ public:
 
     addAndMakeVisible(saveBtn);
     saveBtn.setButtonText(L"保存");
-    saveBtn.onClick = [this]() { savePlaylist(); };
+    saveBtn.onClick = [this]() {
+      if (listener != nullptr)
+        listener->playlistSaveRequested();
+    };
 
     addAndMakeVisible(loadBtn);
     loadBtn.setButtonText(L"加载");
@@ -197,8 +197,6 @@ public:
   void listBoxItemClicked(int row, const juce::MouseEvent &e) override {
     if (e.mods.isPopupMenu())
       showContextMenu(row);
-    else if (listener)
-      listener->playlistTrackSelected(row);
   }
 
   void listBoxItemDoubleClicked(int row, const juce::MouseEvent &) override {
@@ -418,29 +416,9 @@ private:
             safeThis->refresh();
             // 通知 MainContentComponent 重置播放索引
             if (safeThis->listener)
-              safeThis->listener->playlistLoaded();
+              safeThis->listener->playlistLoaded({});
           }
         }));
-  }
-
-  void savePlaylist() {
-    fileChooser = std::make_unique<juce::FileChooser>(L"保存播放列表",
-                                                      juce::File(), "*.json");
-    fileChooser->launchAsync(juce::FileBrowserComponent::saveMode,
-                             [safeThis = juce::Component::SafePointer<
-                                  PlaylistPanel>(this)](
-                                 const juce::FileChooser &fc) {
-                               if (safeThis == nullptr)
-                                 return;
-                               auto r = fc.getResult();
-                               if (r != juce::File()) {
-                                 auto file = r.withFileExtension(".json");
-                                 if (safeThis->playlistManager.save(file)) {
-                                   getAppSettings().setLastPlaylistPath(
-                                       file.getFullPathName());
-                                 }
-                               }
-                             });
   }
 
   void loadPlaylist() {
@@ -500,35 +478,44 @@ private:
       }
       // 通知 MainContentComponent 重置播放索引
       if (listener)
-        listener->playlistLoaded();
+        listener->playlistLoaded(file);
     }
   }
 
   void showContextMenu(int row) {
+    if (!juce::isPositiveAndBelow(row, playlistManager.size()))
+      return;
+
     juce::PopupMenu m;
     m.addItem(1, L"播放");
     m.addItem(2, L"移除");
     m.addSeparator();
     m.addItem(3, L"打开文件位置");
-    m.showMenuAsync({}, [this, row](int r) {
-      if (r == 1 && listener)
-        listener->playlistTrackDoubleClicked(row);
+    auto safeThis = juce::Component::SafePointer<PlaylistPanel>(this);
+    m.showMenuAsync({}, [safeThis, row](int r) {
+      if (safeThis == nullptr)
+        return;
+
+      if (r == 1 && safeThis->listener)
+        safeThis->listener->playlistTrackDoubleClicked(row);
       else if (r == 2) {
         // 更新播放高亮索引：
         // - 如果移除的是正在播放的曲目，重置高亮
         // - 如果移除的是播放曲目之前的曲目，索引需要减1以保持正确位置
-        if (row == currentTrackIndex) {
-          currentTrackIndex = -1; // 移除正在播放的曲目，清除高亮
-        } else if (row < currentTrackIndex && currentTrackIndex > 0) {
-          currentTrackIndex--; // 移除前面的曲目，索引前移
+        if (row == safeThis->currentTrackIndex) {
+          safeThis->currentTrackIndex = -1;
+        } else if (row < safeThis->currentTrackIndex &&
+                   safeThis->currentTrackIndex > 0) {
+          --safeThis->currentTrackIndex;
         }
-        playlistManager.removeTrack(row);
-        refresh();
+        safeThis->playlistManager.removeTrack(row);
+        safeThis->refresh();
         // 同步播放索引到 MainContentComponent，防止切歌错位
-        if (listener)
-          listener->playlistTrackReordered(currentTrackIndex);
+        if (safeThis->listener)
+          safeThis->listener->playlistTrackReordered(
+              safeThis->currentTrackIndex);
       } else if (r == 3)
-        if (auto *t = playlistManager.getTrack(row))
+        if (auto *t = safeThis->playlistManager.getTrack(row))
           t->file.revealToUser();
     });
   }
