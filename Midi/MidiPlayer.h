@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../Utils/DebugLogger.h"
 #include <array>
 #include <atomic>
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -144,6 +143,21 @@ public:
 
   bool hasSequence() const { return sequenceLoaded.load(); }
 
+  void collectRetiredResources() {
+    int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
+    retiredResourceFifo.prepareToRead(retiredResourceFifo.getNumReady(), start1,
+                                      size1, start2, size2);
+
+    auto releaseRange = [this](int start, int size) {
+      for (int i = 0; i < size; ++i)
+        retiredResources[(size_t)(start + i)] = {};
+    };
+
+    releaseRange(start1, size1);
+    releaseRange(start2, size2);
+    retiredResourceFifo.finishedRead(size1 + size2);
+  }
+
 private:
   struct SequenceUpdate {
     std::shared_ptr<juce::MidiMessageSequence> sequence;
@@ -160,6 +174,12 @@ private:
   };
 
   static constexpr int seekQueueCapacity = 8;
+  static constexpr int retiredResourceCapacity = 16;
+
+  struct RetiredResources {
+    std::shared_ptr<SequenceUpdate> update;
+    std::shared_ptr<juce::MidiMessageSequence> sequence;
+  };
 
   static void addAllNotesOffForAllChannels(juce::MidiBuffer &buffer,
                                            int sampleOffset) {
@@ -169,6 +189,7 @@ private:
 
   std::shared_ptr<juce::MidiMessageSequence> sequence;
   std::shared_ptr<SequenceUpdate> pendingSequenceUpdate;
+  std::shared_ptr<SequenceUpdate> deferredSequenceUpdate;
 
   std::atomic<bool> isPlaying{false};
   std::atomic<bool> looping{false};
@@ -178,6 +199,8 @@ private:
 
   std::array<SeekRequest, seekQueueCapacity> pendingSeekRequests;
   juce::AbstractFifo pendingSeekFifo{seekQueueCapacity};
+  std::array<RetiredResources, retiredResourceCapacity> retiredResources;
+  juce::AbstractFifo retiredResourceFifo{retiredResourceCapacity};
 
   double sampleRate = 44100.0;
   std::atomic<double> currentPositionInSamples{0.0};
@@ -187,19 +210,36 @@ private:
   int nextMessageIndex = 0;
 
   void applyPendingSequenceUpdate() {
-    auto update =
-        std::atomic_exchange(&pendingSequenceUpdate,
-                             std::shared_ptr<SequenceUpdate>{});
+    auto update = std::move(deferredSequenceUpdate);
+    if (update == nullptr) {
+      update = std::atomic_exchange(&pendingSequenceUpdate,
+                                    std::shared_ptr<SequenceUpdate>{});
+    }
+
     if (update == nullptr)
       return;
 
-    std::atomic_store(&sequence, update->sequence);
+    int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
+    retiredResourceFifo.prepareToWrite(1, start1, size1, start2, size2);
+    if (size1 + size2 == 0) {
+      deferredSequenceUpdate = std::move(update);
+      return;
+    }
+
+    auto oldSequence = std::atomic_exchange(&sequence, update->sequence);
     activeSequenceGeneration.store(update->generation);
     sampleRate = update->sampleRate;
     cachedDurationSamples.store(update->durationSamples);
     currentPositionInSamples.store(0.0);
     nextMessageIndex = 0;
     finishedFlag.store(false);
+
+    const int slot = size1 > 0 ? start1 : start2;
+    retiredResources[(size_t)slot] = {
+        std::move(update),
+        std::move(oldSequence),
+    };
+    retiredResourceFifo.finishedWrite(1);
   }
 
   std::shared_ptr<juce::MidiMessageSequence>

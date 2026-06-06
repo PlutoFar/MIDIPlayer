@@ -5,17 +5,11 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include <functional>
+
 #include "../Utils/UserSettings.h"
 #include "MidiPlayerProcessor.h"
 
-/**
-    核心音频引擎，管理音频设备、路由图（AudioProcessorGraph）和插件扫描。
-
-    设计要点：
-    - 采用 JUCE 的 AudioProcessorGraph 架构，方便灵活连接音频节点。
-    - 提供对音频组件的安全访问，包含必要的空指针检查。
-    - 负责保存和恢复音频设备设置，确保用户体验的一连贯性。
-*/
 class AudioEngine : public juce::AudioProcessor,
                     private juce::AsyncUpdater,
                     public juce::ChangeListener,
@@ -25,26 +19,16 @@ public:
       : AudioProcessor(BusesProperties().withOutput(
             "Output", juce::AudioChannelSet::stereo(), true)),
         mainGraph(std::make_unique<juce::AudioProcessorGraph>()) {
-    // Register VST3 format for plugin hosting
     formatManager.addFormat(std::make_unique<juce::VST3PluginFormat>());
-
-    // Setup Plugin Scanning
     pluginList.addChangeListener(this);
     loadKnownPluginList();
-
-    // Try to restore saved audio device settings
     restoreAudioDeviceSettings();
-
-    // Listen for audio device changes
     deviceManager.addChangeListener(this);
 
     devicePlayer.setProcessor(this);
     deviceManager.addAudioCallback(&devicePlayer);
   }
 
-  /**
-      保存当前音频设备设置，以便下次启动时恢复。
-  */
   void saveAudioDeviceSettings() {
     if (auto xml = deviceManager.createStateXml()) {
       auto file =
@@ -53,9 +37,6 @@ public:
     }
   }
 
-  /**
-      从保存的配置文件中恢复音频设备设置。
-  */
   void restoreAudioDeviceSettings() {
     auto file =
         UserSettings::getSettingsDirectory().getChildFile("AudioDevice.xml");
@@ -67,13 +48,10 @@ public:
         if (result.isEmpty())
           return;
       }
-      // Saved device not found, fallback to default
       result = deviceManager.initialiseWithDefaultDevices(0, 2);
       if (result.isEmpty() && deviceManager.getCurrentAudioDevice() != nullptr)
-        hadDeviceFallback = true; // Mark for UI notification at startup
+        hadDeviceFallback = true;
     } else {
-      // First run: do NOT initialise default device. Leave it null so UI
-      // prompts the user.
       return;
     }
 
@@ -81,57 +59,30 @@ public:
       lastInitError = result;
   }
 
-  /**
-      检查当前是否有有效的音频输出设备。
-  */
   bool hasAudioDevice() const {
     auto *device = deviceManager.getCurrentAudioDevice();
     return device != nullptr;
   }
 
-  /**
-      Get the last initialization error message
-  */
   juce::String getLastInitError() const { return lastInitError; }
 
-  /**
-      Get the last plugin loading error message
-  */
   juce::String getLastPluginError() const { return lastPluginError; }
 
-  /**
-      Check if this is the very first run (no AudioDevice.xml config exists)
-  */
   bool isFirstRunAudio() const {
     auto file =
         UserSettings::getSettingsDirectory().getChildFile("AudioDevice.xml");
     return !file.existsAsFile();
   }
 
-  /**
-      Check if the saved audio device was missing at startup and we fell back
-      to the system default. Only true for startup fallback, not runtime.
-  */
   bool wasDeviceRestoredWithFallback() const { return hadDeviceFallback; }
 
-  /**
-      卸载当前的 VST3 插件。
-      必须在消息线程（UI线程）中调用。
-
-      维护注意：
-      - 在移除节点前需要先暂停音频处理，防止在处理块中访问无效指针。
-      - 必须手动断开图中所有与该插件相关的连接（虽然 removeNode
-     理论上会处理，但显式断开更安全且可控）。
-  */
   void unloadPlugin() {
-    // Thread assertion - unloadPlugin must be called from the UI thread
     JUCE_ASSERT_MESSAGE_THREAD;
 
     suspendProcessing(true);
     midiPlayer.setPlaying(false);
 
     if (vst3Node != nullptr && mainGraph != nullptr) {
-      // Disconnect all connections involving this node
       auto connections = mainGraph->getConnections();
       for (const auto &connection : connections) {
         if (connection.source.nodeID == vst3Node->nodeID ||
@@ -147,20 +98,16 @@ public:
     broadcastChange();
   }
 
-  /**
-      Check if a plugin is currently loaded
-  */
   bool hasPluginLoaded() const { return vst3Node != nullptr; }
 
   ~AudioEngine() override {
-    // Clean shutdown order is important
     cancelPendingUpdate();
     pluginList.removeChangeListener(this);
     deviceManager.removeChangeListener(this);
     deviceManager.removeAudioCallback(&devicePlayer);
     devicePlayer.setProcessor(nullptr);
+    midiPlayer.collectRetiredResources();
 
-    // Release plugin before saving
     if (vst3Node != nullptr && mainGraph != nullptr) {
       mainGraph->removeNode(vst3Node->nodeID);
       vst3Node = nullptr;
@@ -170,6 +117,9 @@ public:
   }
 
   void prepareToPlay(double sampleRate, int samplesPerBlock) override {
+    fadeOutDuration = juce::jmax(1, juce::roundToInt(sampleRate * 0.03));
+    fadeOutSamples = fadeOutDuration;
+
     if (mainGraph != nullptr) {
       mainGraph->setPlayConfigDetails(0, 2, sampleRate, samplesPerBlock);
       mainGraph->prepareToPlay(sampleRate, samplesPerBlock);
@@ -204,49 +154,39 @@ public:
       mainGraph->processBlock(buffer, midiMessages);
 
 
-    // 处理淡出效果以防止音频爆音
-    // 当停止播放时，应用一个简短的增益衰减坡度（Gain
-    // Ramp），避免波形突变产生的咔哒声。
-    bool isPlaying = midiPlayer.getPlaying();
-    if (!isPlaying && fadeOutSamples > 0) {
-      // Apply fade-out ramp
-      int samplesToFade = juce::jmin(fadeOutSamples, buffer.getNumSamples());
-      float startGain = (float)fadeOutSamples / (float)fadeOutDuration;
-      float endGain =
-          (float)(fadeOutSamples - samplesToFade) / (float)fadeOutDuration;
-
+    const bool isPlaying = midiPlayer.getPlaying();
+    if (isPlaying) {
+      fadeOutSamples = fadeOutDuration;
+    } else if (fadeOutSamples > 0) {
+      const int samplesToFade =
+          juce::jmin(fadeOutSamples, buffer.getNumSamples());
+      const float startGain =
+          static_cast<float>(fadeOutSamples) / fadeOutDuration;
+      const float endGain =
+          static_cast<float>(fadeOutSamples - samplesToFade) / fadeOutDuration;
       buffer.applyGainRamp(0, samplesToFade, startGain, endGain);
 
-      // Clear remaining samples if fade is complete
-      if (samplesToFade < buffer.getNumSamples()) {
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-          buffer.clear(ch, samplesToFade,
-                       buffer.getNumSamples() - samplesToFade);
-      }
+      if (samplesToFade < buffer.getNumSamples())
+        buffer.clear(samplesToFade, buffer.getNumSamples() - samplesToFade);
 
       fadeOutSamples -= samplesToFade;
-    } else if (isPlaying && fadeOutSamples != fadeOutDuration) {
-      // Reset fade-out counter when playing
-      fadeOutSamples = fadeOutDuration;
+    } else {
+      buffer.clear();
     }
 
-    // Apply master volume
-    float vol = masterVolume.load();
-    if (fadeOutSamples > 0 || isPlaying)
-      buffer.applyGain(vol);
+    buffer.applyGain(masterVolume.load());
   }
 
-  // --- Graph Logic ---
   void setupNodes() {
     if (mainGraph == nullptr)
       return;
 
     mainGraph->clear();
 
-    // Reset node pointers
     audioOutputNode = nullptr;
     midiInputNode = nullptr;
     playerNode = nullptr;
+    vst3Node = nullptr;
 
     audioOutputNode = mainGraph->addNode(
         std::make_unique<juce::AudioProcessorGraph::AudioGraphIOProcessor>(
@@ -260,20 +200,12 @@ public:
         mainGraph->addNode(std::make_unique<MidiPlayerProcessor>(midiPlayer));
   }
 
-  // --- Plugin Scanning & Loading ---
-
-  /**
-      获取所有 VST3 扫描路径。
-      包括：系统目录、用户目录、便携模式本地目录、自定义目录
-  */
   juce::FileSearchPath getVst3SearchPaths() {
     juce::FileSearchPath searchPath;
 
-    // 1. 便携模式：程序目录下的 VST3 文件夹（优先）
     auto exeDir =
         juce::File::getSpecialLocation(juce::File::currentExecutableFile)
             .getParentDirectory();
-    // 同时识别 portable.dat 和 portable_debug.dat 作为便携模式标记
     bool isPortable = exeDir.getChildFile("portable.dat").existsAsFile() ||
                       exeDir.getChildFile("portable_debug.dat").existsAsFile();
 
@@ -283,17 +215,14 @@ public:
         searchPath.add(localVst3);
     }
 
-    // 2. 标准系统目录：C:\Program Files\Common Files\VST3
     juce::File commonFiles("C:\\Program Files\\Common Files");
     if (commonFiles.isDirectory())
       searchPath.add(commonFiles.getChildFile("VST3"));
 
-    // 3. 用户 AppData 目录
     auto userAppData = juce::File::getSpecialLocation(
         juce::File::userApplicationDataDirectory);
     searchPath.add(userAppData.getChildFile("VST3"));
 
-    // 4. 常见的 C 盘安装目录
     juce::StringArray commonPaths = {
         "C:\\Program Files\\VSTPlugins",
         "C:\\Program Files\\Steinberg\\VSTPlugins",
@@ -308,7 +237,6 @@ public:
         searchPath.add(dir);
     }
 
-    // 5. 用户自定义目录（从设置读取）
     for (const auto &customPath : customVst3Paths) {
       juce::File dir(customPath);
       if (dir.isDirectory())
@@ -318,10 +246,7 @@ public:
     return searchPath;
   }
 
-  /**
-      扫描所有 VST3 插件。
-  */
-  void scanPlugins() {
+  void scanPlugins(const std::function<bool()> &shouldCancel = {}) {
     juce::FileSearchPath searchPath = getVst3SearchPaths();
 
     for (int i = 0; i < formatManager.getNumFormats(); ++i) {
@@ -331,8 +256,8 @@ public:
                                              true, juce::File(), false);
 
         juce::String name;
-        while (scanner.scanNextFile(true, name)) {
-          // Progress callback could be added here
+        while ((!shouldCancel || !shouldCancel()) &&
+               scanner.scanNextFile(true, name)) {
         }
       }
     }
@@ -341,10 +266,6 @@ public:
     broadcastChange();
   }
 
-  /**
-      仅扫描指定目录。
-      @param directory 要扫描的目录
-  */
   void scanDirectory(const juce::File &directory) {
     if (!directory.isDirectory())
       return;
@@ -368,52 +289,24 @@ public:
     broadcastChange();
   }
 
-  /**
-      添加自定义扫描目录。
-  */
   void addCustomVst3Path(const juce::String &path) {
     if (!customVst3Paths.contains(path))
       customVst3Paths.add(path);
   }
 
-  /**
-      获取自定义扫描目录列表。
-  */
   const juce::StringArray &getCustomVst3Paths() const {
     return customVst3Paths;
   }
 
-  /**
-      清除插件列表。
-  */
   void clearPluginList() {
     pluginList.clear();
     saveKnownPluginList();
     broadcastChange();
   }
 
-  /**
-      通过插件描述信息加载 VST3 插件。
-      必须从消息线程调用。
-
-      实现逻辑解析：
-      1. 检查音频设备是否就绪，若无输出设备则无法承载插件。
-      2. 暂停音频回调（suspendProcessing），确保在修改 Graph
-     拓扑结构时音频线程不活动。
-      3. 清除旧插件：手动移除所有连接并删除旧节点。
-      4. 实例化与路径连接：
-         - 播放节点 (MidiPlayer) -> VST3 插件 (MIDI 连接)
-         - 外部 MIDI 输入 -> VST3 插件 (MIDI 连接，用于实时键盘演奏支持)
-         - VST3 插件 -> 系统音频输出 (左/右声道连接)
-
-      @param description 要加载的插件描述
-      @return 加载成功返回 true
-  */
   bool loadPlugin(const juce::PluginDescription &description) {
-    // Thread assertion - loadPlugin must be called from the UI thread
     JUCE_ASSERT_MESSAGE_THREAD;
 
-    // Check if audio device is ready
     if (!hasAudioDevice()) {
       lastPluginError = L"没有可用的音频输出设备，请先在音频设置中选择设备";
       return false;
@@ -425,10 +318,7 @@ public:
       return false;
     }
 
-    // Suspend audio processing during plugin switch to prevent race conditions
     suspendProcessing(true);
-
-    // Send All Notes Off to release any sounding notes before switching
     midiPlayer.setPlaying(false);
 
     juce::String error;
@@ -444,9 +334,7 @@ public:
       return false;
     }
 
-    // Remove old plugin first - disconnect all connections before removing node
     if (vst3Node != nullptr) {
-      // Remove connections to prevent dangling references
       for (auto &connection : mainGraph->getConnections()) {
         if (connection.source.nodeID == vst3Node->nodeID ||
             connection.destination.nodeID == vst3Node->nodeID) {
@@ -457,9 +345,6 @@ public:
       vst3Node = nullptr;
     }
 
-    // Prepare the new instance before adding to graph
-    instance->prepareToPlay(sr, bs);
-
     vst3Node = mainGraph->addNode(std::move(instance));
 
     if (vst3Node == nullptr) {
@@ -467,10 +352,7 @@ public:
       return false;
     }
 
-    // 建立所有路由连接
     reconnectPluginRoutes();
-
-    // Resume audio processing
     suspendProcessing(false);
     lastPluginError.clear();
     broadcastChange();
@@ -478,20 +360,16 @@ public:
     return true;
   }
 
-  // --- Volume Control ---
   void setMasterVolume(float volume) {
     masterVolume.store(juce::jlimit(0.0f, 1.0f, volume));
   }
 
   float getMasterVolume() const { return masterVolume.load(); }
 
-  // --- Persistence ---
   juce::File getSettingsDir() {
-    // 便携模式检测
     auto exeDir =
         juce::File::getSpecialLocation(juce::File::currentExecutableFile)
             .getParentDirectory();
-    // 同时识别 portable.dat 和 portable_debug.dat 作为便携模式标记
     bool isPortable = exeDir.getChildFile("portable.dat").existsAsFile() ||
                       exeDir.getChildFile("portable_debug.dat").existsAsFile();
 
