@@ -8,18 +8,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ============================================================================
 # JUCE Configuration
 # ============================================================================
-set(JUCE_DIR "" CACHE PATH "Path to a JUCE source checkout")
-
+# Check if JUCE subdirectory exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
     message(STATUS "Using JUCE from subdirectory")
     add_subdirectory(JUCE)
-elseif(JUCE_DIR AND EXISTS "${JUCE_DIR}/CMakeLists.txt")
-    message(STATUS "Using JUCE from ${JUCE_DIR}")
-    add_subdirectory("${JUCE_DIR}" JUCE)
 else()
     message(FATAL_ERROR 
-        "JUCE not found. Add a JUCE subdirectory or configure with "
-        "-DJUCE_DIR=<path-to-JUCE>."
+        "JUCE not found! Please run:\n"
+        "  git clone https://github.com/juce-framework/JUCE.git\n"
+        "in the project directory."
     )
 endif()
 
@@ -37,23 +34,9 @@ juce_add_gui_app(ModernMidiPlayer
 # ============================================================================
 # Source Files
 # ============================================================================
-set(SourceFiles
-    "${CMAKE_CURRENT_SOURCE_DIR}/Main.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/AudioEngine/AudioEngine.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/AudioEngine/MidiPlayerProcessor.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Midi/MidiPlayer.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Playlist/PlaylistManager.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Playlist/PlaylistManager.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/UI/BackgroundComponent.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/UI/CustomControls.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/UI/CustomLookAndFeel.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/UI/MainContentComponent.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/UI/MainContentComponent.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/UI/NavigationSidebar.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/UI/PlaylistPanel.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Utils/DebugLogger.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Utils/UserSettings.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Utils/Win11Helpers.h"
+file(GLOB_RECURSE SourceFiles 
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.cpp" 
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.h"
 )
 
 target_sources(ModernMidiPlayer PRIVATE
@@ -61,7 +44,7 @@ target_sources(ModernMidiPlayer PRIVATE
 )
 
 target_include_directories(ModernMidiPlayer PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source
 )
 
 # ============================================================================
@@ -71,6 +54,7 @@ target_compile_definitions(ModernMidiPlayer PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_PLUGINHOST_VST3=1
     # ASIO Support (requires ASIO SDK)
     JUCE_ASIO=1

@@ -27,15 +27,17 @@ Modern MIDI Player is a Windows desktop MIDI player built with C++17 and JUCE. I
 
 ```text
 .
-|-- AudioEngine/      # 音频设备、VST3 扫描、插件加载、音频图
-|-- Midi/             # MIDI 事件时序与播放逻辑
-|-- Playlist/         # 播放列表数据模型与 JSON 保存/加载
-|-- Resources/        # 应用资源
-|-- UI/               # 主界面、控件、播放列表、设置窗口
-|-- Utils/            # 设置、日志、Windows 辅助工具
-|-- CMakeLists.txt    # CMake 构建配置
-|-- HELP.txt          # 用户帮助文档
-`-- Main.cpp          # JUCE 应用入口
+|-- Source/
+|   |-- Main.cpp
+|   |-- AudioEngine/      # 音频设备、VST3 扫描、插件加载、音频图
+|   |-- Midi/             # MIDI 事件时序与播放逻辑
+|   |-- Playlist/         # 播放列表数据模型与 JSON 保存/加载
+|   |-- UI/               # 主界面、控件、播放列表、设置窗口
+|   `-- Utils/            # 设置、日志、Windows 辅助工具
+|-- Resources/            # 应用图标等资源
+|-- CMakeLists.txt        # CMake 构建配置
+|-- HELP.txt              # 用户帮助文档
+`-- README.md
 ```
 
 ## 环境要求
@@ -121,15 +123,17 @@ Modern MIDI Player is a Windows desktop MIDI player built with C++17 and JUCE. I
 
 ```text
 .
-|-- AudioEngine/      # Audio device, VST3 scanning, plugin loading, audio graph
-|-- Midi/             # MIDI sequencing and playback timing
-|-- Playlist/         # Playlist data model and JSON save/load logic
-|-- Resources/        # Application resources
-|-- UI/               # Main window, controls, playlist panel, settings dialogs
-|-- Utils/            # Settings, logging, and Windows helper utilities
-|-- CMakeLists.txt    # CMake build definition
-|-- HELP.txt          # End-user help text
-`-- Main.cpp          # JUCE application entry point
+|-- Source/
+|   |-- Main.cpp
+|   |-- AudioEngine/      # Audio device, VST3 scanning, plugin loading, audio graph
+|   |-- Midi/             # MIDI sequencing and playback timing
+|   |-- Playlist/         # Playlist data model and JSON save/load logic
+|   |-- UI/               # Main window, controls, playlist panel, settings dialogs
+|   `-- Utils/            # Settings, logging, and Windows helper utilities
+|-- Resources/            # Application resources such as icons
+|-- CMakeLists.txt        # CMake build definition
+|-- HELP.txt              # End-user help text
+`-- README.md
 ```
 
 ## Requirements

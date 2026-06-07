@@ -11,11 +11,15 @@ class MidiPlayerProcessor : public juce::AudioProcessor {
 public:
   MidiPlayerProcessor(MidiPlayer &p) : player(p) {}
 
-  void prepareToPlay(double, int) override {}
+  void prepareToPlay(double sampleRate, int) override {
+    player.setSampleRate(sampleRate);
+  }
+  
   void releaseResources() override {}
 
   void processBlock(juce::AudioBuffer<float> &buffer,
                     juce::MidiBuffer &midiMessages) override {
+    midiMessages.clear();
     player.processBlock(midiMessages, buffer.getNumSamples());
   }
 

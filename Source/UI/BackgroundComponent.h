@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Utils/DebugLogger.h"
 #include "../Utils/UserSettings.h"
 #include "CustomLookAndFeel.h"
 #include <algorithm>
@@ -59,9 +60,10 @@ public:
     }
 
     lastLoadedPath = path;
+    LOG_DEBUG("BackgroundComponent::loadAsync - Path: " + path);
 
     if (isFirstLoad && path.isNotEmpty()) {
-      // The first image is loaded synchronously so the window does not flash.
+      // Stage 2 Fix: Load synchronously on first startup to avoid black screen
       loadSynchronously(path, forceExtraction);
     } else {
       // Start background loading job
@@ -76,7 +78,9 @@ public:
       loadingLabel.setText(L"加载图片中...", juce::dontSendNotification);
     }
     ensureWorkerThread();
-    workerThread->setLoadTask(path);
+    BackgroundWorkerThread::LoadSettingsSnapshot settingsSnapshot;
+    settingsSnapshot.monetEnabled = getAppSettings().getMonetEnabled();
+    workerThread->setLoadTask(path, settingsSnapshot, forceExtraction);
     workerThread->notify(); // Wake up thread
   }
 
@@ -115,6 +119,7 @@ public:
   }
 
   void paint(juce::Graphics &g) override {
+    SCOPED_TIMER_SLOW("BackgroundComponent::paint", 15);
     auto bounds = getLocalBounds();
 
     // 尝试非阻塞获取锁，避免在paint中永久等待
@@ -144,7 +149,8 @@ public:
     auto drawImageWithAlpha = [&](const juce::Image &img, float alpha) {
       if (!img.isNull()) {
         g.setOpacity(alpha);
-        // Backgrounds favor repaint speed over high-quality live resampling.
+        // Optimization: Use low-quality resampling when drawing large images
+        // during heavy UI operations
         g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
         g.drawImage(img, bounds.toFloat(),
                     juce::RectanglePlacement::fillDestination);
@@ -246,23 +252,35 @@ public:
     startTimerHz(60); // Ensure timer is running
   }
 
+  // Watchdog Emergency Reset
   void emergencyReset() {
+    LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - start");
     cancelPendingWork();
+    LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - "
+              "cancelPendingWork done");
 
     stopTimer();
     isTransitioningImage = false;
     isTransitioningColor = false;
     transitionAlpha = 1.0f;
     shouldStopNow.store(false);
-    if (imageLock.tryEnter()) {
+
+    // 使用 tryEnter 避免在紧急重置时死锁
+    if (!imageLock.tryEnter()) {
+      LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - imageLock "
+                "busy, skipping lock");
+      // 不等待锁，直接重置状态
+    } else {
       previousImage = juce::Image();
       imageLock.exit();
     }
 
     // Clear heavy resources if needed, otherwise just reset state
     loadingLabel.setVisible(false);
+    LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - end");
   }
 
+  // Thread-safe request to stop from Watchdog
   void requestEmergencyStop() { shouldStopNow.store(true); }
 
   void onColorExtracted(const std::vector<juce::Colour> &palette) {
@@ -305,19 +323,37 @@ private:
   }
 
 private:
+  /**
+      后台工作线程，用于图像加载、缩放、模糊计算及主题色提取。
+
+      性能优化点：
+      1. 自动缩放：如果原图超过 1440p (2560x1440)，会自动进行降采样处理。
+         - 背景模糊不需要极高分辨率，这样做可以显著减少模糊算法的计算开销。
+      2. K-Means 色彩提取：在 150x150
+     的极小缩略图上运行，将处理时间从秒级降低到毫秒级。
+      3. 任务中断：当用户连续切换背景或效果时，abortCurrentTask
+     会立即终止当前耗时操作，响应新请求。
+  */
   class BackgroundWorkerThread : public juce::Thread {
   public:
+    struct LoadSettingsSnapshot {
+      bool monetEnabled = false;
+    };
+
     BackgroundWorkerThread(BackgroundComponent &owner)
         : juce::Thread("BackgroundWorker"), component(owner) {}
 
-    void requestAbort() { abortCurrentTask.store(true); }
-
-    void setLoadTask(const juce::String &path) {
+    void setLoadTask(const juce::String &path,
+                     const LoadSettingsSnapshot &settingsSnapshot,
+                     bool forceExtraction = false) {
       const juce::ScopedLock sl(taskLock);
       pendingLoadPath = path;
+      pendingLoadSettings = settingsSnapshot;
       hasLoadTask = true;
       hasEffectTask = false;
-      abortCurrentTask = true;
+      abortCurrentTask = true; // Signal interrupt
+      if (forceExtraction)
+        lastExtractedPath = "";
     }
 
     void setEffectTask(const juce::Image &img, MaterialType type, int radius) {
@@ -327,73 +363,110 @@ private:
       pendingRadius = radius;
       hasEffectTask = true;
       hasLoadTask = false;
-      abortCurrentTask = true;
+      abortCurrentTask = true; // Signal interrupt
     }
 
     void run() override {
       while (!threadShouldExit()) {
+        // abortCurrentTask = false; // MOVED: Reset inside lock when taking
+        // task
+
         juce::String loadPath;
+        LoadSettingsSnapshot loadSettings;
         juce::Image imgToProcess;
         MaterialType type = MaterialType::None;
         int radius = 20;
         bool doLoad = false;
         bool doEffect = false;
 
+        // Check for pending tasks
         {
           const juce::ScopedLock sl(taskLock);
           if (hasLoadTask) {
             loadPath = pendingLoadPath;
+            loadSettings = pendingLoadSettings;
             doLoad = true;
             hasLoadTask = false;
-            abortCurrentTask = false;
+            abortCurrentTask = false; // Reset for new task
           } else if (hasEffectTask) {
             imgToProcess = pendingImage;
             type = pendingType;
             radius = pendingRadius;
             doEffect = true;
             hasEffectTask = false;
-            abortCurrentTask = false;
+            abortCurrentTask = false; // Reset for new task
           }
         }
 
         if (doLoad) {
-          processLoadTask(loadPath);
+          LOG_DEBUG("BackgroundWorkerThread: Starting load task: " + loadPath);
+          processLoadTask(loadPath, loadSettings);
+          LOG_DEBUG("BackgroundWorkerThread: Finished load task");
         } else if (doEffect) {
+          LOG_DEBUG("BackgroundWorkerThread: Starting effect task, type: " +
+                    juce::String((int)type));
           processEffectTask(imgToProcess, type, radius);
+          LOG_DEBUG("BackgroundWorkerThread: Finished effect task");
         } else {
+          // No work, wait for signal
           wait(100);
         }
       }
     }
 
   private:
-    void processLoadTask(const juce::String &path) {
+    juce::String
+        lastExtractedPath; // Track last path to allow skipping if needed
+    // But user requested: "Whenever image changes... MUST update"
+    // So distinct path = update.
+
+    void processLoadTask(const juce::String &path,
+                         const LoadSettingsSnapshot &settingsSnapshot) {
       auto file = juce::File(path);
       auto safeComponent =
           juce::Component::SafePointer<BackgroundComponent>(&component);
 
       if (path.isEmpty()) {
+        lastExtractedPath = ""; // Reset
+        // Clear image and reset color
         juce::MessageManager::callAsync([safeComponent]() {
           if (safeComponent == nullptr)
             return;
 
           safeComponent->onImageLoaded(juce::Image());
           safeComponent->onColorExtracted(
-              {juce::Colour(0xFF0078D4)});
+              {juce::Colour(0xFF0078D4)}); // Reset to default
         });
         return;
+      }
+
+      // Check if we typically can skip (optimization), but user insists on
+      // updates. However, if it's the SAME path, re-extracting is wasteful and
+      // yields same result. We only extract if path differs.
+
+      // Force extraction if path changed OR we haven't extracted yet
+      if (path == lastExtractedPath) {
+        // Same image loaded again? Maybe settings changed?
+        // If just re-loading same image, we can skip K-Means if check implies.
+        // But to be safe per user request "Every time image changes", we assume
+        // this function is only called when image changes.
+        // If called redundantly, we can skip.
+      } else {
+        lastExtractedPath = path;
       }
 
       if (file.existsAsFile() && !threadShouldExit()) {
         auto img = juce::ImageFileFormat::loadFrom(file);
         if (!threadShouldExit() && !img.isNull()) {
-          if (getAppSettings().getMonetEnabled()) {
+          // Monet Color Extraction (Palette)
+          if (settingsSnapshot.monetEnabled) {
             juce::MessageManager::callAsync([safeComponent]() {
               if (safeComponent != nullptr)
                 safeComponent->loadingLabel.setText(L"分析主题色...",
                                                juce::dontSendNotification);
             });
 
+            // Request 12 clusters to find 6 distinct best ones
             auto palette = extractPaletteKMeans(img, 6, [this]() {
               return threadShouldExit() || abortCurrentTask;
             });
@@ -408,6 +481,9 @@ private:
             }
           }
 
+          // Optimization: Resize huge images to max 2560x1440 to speed up
+          // effects (Blur) 4K/8K images are overkill for background blur and
+          // kill performance.
           int maxW = 2560;
           int maxH = 1440;
           if ((img.getWidth() > maxW || img.getHeight() > maxH) &&
@@ -420,9 +496,11 @@ private:
                 img.rescaled(newW, newH, juce::Graphics::highResamplingQuality);
           }
 
+          // After potentially heavy rescale or load
           if (threadShouldExit() || abortCurrentTask)
             return;
 
+          // Store original and trigger effect processing
           juce::MessageManager::callAsync([safeComponent, img]() {
             if (safeComponent == nullptr)
               return;
@@ -431,13 +509,14 @@ private:
           });
         }
       } else {
+        // File not found - treat as clear
         juce::MessageManager::callAsync([safeComponent]() {
           if (safeComponent == nullptr)
             return;
 
           safeComponent->onImageLoaded(juce::Image());
           safeComponent->onColorExtracted(
-              {juce::Colour(0xFF0078D4)});
+              {juce::Colour(0xFF0078D4)}); // Reset to default
         });
       }
     }
@@ -937,6 +1016,7 @@ private:
     BackgroundComponent &component;
     juce::CriticalSection taskLock;
     juce::String pendingLoadPath;
+    LoadSettingsSnapshot pendingLoadSettings;
     juce::Image pendingImage;
     MaterialType pendingType = MaterialType::None;
     int pendingRadius = 20;
@@ -965,6 +1045,7 @@ private:
   }
 
   void applyEffects() {
+    // Optimization: If no effect, handle quickly but still trigger fade
     if (materialType == MaterialType::None) {
       loadingLabel.setVisible(false);
       juce::Image img;
@@ -1079,29 +1160,37 @@ private:
 
   void cancelPendingWork() {
     if (workerThread != nullptr) {
-      workerThread->requestAbort();
-      workerThread->signalThreadShouldExit();
-      workerThread->notify();
-      workerThread->waitForThreadToExit(-1);
+      LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - signaling thread to exit");
+      workerThread->stopThread(2000);
+
+      // 减少等待时间避免长时间阻塞UI
+      // 如果线程没能在500ms内退出，强制继续（线程会自行清理）
       workerThread.reset();
+      LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - done");
     }
   }
 
   // Callbacks from worker thread (called on message thread)
   void onImageLoaded(const juce::Image &img) {
+    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - start");
     {
       const juce::ScopedLock sl(imageLock);
+      LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - lock acquired");
       originalImage = img;
     }
+    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - lock released");
     if (materialType == MaterialType::None)
       loadingLabel.setVisible(false);
     applyEffects();
     repaint();
+    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - end");
   }
 
   void onEffectApplied(const juce::Image &img) {
+    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - start");
     {
       const juce::ScopedLock sl(imageLock);
+      LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - lock acquired");
       // Start transition: previous is what we currently show
       previousImage = processedImage.isNull() ? originalImage : processedImage;
       processedImage = img;
@@ -1115,10 +1204,13 @@ private:
         isTransitioningImage = true; // Enable transition in timer
       }
     }
+    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - lock released");
+
     loadingLabel.setVisible(false);
     if (isTransitioningImage || isTransitioningColor)
       startTimerHz(60);
     repaint();
+    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - end");
   }
 
 private:
@@ -1368,19 +1460,23 @@ private:
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ImageCropperComponent)
 };
 
+/**
+    BackgroundSettingsDialog: Enhanced settings with blur options.
+*/
+/**
+    Helper classes for BackgroundSettingsDialog
+*/
 class ImagePreviewButton : public juce::Button, private juce::Thread {
 public:
   ImagePreviewButton(const juce::File &f)
       : juce::Button(f.getFileName()), juce::Thread("ThumbLoader"), file(f) {
     setTooltip(f.getFileName());
+    // Important: Use SafePointer to avoid dangling pointer in async callback
     safeThis = this;
     startThread();
   }
 
-  ~ImagePreviewButton() override {
-    signalThreadShouldExit();
-    waitForThreadToExit(-1);
-  }
+  ~ImagePreviewButton() override { stopThread(1000); }
 
   void run() override {
     auto img = juce::ImageFileFormat::loadFrom(file);
@@ -1403,21 +1499,27 @@ public:
                    bool isButtonDown) override {
     auto bounds = getLocalBounds().toFloat();
 
+    // Background placeholder (dark gray)
     g.setColour(juce::Colours::black.withAlpha(0.3f));
     g.fillRoundedRectangle(bounds, 4.0f);
 
     if (thumbnail.isValid()) {
+      // V4.1 FIX: Simple drawImageWithin. No clipping regions.
+      // This is the most robust way to draw.
       g.setOpacity(1.0f);
       g.drawImage(thumbnail, bounds, juce::RectanglePlacement::fillDestination);
 
+      // Subtle border
       g.setColour(juce::Colours::white.withAlpha(0.1f));
       g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
     } else {
+      // Loading indicator
       g.setColour(juce::Colours::white.withAlpha(0.2f));
       g.drawText(L"\u22EF", getLocalBounds(), juce::Justification::centred,
                  false);
     }
 
+    // Interaction feedback (Outer highlight only)
     if (isEnabled() && (isMouseOver || isButtonDown)) {
       g.setColour(juce::Colours::white.withAlpha(isButtonDown ? 0.9f : 0.5f));
       g.drawRoundedRectangle(bounds, 4.0f, isButtonDown ? 2.0f : 1.5f);
@@ -1432,11 +1534,11 @@ public:
 class PaletteSelector : public juce::Component {
 public:
   std::function<void(juce::Colour)> onColorSelected;
-  int selectedIndex = -1;
+  int selectedIndex = -1; // V4: Index-based tracking
 
   void setPalette(const std::vector<juce::Colour> &colors) {
     if (palette == colors)
-      return;
+      return; // Optimization: Avoid redraw if identical
     palette = colors;
     if (palette.empty())
       palette = {juce::Colour(0xFF0078D4)};
@@ -1799,7 +1901,7 @@ public:
                           juce::Colours::white);
 
     // Validate if Monet can be enabled
-    // Settings are authoritative while an asynchronous load is pending.
+    // FIX: Check settings path first, because background might be loading
     bool hasBG = background.hasBackgroundImage() ||
                  getAppSettings().getBackgroundImagePath().isNotEmpty();
     monetToggle.setEnabled(hasBG);
@@ -1966,7 +2068,8 @@ public:
     } else {
       paletteSelector.setVisible(getAppSettings().getMonetEnabled());
       paletteSelector.setPalette(background.getPalette());
-      // setPalette() clears selection, so restore the persisted color.
+      // V4 Fix: Re-sync selection because setPalette() clears index-based
+      // tracking
       paletteSelector.setSelectedColor(background.getTargetAccentColor());
     }
 
@@ -1980,20 +2083,14 @@ private:
         juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
         "*.png;*.jpg;*.jpeg;*.bmp;*.gif");
 
-    auto safeThis =
-        juce::Component::SafePointer<BackgroundSettingsDialog>(this);
-    fileChooser->launchAsync(
-        juce::FileBrowserComponent::openMode,
-        [safeThis](const juce::FileChooser &fc) {
-          if (safeThis == nullptr)
-            return;
-
-          auto result = fc.getResult();
-          if (result.existsAsFile()) {
-            safeThis->pendingImagePath = result.getFullPathName();
-            safeThis->showCropDialog(result);
-          }
-        });
+    fileChooser->launchAsync(juce::FileBrowserComponent::openMode,
+                             [this](const juce::FileChooser &fc) {
+                               auto result = fc.getResult();
+                               if (result.existsAsFile()) {
+                                 pendingImagePath = result.getFullPathName();
+                                 showCropDialog(result);
+                               }
+                             });
   }
 
   class CropDialog : public juce::Component {
@@ -2058,12 +2155,11 @@ private:
     auto img = juce::ImageFileFormat::loadFrom(imageFile);
     if (img.isNull())
       return;
-    auto safeThis =
-        juce::Component::SafePointer<BackgroundSettingsDialog>(this);
     cropDialog = std::make_unique<CropDialog>(
-        img, [safeThis](const juce::Image &croppedImage) {
-          if (safeThis != nullptr && !croppedImage.isNull())
-            safeThis->applyCroppedImage(croppedImage);
+        img, [this](const juce::Image &croppedImage) {
+          if (!croppedImage.isNull())
+            applyCroppedImage(croppedImage);
+          cropDialog.reset();
         });
     juce::DialogWindow::LaunchOptions options;
     options.dialogTitle = L"裁剪图片";
@@ -2083,7 +2179,7 @@ private:
         "bg_" + juce::String(juce::Time::currentTimeMillis()) + ".png";
     auto uniqueFile = settingsDir.getChildFile(uniqueName);
 
-    // Cap saved images to control startup memory and processing time.
+    // Optimization: Resize huge images to max 2560x1440 before saving
     // This prevents 20MB PNG files and slow loading
     juce::Image imageToSave = croppedImage;
     int maxW = 2560;

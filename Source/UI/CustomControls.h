@@ -3,10 +3,121 @@
 #include "CustomLookAndFeel.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
-class TransparentButton : public juce::TextButton, public juce::Timer {
+// Button rendered from an SVG string
+class SvgButton : public juce::Button, public juce::Timer {
 public:
-  explicit TransparentButton(const juce::String &btnText = "")
-      : juce::TextButton(btnText) {
+  SvgButton(const juce::String& svgString) : juce::Button("") {
+    auto xml = juce::XmlDocument::parse(svgString);
+    if (xml != nullptr) {
+      drawable = juce::Drawable::createFromSVG(*xml);
+    }
+    startTimerHz(60);
+  }
+  ~SvgButton() override { stopTimer(); }
+
+  void paintButton(juce::Graphics &g, bool isMouseOver,
+                   bool isButtonDown) override {
+    float targetScale = isButtonDown ? 0.95f : (isMouseOver ? 1.05f : 1.0f);
+    currentScale += (targetScale - currentScale) * 0.2f;
+
+    float targetAlpha = isEnabled() ? (isMouseOver ? 1.0f : 0.7f) : 0.3f;
+    currentAlpha += (targetAlpha - currentAlpha) * 0.2f;
+
+    auto bounds = getLocalBounds().toFloat();
+    auto center = bounds.getCentre();
+
+    juce::AffineTransform transform =
+        juce::AffineTransform::translation(-center)
+            .scaled(currentScale)
+            .translated(center);
+
+    g.saveState();
+    g.addTransform(transform);
+
+    // Draw Fluent hover/pressed background
+    if (isEnabled() && (isMouseOver || isButtonDown)) {
+      if (auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel())) {
+        auto &colors = laf->getColors();
+        g.setColour(isButtonDown ? colors.controlPressed : colors.controlHover);
+        g.fillRoundedRectangle(bounds.reduced(2.0f), 6.0f);
+      }
+    }
+
+    g.setOpacity(currentAlpha);
+
+    if (drawable != nullptr) {
+      // Create a white version of the SVG for dark mode UI
+      drawable->replaceColour(juce::Colours::black, juce::Colours::white);
+      drawable->drawWithin(g, bounds.reduced(6.0f), juce::RectanglePlacement::centred, currentAlpha);
+    }
+    g.restoreState();
+  }
+
+  void timerCallback() override {
+    float targetScale = isEnabled() ? (isMouseButtonDown() ? 0.95f : (isMouseOver() ? 1.05f : 1.0f)) : 1.0f;
+    float targetAlpha = isEnabled() ? (isMouseOver() ? 1.0f : 0.7f) : 0.3f;
+
+    if (std::abs(currentScale - targetScale) > 0.005f ||
+        std::abs(currentAlpha - targetAlpha) > 0.005f) {
+      repaint();
+    }
+  }
+
+private:
+  std::unique_ptr<juce::Drawable> drawable;
+  float currentScale = 1.0f;
+  float currentAlpha = 0.7f;
+};
+
+// Animated icon button (like play, prev, next)
+class AnimatedIconButton : public juce::Button, public juce::Timer {
+public:
+  AnimatedIconButton() : juce::Button("") { startTimerHz(60); }
+  ~AnimatedIconButton() override { stopTimer(); }
+
+  void paintButton(juce::Graphics &g, bool isMouseOver,
+                   bool isButtonDown) override {
+    // Simplified animation (very subtle)
+    float targetScale = isButtonDown ? 0.98f : (isMouseOver ? 1.01f : 1.0f);
+    currentScale += (targetScale - currentScale) * 0.2f;
+
+    auto bounds = getLocalBounds().toFloat();
+    auto center = bounds.getCentre();
+
+    juce::AffineTransform transform =
+        juce::AffineTransform::translation(-center)
+            .scaled(currentScale)
+            .translated(center);
+
+    g.addTransform(transform);
+
+    if (auto *laf =
+            dynamic_cast<class FluentLookAndFeel *>(&getLookAndFeel())) {
+      laf->drawCircularButton(g, bounds, icon, isPlaying, isMouseOver,
+                              isButtonDown);
+    }
+  }
+
+  void timerCallback() override {
+    if (isMouseOver() || isMouseButtonDown() ||
+        std::abs(currentScale - 1.0f) > 0.01f) {
+      repaint();
+    }
+  }
+
+  void setIcon(const juce::String &newIcon) { icon = newIcon; }
+  void setPlaying(bool playing) { isPlaying = playing; }
+
+private:
+  juce::String icon;
+  bool isPlaying = false;
+  float currentScale = 1.0f;
+};
+
+// Transparent button with rounded rect and text
+class TransparentButton : public juce::Button, public juce::Timer {
+public:
+  TransparentButton(const juce::String &btnText = "") : juce::Button(btnText) {
     startTimerHz(60);
   }
   ~TransparentButton() override { stopTimer(); }
@@ -35,7 +146,9 @@ public:
             dynamic_cast<class FluentLookAndFeel *>(&getLookAndFeel())) {
       laf->drawButtonBackground(g, *this, juce::Colours::transparentBlack,
                                 isMouseOver, isButtonDown);
-      laf->drawButtonText(g, *this, isMouseOver, isButtonDown);
+      laf->drawButtonText(
+          g, static_cast<juce::TextButton &>(*(juce::TextButton *)this),
+          isMouseOver, isButtonDown);
     }
   }
 
@@ -47,135 +160,25 @@ public:
     }
   }
 
+  void setTooltip(const juce::String &tip) { tooltip = tip; }
+  juce::String getTooltip() override { return tooltip; }
+  void setButtonText(const juce::String &newText) { customText = newText; }
+  juce::String getButtonText() const { return customText; }
+
 private:
+  juce::String tooltip;
+  juce::String customText;
   float currentScale = 1.0f;
   float currentAlpha = 0.8f;
 };
 
-class InvisibleButton : public juce::Button {
-public:
-  InvisibleButton() : juce::Button({}) {}
-  void paintButton(juce::Graphics &, bool, bool) override {}
-};
+/**
+    EmbeddedTooltip: 嵌入式悬浮提示框
 
-class ScrollingLabel : public juce::Component, public juce::Timer {
-public:
-  ~ScrollingLabel() override { stopTimer(); }
-
-  void setText(const juce::String &newText, juce::NotificationType) {
-    if (text == newText)
-      return;
-
-    text = newText;
-    scrollOffset = 0.0f;
-    repaint();
-  }
-
-  void setFont(const juce::Font &newFont) {
-    font = newFont;
-    repaint();
-  }
-
-  void setColour(int colourId, juce::Colour colour) {
-    if (colourId == juce::Label::textColourId)
-      textColour = colour;
-  }
-
-  void paint(juce::Graphics &g) override {
-    g.setFont(font);
-    g.setColour(textColour);
-
-    const auto textWidth = getTextWidth(text);
-    if (textWidth <= static_cast<float>(getWidth()) || !isHovered) {
-      g.drawText(text, getLocalBounds(), juce::Justification::centredLeft,
-                 true);
-      return;
-    }
-
-    g.drawText(text, static_cast<int>(-scrollOffset), 0,
-               static_cast<int>(textWidth) + 20, getHeight(),
-               juce::Justification::centredLeft, false);
-  }
-
-  void mouseDown(const juce::MouseEvent &event) override {
-    if (auto *parent = getParentComponent())
-      parent->mouseDown(event.getEventRelativeTo(parent));
-  }
-
-  void mouseEnter(const juce::MouseEvent &) override {
-    isHovered = true;
-    if (getTextWidth(text) > static_cast<float>(getWidth())) {
-      scrollOffset = 0.0f;
-      startTimerHz(30);
-    }
-  }
-
-  void mouseExit(const juce::MouseEvent &) override {
-    isHovered = false;
-    stopTimer();
-    scrollOffset = 0.0f;
-    repaint();
-  }
-
-  void timerCallback() override {
-    const auto maxScroll =
-        getTextWidth(text) - static_cast<float>(getWidth()) + 20.0f;
-    scrollOffset += 1.5f;
-    if (scrollOffset >= maxScroll + 50.0f)
-      scrollOffset = -50.0f;
-    repaint();
-  }
-
-private:
-  float getTextWidth(const juce::String &value) const {
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    const auto width = static_cast<float>(font.getStringWidth(value));
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    return width;
-  }
-
-  juce::String text;
-  juce::Font font{juce::FontOptions(14.0f)};
-  juce::Colour textColour{juce::Colours::white};
-  float scrollOffset = 0.0f;
-  bool isHovered = false;
-};
-
-class SpinnerComponent : public juce::Component, public juce::Timer {
-public:
-  ~SpinnerComponent() override { stopTimer(); }
-
-  void visibilityChanged() override {
-    if (isVisible() && isShowing())
-      startTimerHz(30);
-    else
-      stopTimer();
-  }
-
-  void timerCallback() override {
-    angle = std::fmod(angle + 0.15f,
-                      juce::MathConstants<float>::twoPi);
-    repaint();
-  }
-
-  void paint(juce::Graphics &g) override {
-    auto bounds = getLocalBounds().toFloat().reduced(8.0f);
-    g.setColour(juce::Colour(0xFFFF8C00));
-    juce::Path arc;
-    arc.addArc(bounds.getX(), bounds.getY(), bounds.getWidth(),
-               bounds.getHeight(), angle, angle + 4.0f, true);
-    g.strokePath(arc, juce::PathStrokeType(2.5f));
-  }
-
-private:
-  float angle = 0.0f;
-};
-
+    与 JUCE TooltipWindow 不同，此组件直接嵌入父窗口中绘制，
+    完全避免系统窗口边框问题，确保圆角完美无残留。
+    工作原理与 ToastComponent 相同。
+*/
 class EmbeddedTooltip : public juce::Component, public juce::Timer {
 public:
   EmbeddedTooltip() {
@@ -184,6 +187,7 @@ public:
     setVisible(false);
   }
 
+  // --- MouseListener ---
   void mouseMove(const juce::MouseEvent &event) override {
     auto *comp = event.eventComponent;
     if (comp != nullptr && comp != this && comp != getParentComponent()) {
@@ -407,6 +411,7 @@ private:
   float alpha = 0.0f;
 };
 
+// Implementation for LookAndFeel (to avoid circular dependency)
 inline juce::Button *
 FluentLookAndFeel::createDocumentWindowButton(int buttonType) {
   auto *b = new TransparentButton("");

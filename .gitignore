@@ -1,7 +1,9 @@
 build/
-build-*/
 dist/
 JUCE/
+Settings/
+VST3/
+*.json
 *.suo
 *.user
 *.VC.db

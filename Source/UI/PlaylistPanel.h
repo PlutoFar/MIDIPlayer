@@ -7,6 +7,9 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <vector>
 
+/**
+    PlaylistPanel: Fluent-styled playlist for Windows 11.
+*/
 class PlaylistPanel : public juce::Component,
                       public juce::ListBoxModel,
                       public juce::FileDragAndDropTarget,
@@ -16,10 +19,10 @@ public:
   class Listener {
   public:
     virtual ~Listener() = default;
+    virtual void playlistTrackSelected(int index) = 0;
     virtual void playlistTrackDoubleClicked(int index) = 0;
     virtual void playlistFilesDropped(const juce::StringArray &files) = 0;
-    virtual void playlistSaveRequested() = 0;
-    virtual void playlistLoaded(const juce::File &file) = 0;
+    virtual void playlistLoaded() = 0; // 播放列表加载/重置通知
     virtual void
     playlistTrackReordered(int newCurrentIndex) = 0; // 拖拽排序后同步播放索引
   };
@@ -56,10 +59,7 @@ public:
 
     addAndMakeVisible(saveBtn);
     saveBtn.setButtonText(L"保存");
-    saveBtn.onClick = [this]() {
-      if (listener != nullptr)
-        listener->playlistSaveRequested();
-    };
+    saveBtn.onClick = [this]() { savePlaylist(); };
 
     addAndMakeVisible(loadBtn);
     loadBtn.setButtonText(L"加载");
@@ -72,7 +72,11 @@ public:
     updateCountLabel();
   }
 
-  void setListener(Listener *l) { listener = l; }
+  void setListener(Listener *l) {
+    listener = l;
+    listenerComponent = juce::Component::SafePointer<juce::Component>(
+        dynamic_cast<juce::Component *>(l));
+  }
 
   void setCurrentTrackIndex(int index) {
     currentTrackIndex = index;
@@ -176,27 +180,24 @@ public:
                juce::Justification::centredRight);
 
     // Track name (remaining area)
-    auto textColour = row == currentTrackIndex
-                          ? juce::Colours::white
-                          : juce::Colours::white.withAlpha(0.85f);
-    if (track->missing)
-      textColour = juce::Colours::white.withAlpha(0.45f);
-    g.setColour(textColour);
+    g.setColour(row == currentTrackIndex
+                    ? juce::Colours::white
+                    : juce::Colours::white.withAlpha(0.85f));
 
     // Use the configured playlist font
     if (laf)
       g.setFont(laf->getPlaylistFont(fontSize, row == currentTrackIndex));
     else
       g.setFont(juce::FontOptions(fontSize));
-    auto trackName =
-        track->missing ? track->name + L" [Missing]" : track->name;
-    g.drawText(trackName, area.reduced(8, 0),
+    g.drawText(track->name, area.reduced(8, 0),
                juce::Justification::centredLeft, true);
   }
 
   void listBoxItemClicked(int row, const juce::MouseEvent &e) override {
     if (e.mods.isPopupMenu())
       showContextMenu(row);
+    else if (listener)
+      listener->playlistTrackSelected(row);
   }
 
   void listBoxItemDoubleClicked(int row, const juce::MouseEvent &) override {
@@ -374,6 +375,11 @@ public:
   }
 
 private:
+  Listener *getAsyncListener() const {
+    auto *component = listenerComponent.getComponent();
+    return component != nullptr ? dynamic_cast<Listener *>(component) : nullptr;
+  }
+
   void updateCountLabel() {
     countLabel.setText(juce::String(playlistManager.size()) + L" 个曲目",
                        juce::dontSendNotification);
@@ -391,12 +397,15 @@ private:
             const juce::FileChooser &fc) {
           if (safeThis == nullptr)
             return;
+
           juce::StringArray files;
           for (auto &f : fc.getResults())
             files.add(f.getFullPathName());
-          if (!files.isEmpty() && safeThis->listener)
-            safeThis->listener->playlistFilesDropped(files);
-          safeThis->refresh();
+          if (!files.isEmpty())
+            if (auto *listener = safeThis->getAsyncListener())
+              listener->playlistFilesDropped(files);
+          if (safeThis != nullptr)
+            safeThis->refresh();
         });
   }
 
@@ -408,17 +417,39 @@ private:
         juce::ModalCallbackFunction::create(
             [safeThis = juce::Component::SafePointer<PlaylistPanel>(this)](
                 int result) {
-          if (result == 1 && safeThis != nullptr) {
+          if (safeThis == nullptr)
+            return;
+
+          if (result == 1) {
             safeThis->playlistManager.clear();
             safeThis->currentTrackIndex = -1;
             // 清除上次加载的播放列表路径，防止下次启动时自动加载旧文件
             getAppSettings().setLastPlaylistPath("");
             safeThis->refresh();
             // 通知 MainContentComponent 重置播放索引
-            if (safeThis->listener)
-              safeThis->listener->playlistLoaded({});
+            if (auto *listener = safeThis->getAsyncListener())
+              listener->playlistLoaded();
           }
         }));
+  }
+
+  void savePlaylist() {
+    fileChooser = std::make_unique<juce::FileChooser>(L"保存播放列表",
+                                                      juce::File(), "*.json");
+    fileChooser->launchAsync(
+        juce::FileBrowserComponent::saveMode,
+        [safeThis = juce::Component::SafePointer<PlaylistPanel>(this)](
+            const juce::FileChooser &fc) {
+          if (safeThis == nullptr)
+            return;
+
+          auto r = fc.getResult();
+          if (r != juce::File()) {
+            auto file = r.withFileExtension(".json");
+            if (safeThis->playlistManager.save(file))
+              getAppSettings().setLastPlaylistPath(file.getFullPathName());
+          }
+        });
   }
 
   void loadPlaylist() {
@@ -435,12 +466,12 @@ private:
           juce::ModalCallbackFunction::create(
               [safeThis = juce::Component::SafePointer<PlaylistPanel>(this),
                lastFile](int result) {
+            if (safeThis == nullptr)
+              return;
             if (result == 1) { // 是 (加载最近)
-              if (safeThis != nullptr)
-                safeThis->performLoad(lastFile);
+              safeThis->performLoad(lastFile);
             } else if (result == 2) { // 否 (选择其他)
-              if (safeThis != nullptr)
-                safeThis->showLoadFileChooser();
+              safeThis->showLoadFileChooser();
             }
             // result == 0 (取消) -> 不执行任何操作
           }));
@@ -452,17 +483,17 @@ private:
   void showLoadFileChooser() {
     fileChooser = std::make_unique<juce::FileChooser>(L"加载播放列表",
                                                       juce::File(), "*.json");
-    fileChooser->launchAsync(juce::FileBrowserComponent::openMode,
-                             [safeThis = juce::Component::SafePointer<
-                                  PlaylistPanel>(this)](
-                                 const juce::FileChooser &fc) {
-                               if (safeThis == nullptr)
-                                 return;
-                               auto file = fc.getResult();
-                               if (file.existsAsFile()) {
-                                 safeThis->performLoad(file);
-                               }
-                             });
+    fileChooser->launchAsync(
+        juce::FileBrowserComponent::openMode,
+        [safeThis = juce::Component::SafePointer<PlaylistPanel>(this)](
+            const juce::FileChooser &fc) {
+          if (safeThis == nullptr)
+            return;
+
+          auto file = fc.getResult();
+          if (file.existsAsFile())
+            safeThis->performLoad(file);
+        });
   }
 
   void performLoad(const juce::File &file) {
@@ -470,50 +501,45 @@ private:
       getAppSettings().setLastPlaylistPath(file.getFullPathName());
       currentTrackIndex = -1;
       refresh();
-      if (playlistManager.hasMissingFiles()) {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon, L"播放列表包含缺失文件",
-            L"已加载播放列表，但其中部分 MIDI 文件当前不存在。\n"
-            L"这些条目已被保留，并在列表中标记为 Missing。");
-      }
       // 通知 MainContentComponent 重置播放索引
       if (listener)
-        listener->playlistLoaded(file);
+        listener->playlistLoaded();
     }
   }
 
   void showContextMenu(int row) {
-    if (!juce::isPositiveAndBelow(row, playlistManager.size()))
-      return;
-
     juce::PopupMenu m;
     m.addItem(1, L"播放");
     m.addItem(2, L"移除");
     m.addSeparator();
     m.addItem(3, L"打开文件位置");
-    auto safeThis = juce::Component::SafePointer<PlaylistPanel>(this);
-    m.showMenuAsync({}, [safeThis, row](int r) {
+    m.showMenuAsync(
+        {}, [safeThis = juce::Component::SafePointer<PlaylistPanel>(this),
+             row](int r) {
       if (safeThis == nullptr)
         return;
 
-      if (r == 1 && safeThis->listener)
-        safeThis->listener->playlistTrackDoubleClicked(row);
+      auto &currentTrackIndex = safeThis->currentTrackIndex;
+
+      if (r == 1) {
+        if (auto *listener = safeThis->getAsyncListener())
+          listener->playlistTrackDoubleClicked(row);
+      }
       else if (r == 2) {
         // 更新播放高亮索引：
         // - 如果移除的是正在播放的曲目，重置高亮
         // - 如果移除的是播放曲目之前的曲目，索引需要减1以保持正确位置
         if (row == safeThis->currentTrackIndex) {
-          safeThis->currentTrackIndex = -1;
+          currentTrackIndex = -1; // 移除正在播放的曲目，清除高亮
         } else if (row < safeThis->currentTrackIndex &&
                    safeThis->currentTrackIndex > 0) {
-          --safeThis->currentTrackIndex;
+          currentTrackIndex--; // 移除前面的曲目，索引前移
         }
         safeThis->playlistManager.removeTrack(row);
         safeThis->refresh();
         // 同步播放索引到 MainContentComponent，防止切歌错位
-        if (safeThis->listener)
-          safeThis->listener->playlistTrackReordered(
-              safeThis->currentTrackIndex);
+        if (auto *listener = safeThis->getAsyncListener())
+          listener->playlistTrackReordered(safeThis->currentTrackIndex);
       } else if (r == 3)
         if (auto *t = safeThis->playlistManager.getTrack(row))
           t->file.revealToUser();
@@ -549,6 +575,7 @@ private:
 
   PlaylistManager &playlistManager;
   Listener *listener = nullptr;
+  juce::Component::SafePointer<juce::Component> listenerComponent;
   juce::ListBox listBox;
   juce::Label headerLabel;
   juce::Label countLabel;

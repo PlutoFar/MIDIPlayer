@@ -80,9 +80,7 @@ public:
   }
 
   // --- 播放模式 ---
-  int getPlayMode() const {
-    return juce::jlimit(1, 4, settings.getIntValue("playMode", 1));
-  }
+  int getPlayMode() const { return settings.getIntValue("playMode", 1); }
 
   void setPlayMode(int mode) {
     settings.setValue("playMode", juce::jlimit(1, 4, mode));
@@ -107,11 +105,10 @@ public:
 
   // --- 窗口设置 ---
   juce::Rectangle<int> getWindowBounds() const {
-    return juce::Rectangle<int>(
-        settings.getIntValue("windowX", 100),
-        settings.getIntValue("windowY", 100),
-        juce::jlimit(640, 3840, settings.getIntValue("windowWidth", 1100)),
-        juce::jlimit(480, 2160, settings.getIntValue("windowHeight", 750)));
+    return juce::Rectangle<int>(settings.getIntValue("windowX", 100),
+                                settings.getIntValue("windowY", 100),
+                                settings.getIntValue("windowWidth", 1100),
+                                settings.getIntValue("windowHeight", 750));
   }
 
   void setWindowBounds(const juce::Rectangle<int> &bounds) {
@@ -159,7 +156,7 @@ public:
   }
 
   int getPlaylistWidth() const {
-    return juce::jlimit(150, 400, settings.getIntValue("playlistWidth", 250));
+    return settings.getIntValue("playlistWidth", 250);
   }
 
   void setPlaylistWidth(int width) {
@@ -188,7 +185,7 @@ public:
   }
 
   // --- 主题设置 ---
-  int getThemeId() const { return juce::jlimit(1, 4, settings.getIntValue("themeId", 1)); }
+  int getThemeId() const { return settings.getIntValue("themeId", 1); }
   void setThemeId(int id) { settings.setValue("themeId", id); }
 
   // --- 主题色设置 (Monet) ---
@@ -329,8 +326,7 @@ public:
 
   // --- UI 缩放 ---
   float getUiScale() const {
-    return juce::jlimit(0.75f, 2.0f,
-                        (float)settings.getDoubleValue("uiScale", 1.0));
+    return (float)settings.getDoubleValue("uiScale", 1.0);
   }
 
   void setUiScale(float scale) {
@@ -338,10 +334,34 @@ public:
   }
 
   // --- 持久化 ---
-  void save() {
+  bool save() {
     if (auto xml = settings.createXml("ModernMidiPlayerSettings")) {
-      xml->writeTo(settingsFile, {});
+      auto tempFile =
+          settingsFile.getSiblingFile(settingsFile.getFileName() + ".tmp");
+      if (tempFile.exists() && !tempFile.deleteFile())
+        return false;
+
+      auto stream = tempFile.createOutputStream();
+      if (stream == nullptr)
+        return false;
+
+      xml->writeTo(*stream, {});
+      stream->flush();
+      if (stream->getStatus().failed()) {
+        stream.reset();
+        tempFile.deleteFile();
+        return false;
+      }
+      stream.reset();
+
+      if (!tempFile.replaceFileIn(settingsFile)) {
+        tempFile.deleteFile();
+        return false;
+      }
+
+      return true;
     }
+    return false;
   }
 
   void load() {

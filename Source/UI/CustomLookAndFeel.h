@@ -128,6 +128,7 @@ public:
     return juce::roundToInt(scaled((float)value));
   }
 
+
   // === Typography ===
   // Configurable font names
   juce::String uiFontName = "Source Han Sans SC"; // 思源黑体 for UI elements
@@ -218,8 +219,16 @@ public:
         juce::FontOptions(fontName, scaled(size), juce::Font::plain));
   }
 
-  juce::Font getLabelFont(juce::Label &) override {
-    return getDefaultFont(14.0f);
+  juce::Font getLabelFont(juce::Label &label) override {
+    auto f = label.getFont();
+    // Prevent double-scaling: if the font is already using our custom UI font,
+    // or if it has a custom size, just return it with its exact physical height.
+    if (f.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
+      juce::FontOptions options(uiFontName, f.getHeight(),
+                                f.isBold() ? juce::Font::bold : juce::Font::plain);
+      return juce::Font(options);
+    }
+    return f;
   }
 
   // === Buttons ===
@@ -262,7 +271,10 @@ public:
             fill = colors.controlBackground;
         }
       } else {
-        // Transparent buttons draw their own icon and interaction state.
+        // Transparent button logic (minimalist)
+        // Draw NOTHING. The component (TransparentButton/AnimatedIconButton)
+        // handles its own visual state (opacity/scaling).
+        // Drawing here creates a redundant "mask".
       }
 
       if (fill != juce::Colours::transparentBlack) {
