@@ -4,11 +4,11 @@
 #include "../AudioEngine/AudioEngine.h"
 #include "CustomLookAndFeel.h"
 
-// Horizontal scrolling label for long song names (similar to FL Studio status bar/hint panels)
+// 长曲名横向滚动标签。
 class MarqueeLabel : public juce::Component, public juce::Timer {
 public:
     MarqueeLabel() {
-        startTimerHz(30); // 30 FPS smooth scrolling
+        startTimerHz(30);
     }
     
     ~MarqueeLabel() override {
@@ -62,13 +62,13 @@ public:
         int labelWidth = getWidth();
         
         if (textWidth > labelWidth) {
-            if (waitCounter < 60) { // Wait 2 seconds before starting scroll
+            if (waitCounter < 60) { // 约 2 秒后开始滚动。
                 waitCounter++;
             } else {
                 float loopGap = 40.0f;
                 float totalWidth = (float)textWidth + loopGap;
                 
-                scrollPos += 0.8f; // Smooth scroll speed
+                scrollPos += 0.8f;
                 if (scrollPos >= totalWidth) {
                     scrollPos = 0.0f;
                     waitCounter = 0;
@@ -101,24 +101,23 @@ public:
         
         setLookAndFeel(&fluentLookAndFeel);
 
-        // Track Selector
         addAndMakeVisible(trackLabel);
         trackLabel.setText(L"待导出曲目", juce::dontSendNotification);
         
         addAndMakeVisible(trackCombo);
-        trackCombo.setColour(juce::ComboBox::textColourId, juce::Colours::transparentBlack); // Hide default ComboBox text rendering
+        // ComboBox 自带文本透明，由 trackMarquee 覆盖绘制长曲名。
+        trackCombo.setColour(juce::ComboBox::textColourId, juce::Colours::transparentBlack);
         for (int i = 0; i < trackNames.size(); ++i) {
             trackCombo.addItem(juce::String(i + 1) + ". " + trackNames[i], i + 1);
         }
         trackCombo.addListener(this);
 
-        // Marquee Label overlay for track selector
+        // 覆盖层只绘制文本，鼠标事件继续交给下拉框处理。
         addAndMakeVisible(trackMarquee);
         trackMarquee.setFont(fluentLookAndFeel.getDefaultFont(13.0f));
         trackMarquee.setColour(fluentLookAndFeel.getColors().textPrimary);
-        trackMarquee.setInterceptsMouseClicks(false, false); // Click through to dropdown arrow
+        trackMarquee.setInterceptsMouseClicks(false, false);
 
-        // Preset
         addAndMakeVisible(presetLabel);
         presetLabel.setText(L"预设方案", juce::dontSendNotification);
         addAndMakeVisible(presetCombo);
@@ -128,7 +127,6 @@ public:
         presetCombo.addItem(L"自定义 (Custom)", 4);
         presetCombo.addListener(this);
 
-        // Format
         addAndMakeVisible(formatLabel);
         formatLabel.setText(L"文件格式", juce::dontSendNotification);
         addAndMakeVisible(formatCombo);
@@ -137,7 +135,6 @@ public:
         formatCombo.addItem("Ogg Vorbis", 3);
         formatCombo.addListener(this);
 
-        // Sample Rate
         addAndMakeVisible(srLabel);
         srLabel.setText(L"采样率", juce::dontSendNotification);
         addAndMakeVisible(srCombo);
@@ -148,7 +145,6 @@ public:
         srCombo.addItem("192000 Hz", 5);
         srCombo.addListener(this);
 
-        // Bit Depth
         addAndMakeVisible(bitLabel);
         bitLabel.setText(L"位深度", juce::dontSendNotification);
         addAndMakeVisible(bitCombo);
@@ -157,14 +153,12 @@ public:
         bitCombo.addItem("32-bit Float", 3);
         bitCombo.addListener(this);
 
-        // Quality
         addAndMakeVisible(qualityLabel);
         qualityLabel.setText(L"压缩等级", juce::dontSendNotification);
         addAndMakeVisible(qualityCombo);
         updateQualityOptions();
         qualityCombo.addListener(this);
 
-        // Tail Mode
         addAndMakeVisible(tailLabel);
         tailLabel.setText(L"尾音处理", juce::dontSendNotification);
         addAndMakeVisible(tailCombo);
@@ -178,7 +172,6 @@ public:
         tailSlider.setValue(3.0);
         tailSlider.onValueChange = [this] { presetCombo.setSelectedId(4, juce::dontSendNotification); };
 
-        // Buttons
         addAndMakeVisible(exportBtn);
         exportBtn.setButtonText(L"选择路径并导出");
         exportBtn.addListener(this);
@@ -187,17 +180,16 @@ public:
         cancelBtn.setButtonText(L"取消");
         cancelBtn.addListener(this);
 
-        // Hint Label (Status hint bar like FL Studio)
+        // 提示栏不自动缩放，避免不同提示文本字号跳动。
         addAndMakeVisible(hintLabel);
         hintLabel.setFont(fluentLookAndFeel.getDefaultFont(13.0f));
-        hintLabel.setMinimumHorizontalScale(1.0f); // Disable auto-scaling to keep font sizes 100% unified!
+        hintLabel.setMinimumHorizontalScale(1.0f);
         hintLabel.setColour(juce::Label::textColourId, fluentLookAndFeel.getColors().textSecondary);
         hintLabel.setJustificationType(juce::Justification::centredLeft);
         
-        // Start hover/marquee timer
         startTimerHz(20);
 
-        // Set initial selected track
+        // 默认选择当前播放曲目；没有当前曲目时选择第一首。
         if (currentTrackIdx >= 0 && currentTrackIdx < trackNames.size()) {
             trackCombo.setSelectedId(currentTrackIdx + 1, juce::dontSendNotification);
             trackMarquee.setText(trackCombo.getText());
@@ -206,10 +198,10 @@ public:
             trackMarquee.setText(trackCombo.getText());
         }
 
-        // Default to Hi-Res preset
+        // 默认给出高解析度预设。
         presetCombo.setSelectedId(2, juce::sendNotification);
 
-        setSize(420, 430); // Comfortably fit all UI elements including quality combo
+        setSize(420, 430);
     }
 
     ~ExportDialog() override {
@@ -224,70 +216,61 @@ public:
     }
 
     void resized() override {
-        auto area = getLocalBounds().reduced(20); // Comfortable padding of 20px near borders
+        auto area = getLocalBounds().reduced(20);
 
-        // Row 1: Track Selector
         auto rowArea = area.removeFromTop(30);
         trackLabel.setBounds(rowArea.removeFromLeft(100));
         trackCombo.setBounds(rowArea);
         
         auto marqueeRect = trackCombo.getBounds();
-        marqueeRect.removeFromRight(30); // Leave room for arrow
-        marqueeRect.removeFromLeft(6);   // Small left margin
+        marqueeRect.removeFromRight(30); // 保留右侧下拉箭头空间。
+        marqueeRect.removeFromLeft(6);
         trackMarquee.setBounds(marqueeRect);
 
         area.removeFromTop(10);
 
-        // Row 2: Preset
         rowArea = area.removeFromTop(30);
         presetLabel.setBounds(rowArea.removeFromLeft(100));
         presetCombo.setBounds(rowArea);
 
         area.removeFromTop(10);
         
-        // Row 3: Format
         rowArea = area.removeFromTop(30);
         formatLabel.setBounds(rowArea.removeFromLeft(100));
         formatCombo.setBounds(rowArea);
 
         area.removeFromTop(10);
         
-        // Row 4: Sample Rate
         rowArea = area.removeFromTop(30);
         srLabel.setBounds(rowArea.removeFromLeft(100));
         srCombo.setBounds(rowArea);
 
         area.removeFromTop(10);
         
-        // Row 5: Bit Depth
         rowArea = area.removeFromTop(30);
         bitLabel.setBounds(rowArea.removeFromLeft(100));
         bitCombo.setBounds(rowArea);
 
         area.removeFromTop(10);
         
-        // Row 5.5: Quality
         rowArea = area.removeFromTop(30);
         qualityLabel.setBounds(rowArea.removeFromLeft(100));
         qualityCombo.setBounds(rowArea);
 
         area.removeFromTop(10);
         
-        // Row 6: Tail Mode
         rowArea = area.removeFromTop(30);
         tailLabel.setBounds(rowArea.removeFromLeft(100));
         tailCombo.setBounds(rowArea.removeFromLeft(150));
         rowArea.removeFromLeft(10);
         tailSlider.setBounds(rowArea);
 
-        // Row 7: Buttons
         area.removeFromTop(15);
         auto btnArea = area.removeFromTop(30);
         cancelBtn.setBounds(btnArea.removeFromRight(80));
         btnArea.removeFromRight(10);
         exportBtn.setBounds(btnArea.removeFromRight(150));
 
-        // Row 8: Hint Label
         area.removeFromTop(15);
         hintLabel.setBounds(area);
     }
@@ -297,15 +280,15 @@ public:
             trackMarquee.setText(trackCombo.getText());
         } else if (box == &presetCombo) {
             int id = presetCombo.getSelectedId();
-            if (id == 1) { // CD
+            if (id == 1) { // CD 预设。
                 formatCombo.setSelectedId(1, juce::dontSendNotification);
                 srCombo.setSelectedId(1, juce::dontSendNotification);
                 bitCombo.setSelectedId(1, juce::dontSendNotification);
-            } else if (id == 2) { // Hi-Res
+            } else if (id == 2) { // 高解析度预设。
                 formatCombo.setSelectedId(2, juce::dontSendNotification);
                 srCombo.setSelectedId(4, juce::dontSendNotification);
                 bitCombo.setSelectedId(2, juce::dontSendNotification);
-            } else if (id == 3) { // Mastering
+            } else if (id == 3) { // 母带预设。
                 formatCombo.setSelectedId(1, juce::dontSendNotification);
                 srCombo.setSelectedId(5, juce::dontSendNotification);
                 bitCombo.setSelectedId(3, juce::dontSendNotification);
@@ -314,7 +297,7 @@ public:
             presetCombo.setSelectedId(4, juce::dontSendNotification);
         }
 
-        // Validate format compatibility
+        // 按封装格式约束可用位深、采样率和压缩选项。
         auto formatName = formatCombo.getText();
         
         if (box == &formatCombo) {
@@ -464,13 +447,13 @@ private:
             for (int i = 0; i <= 8; ++i) {
                 qualityCombo.addItem(L"FLAC 压缩等级 " + juce::String(i) + (i == 0 ? L" (速度快)" : (i == 8 ? L" (文件小)" : L"")), i + 1);
             }
-            qualityCombo.setSelectedId(6, juce::dontSendNotification); // Default FLAC level 5
+            qualityCombo.setSelectedId(6, juce::dontSendNotification); // 默认 FLAC 等级 5。
         } else if (formatName == "Ogg Vorbis") {
             qualityCombo.setEnabled(true);
             for (int i = 1; i <= 10; ++i) {
                 qualityCombo.addItem(L"Ogg 质量 " + juce::String(i) + (i == 1 ? L" (较小文件)" : (i == 10 ? L" (较高音质)" : L"")), i);
             }
-            qualityCombo.setSelectedId(6, juce::dontSendNotification); // Default Ogg level 6
+            qualityCombo.setSelectedId(6, juce::dontSendNotification); // 默认 Ogg 等级 6。
         }
     }
 };

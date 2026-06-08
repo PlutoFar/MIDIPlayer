@@ -4,8 +4,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 /**
-    A processor bridge that allows the MidiPlayer to live inside the
-   AudioProcessorGraph.
+    将 MidiPlayer 包装成 JUCE AudioProcessor 节点，使其可以放入 AudioProcessorGraph。
+    该节点只产生 MIDI，不处理音频。
 */
 class MidiPlayerProcessor : public juce::AudioProcessor {
 public:

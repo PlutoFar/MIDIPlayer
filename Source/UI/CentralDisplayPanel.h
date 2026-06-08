@@ -3,10 +3,9 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 /**
-    CentralDisplayPanel: Container for VST plugin editor.
+    VST 插件编辑器容器。
 
-    Displays the VST editor with a Viewport for scrolling when needed.
-    NO borders, NO visual decorations - just clean embedding.
+    插件界面超过可用区域时交给 Viewport 滚动，容器本身不添加装饰。
 */
 class CentralDisplayPanel : public juce::Component,
                             public juce::ComponentListener {
@@ -71,7 +70,6 @@ public:
   }
 
   void paint(juce::Graphics &g) override {
-    // NO decorations - transparent background
     if (!hasEditor) {
       g.setColour(juce::Colours::white.withAlpha(0.2f));
       g.setFont(juce::Font(juce::FontOptions(16.0f)));
@@ -88,13 +86,11 @@ public:
       bool fitsHeight = originalHeight <= area.getHeight();
 
       if (fitsWidth && fitsHeight) {
-        // Center the editor
         int offsetX = (area.getWidth() - originalWidth) / 2;
         int offsetY = (area.getHeight() - originalHeight) / 2;
         viewport.setBounds(offsetX, offsetY, originalWidth, originalHeight);
         viewport.setScrollBarsShown(false, false);
       } else {
-        // Full area with scrollbars as needed
         viewport.setBounds(area);
         viewport.setScrollBarsShown(!fitsHeight, !fitsWidth);
       }

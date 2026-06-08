@@ -4,40 +4,36 @@
 
 #if JUCE_WINDOWS
 
-// Forward declare Windows types to avoid header conflicts
+// 前置声明 Windows 类型，避免引入 windows.h 后污染 JUCE 头文件。
 extern "C" {
 typedef void *HWND;
 typedef long HRESULT;
 typedef unsigned long DWORD;
 typedef int BOOL;
 
-// DWM function declaration
 __declspec(dllimport) HRESULT __stdcall
 DwmSetWindowAttribute(HWND hwnd, DWORD dwAttribute, const void *pvAttribute,
                       DWORD cbAttribute);
 }
 
 /**
-    Windows 11 Specific UI Helpers.
+    Windows 11 专用窗口样式辅助函数。
 
-    Provides Mica backdrop, rounded corners, and dark mode integration.
+    封装 DWM 深色模式、Mica 背景和圆角窗口属性。
 */
 namespace Win11Helpers {
 
-// DWM Attribute Constants
 namespace DwmAttributes {
 constexpr DWORD DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 constexpr DWORD DWMWA_WINDOW_CORNER_PREFERENCE = 33;
 constexpr DWORD DWMWA_SYSTEMBACKDROP_TYPE = 38;
 
-// Backdrop Types
 constexpr int DWMSBT_AUTO = 0;
 constexpr int DWMSBT_NONE = 1;
 constexpr int DWMSBT_MAINWINDOW = 2;      // Mica
 constexpr int DWMSBT_TRANSIENTWINDOW = 3; // Acrylic
 constexpr int DWMSBT_TABBEDWINDOW = 4;    // Mica Alt
 
-// Corner Preference
 constexpr int DWMWCP_DEFAULT = 0;
 constexpr int DWMWCP_DONOTROUND = 1;
 constexpr int DWMWCP_ROUND = 2;
@@ -45,7 +41,7 @@ constexpr int DWMWCP_ROUNDSMALL = 3;
 } // namespace DwmAttributes
 
 /**
-    Detect if the OS is Windows 11 or later.
+    检测当前系统是否为 Windows 11 或更高版本。
 */
 inline bool isWindows11OrLater() {
   auto osType = juce::SystemStats::getOperatingSystemType();
@@ -62,7 +58,7 @@ inline bool isWindows11OrLater() {
 }
 
 /**
-    Apply Windows 11 styling (Mica, Dark Mode, Rounded Corners).
+    应用 Windows 11 样式：Mica、深色模式和圆角。
 */
 inline int applyWin11Style(juce::Component *component,
                            bool useDarkMode = true) {
@@ -77,13 +73,11 @@ inline int applyWin11Style(juce::Component *component,
 
   int appliedCount = 0;
 
-  // 1. Dark Mode (Immersive Dark Mode)
   BOOL darkMode = useDarkMode ? 1 : 0;
   if (DwmSetWindowAttribute(hwnd, DwmAttributes::DWMWA_USE_IMMERSIVE_DARK_MODE,
                             &darkMode, sizeof(darkMode)) >= 0)
     appliedCount++;
 
-  // 2. Mica Backdrop & Rounded Corners (Win11 Only)
   if (isWindows11OrLater()) {
     int backdropType = DwmAttributes::DWMSBT_MAINWINDOW;
     if (DwmSetWindowAttribute(hwnd, DwmAttributes::DWMWA_SYSTEMBACKDROP_TYPE,
@@ -101,7 +95,7 @@ inline int applyWin11Style(juce::Component *component,
 }
 
 /**
-    Update dark mode state dynamically.
+    动态更新深色模式状态。
 */
 inline void updateDarkMode(juce::Component *component, bool useDarkMode) {
   if (component == nullptr)
@@ -119,7 +113,7 @@ inline void updateDarkMode(juce::Component *component, bool useDarkMode) {
 }
 
 /**
-    Remove Windows 11 effects.
+    移除 Windows 11 窗口效果。
 */
 inline void removeWin11Style(juce::Component *component) {
   if (component == nullptr)

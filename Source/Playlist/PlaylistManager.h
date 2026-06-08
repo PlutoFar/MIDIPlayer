@@ -4,8 +4,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 /**
-    播放列表管理器，负责管理 MIDI
-   文件列表、播放顺序（顺序、循环、随机）以及持久化存储。
+    播放列表管理器，负责 MIDI 文件列表、播放模式和 JSON 持久化。
 */
 class PlaylistManager {
 public:
@@ -16,6 +15,7 @@ public:
   };
 
   struct ChangeLog {
+    // 只记录本次会话尚未保存的增删/排序状态，不作为完整审计日志。
     int added = 0;
     int removed = 0;
     bool reordered = false;
@@ -30,12 +30,7 @@ public:
   PlaylistManager() = default;
 
   /**
-      Add a MIDI file to the playlist.
-      @param file The MIDI file to add
-      @return true if file was added successfully
-  */
-  /**
-      Check if the file is already in the playlist.
+      检查文件是否已存在于播放列表。
   */
   bool contains(const juce::File &file) const {
     for (const auto &t : tracks) {
@@ -46,10 +41,7 @@ public:
   }
 
   /**
-      Add a MIDI file to the playlist.
-      @param file The MIDI file to add
-      @param allowDuplicates If true, adds even if already present
-      @return true if file was added successfully
+      添加 MIDI 文件。allowDuplicates 为 true 时允许重复路径。
   */
   bool addFile(const juce::File &file, bool allowDuplicates = false) {
     if (!file.existsAsFile())
@@ -58,7 +50,6 @@ public:
     if (!file.hasFileExtension(".mid;.midi"))
       return false;
 
-    // Check for duplicates
     if (!allowDuplicates && contains(file)) {
       return false;
     }
@@ -69,9 +60,7 @@ public:
   }
 
   /**
-      Remove a track by index.
-      @param index The index to remove
-      @return true if removal was successful
+      按索引移除曲目。
   */
   bool removeTrack(int index) {
     if (index < 0 || index >= tracks.size())
@@ -83,10 +72,7 @@ public:
   }
 
   /**
-      Move a track from one position to another.
-      @param fromIndex The source index
-      @param toIndex The destination index
-      @return true if move was successful
+      移动曲目位置。
   */
   bool moveTrack(int fromIndex, int toIndex) {
     if (fromIndex < 0 || fromIndex >= tracks.size())
@@ -114,9 +100,7 @@ public:
   bool isEmpty() const { return tracks.isEmpty(); }
 
   /**
-      Get a track safely by index.
-      @param index The track index
-      @return Pointer to track, or nullptr if index is invalid
+      按索引安全获取曲目；索引无效时返回 nullptr。
   */
   const Track *getTrack(int index) const {
     if (index < 0 || index >= tracks.size())
@@ -150,14 +134,14 @@ public:
     return true;
   }
 
-  // --- JSON Persistence ---
+  // --- JSON 持久化 ---
 
   /**
       将当前播放列表保存为 JSON 文件。
 
       实现说明：
       - 使用 JUCE DynamicObject 构建 JSON 树，保存所有文件的绝对路径。
-      - 写入过程包含截断（Truncate）操作，确保旧数据被彻底覆盖。
+      - 先写临时文件，再替换目标文件，避免半写入文件被当成有效播放列表。
   */
   bool save(const juce::File &file) const {
     try {
@@ -198,7 +182,7 @@ public:
         return false;
       }
 
-      changeLog.reset(); // Changes saved
+      changeLog.reset();
       return true;
     } catch (...) {
       return false;
@@ -206,9 +190,10 @@ public:
   }
 
   /**
-      Load a playlist from a JSON file.
-      @param file The file to load from
-      @return true if load was successful
+      从 JSON 文件加载播放列表。
+
+      不存在的曲目会被跳过；加载完成后清空 ChangeLog，
+      避免把文件内容恢复过程计为新增曲目。
   */
   bool load(const juce::File &file) {
     if (!file.existsAsFile())
@@ -236,7 +221,7 @@ public:
           addFile(trackFile);
       }
 
-      changeLog.reset(); // Don't count loaded tracks as "new"
+      changeLog.reset();
       return true;
     } catch (...) {
       return false;
@@ -257,11 +242,10 @@ public:
       根据当前的播放模式计算下一个曲目的索引。
 
       逻辑要点：
-      - 单曲循环: 保持当前索引不变。
-      - 随机播放:
-     尝试获取一个与当前不同的索引（最多尝试5次，防止单曲不断重复导致的视觉死板）。
-      - 列表循环: 索引递增并对总数取模。
-      - 顺序播放: 到达末尾返回 -1 以表示停止。
+      - 单曲循环：保持当前索引不变。
+      - 随机播放：尽量避免连续两次选中同一首。
+      - 列表循环：索引递增并对总数取模。
+      - 顺序播放：到达末尾返回 -1 表示停止。
   */
   int getNextIndex(int currentIndex) const {
     if (tracks.isEmpty())
@@ -269,12 +253,11 @@ public:
 
     switch (currentMode) {
     case PlaybackMode::LoopSingle:
-      return currentIndex; // Repeat current
+      return currentIndex;
 
     case PlaybackMode::Shuffle: {
       if (tracks.size() == 1)
         return 0;
-      // Avoid playing the same track twice in a row if possible
       int next;
       int attempts = 0;
       do {
@@ -290,42 +273,38 @@ public:
     case PlaybackMode::Sequential:
     default:
       if (currentIndex >= tracks.size() - 1)
-        return -1; // Stop at end
+        return -1;
       return currentIndex + 1;
     }
   }
 
   /**
-      Get the previous track index.
-      @param currentIndex Current track index
-      @return Previous track index, or -1
+      获取上一曲索引。
+
+      上一曲不维护随机历史；Shuffle 与 Sequential 都按列表前一项处理。
   */
   int getPreviousIndex(int currentIndex) const {
     if (tracks.isEmpty())
       return -1;
 
-    // Previous is usually just index - 1, but handle wrapping for loops
     if (currentMode == PlaybackMode::LoopList ||
         currentMode == PlaybackMode::LoopSingle) {
-      // Even in LoopSingle, pressing "Prev" usually goes to previous track in
-      // list (or restarts current, but let's say prev track for now)
       int prev = currentIndex - 1;
       if (prev < 0)
         prev = tracks.size() - 1;
       return prev;
     }
 
-    // Sequential / Shuffle (History? For now just prev in list)
     int prev = currentIndex - 1;
     if (prev < 0)
-      return -1; // Stop/Don't wrap
+      return -1;
     return prev;
   }
 
 private:
   juce::Array<Track> tracks;
   PlaybackMode currentMode = PlaybackMode::Sequential;
-  mutable ChangeLog changeLog;
+  mutable ChangeLog changeLog; // save() 为 const，保存成功后仍需清零变更记录。
 
 public:
   const ChangeLog &getChangeLog() const { return changeLog; }

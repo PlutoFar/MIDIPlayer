@@ -8,7 +8,7 @@
 #include <vector>
 
 /**
-    PlaylistPanel: Fluent-styled playlist for Windows 11.
+    Windows 11 风格播放列表面板。
 */
 class PlaylistPanel : public juce::Component,
                       public juce::ListBoxModel,
@@ -30,7 +30,7 @@ public:
   PlaylistPanel(PlaylistManager &pm) : playlistManager(pm) {
     addAndMakeVisible(listBox);
     listBox.setModel(this);
-    listBox.setRowHeight(48); // Increased for better readability
+    listBox.setRowHeight(48);
     listBox.setColour(juce::ListBox::backgroundColourId,
                       juce::Colours::transparentBlack);
     listBox.setColour(juce::ListBox::outlineColourId,
@@ -41,14 +41,13 @@ public:
     addAndMakeVisible(headerLabel);
     headerLabel.setText(L"播放列表", juce::dontSendNotification);
     headerLabel.setJustificationType(juce::Justification::centredLeft);
-    // Use 黑体 (SimHei) font - different from page title
+    // 标题字体独立于页面标题，保持侧栏面板的密度。
     headerLabel.setFont(
         juce::Font(juce::FontOptions("SimHei", 16.0f, juce::Font::plain)));
     headerLabel.setColour(juce::Label::textColourId,
                           juce::Colours::white.withAlpha(0.85f));
     headerLabel.setInterceptsMouseClicks(false, false);
 
-    // Toolbar Buttons - Using text labels instead of icons
     addAndMakeVisible(addBtn);
     addBtn.setButtonText(L"添加");
     addBtn.onClick = [this]() { showAddFileDialog(); };
@@ -89,7 +88,7 @@ public:
     listBox.updateContent();
     listBox.repaint();
     updateCountLabel();
-    repaint(); // Force panel to repaint (clears drag overlays)
+    repaint();
   }
 
   // 启动时自动加载上次的播放列表（静默加载，不弹窗）
@@ -105,9 +104,7 @@ public:
 
   void updateRowHeight() {
     float size = getAppSettings().getPlaylistFontSize();
-    // Increase row height generously for touch/ease of use
-    // Using 3.0x multiplier to restore the original spacious feeling (e.g. 16px
-    // font -> 48px row)
+    // 行高按字体 3 倍计算，避免较大字号时列表项显得拥挤。
     listBox.setRowHeight((int)(size * 3.0f));
   }
 
@@ -135,21 +132,18 @@ public:
 
     auto area = juce::Rectangle<int>(0, 0, width, height).reduced(6, 2);
 
-    // Item Background (Rounded)
-    // Dynamic color access - simplified and safer
     auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel());
     auto colors = laf ? laf->getColors() : FluentLookAndFeel::FluentColors();
 
     if (row == currentTrackIndex) {
-      g.setColour(colors.accentPrimary.withAlpha(0.12f)); // Tint
+      g.setColour(colors.accentPrimary.withAlpha(0.12f));
       g.fillRoundedRectangle(area.toFloat(), 4.0f);
 
-      // Selection indicator
       g.setColour(colors.accentPrimary);
       g.fillRoundedRectangle(area.removeFromLeft(3).reduced(0, 8).toFloat(),
                              1.5f);
     } else if (rowIsSelected) {
-      g.setColour(juce::Colour(0x1AFFFFFF)); // Generic hover/select
+      g.setColour(juce::Colour(0x1AFFFFFF));
       g.fillRoundedRectangle(area.toFloat(), 4.0f);
     }
 
@@ -171,20 +165,17 @@ public:
       g.fillRoundedRectangle(drawArea, 4.0f);
     }
 
-    // Index number (left side)
     auto indexArea = area.removeFromLeft(35);
     g.setColour(juce::Colours::white.withAlpha(0.4f));
     float fontSize = getAppSettings().getPlaylistFontSize();
-    g.setFont(juce::FontOptions(fontSize * 0.8f)); // Smaller index
+    g.setFont(juce::FontOptions(fontSize * 0.8f));
     g.drawText(juce::String(row + 1), indexArea,
                juce::Justification::centredRight);
 
-    // Track name (remaining area)
     g.setColour(row == currentTrackIndex
                     ? juce::Colours::white
                     : juce::Colours::white.withAlpha(0.85f));
 
-    // Use the configured playlist font
     if (laf)
       g.setFont(laf->getPlaylistFont(fontSize, row == currentTrackIndex));
     else
@@ -206,12 +197,10 @@ public:
   }
 
   void backgroundClicked(const juce::MouseEvent &) override {
-    // Deselect when clicking empty area INSIDE listbox
     deselectAllRows();
   }
 
   void mouseDown(const juce::MouseEvent &) override {
-    // Deselect when clicking empty area of the PANEL itself (header/footer)
     deselectAllRows();
   }
 
@@ -234,8 +223,7 @@ public:
 
   void
   itemDragMove(const juce::DragAndDropTarget::SourceDetails &details) override {
-    // Calculate which row the mouse is over - convert from this coordinates to
-    // listBox coordinates
+    // 拖拽坐标来自面板，需要换算到 ListBox 视口坐标。
     auto localPoint = listBox.getLocalPoint(this, details.localPosition);
     auto *viewport = listBox.getViewport();
     int scrollY = viewport ? viewport->getViewPositionY() : 0;
@@ -258,8 +246,7 @@ public:
 
   void
   itemDropped(const juce::DragAndDropTarget::SourceDetails &details) override {
-    // Calculate final insert index - convert from this coordinates to listBox
-    // coordinates
+    // 最终插入位置同样按 ListBox 视口坐标计算。
     auto localPoint = listBox.getLocalPoint(this, details.localPosition);
     auto *viewport = listBox.getViewport();
     int scrollY = viewport ? viewport->getViewPositionY() : 0;
@@ -269,13 +256,11 @@ public:
         juce::jlimit(0, playlistManager.size(),
                      (localPoint.y + scrollY + rowHeight / 2) / rowHeight);
 
-    // Parse source row from drag description
     auto desc = details.description.toString();
     if (desc.startsWith("trackIdx:")) {
       int srcRow = desc.substring(9).getIntValue();
       if (srcRow >= 0 && srcRow < playlistManager.size() &&
           srcRow != insertIndex) {
-        // Calculate adjusted target index
         int targetRow = insertIndex;
         if (srcRow < insertIndex)
           targetRow--;
@@ -284,8 +269,7 @@ public:
           // 记录是否拖拽的是正在播放的曲目（在索引更新之前判断）
           bool movedPlayingTrack = (srcRow == currentTrackIndex);
 
-          // Fix: Only update currentTrackIndex if the playing track itself was
-          // moved, or if the move affected the playing track's position.
+          // 只在移动播放曲目或跨过播放曲目时修正 currentTrackIndex。
           if (srcRow == currentTrackIndex) {
             currentTrackIndex = targetRow;
           } else if (srcRow < currentTrackIndex &&
@@ -307,7 +291,6 @@ public:
       }
     }
 
-    // Ensure UI is fully refreshed and indicators are cleared
     dropInsertIndex = -1;
     refresh();
     repaint();
@@ -316,7 +299,7 @@ public:
       listener->playlistTrackReordered(currentTrackIndex);
   }
 
-  // Draw drop indicator line
+  // 绘制拖拽插入位置指示线。
   void paintOverChildren(juce::Graphics &g) override {
     if (dropInsertIndex >= 0) {
       auto *viewport = listBox.getViewport();
@@ -324,16 +307,13 @@ public:
       int rowHeight = listBox.getRowHeight();
       int y = listBox.getY() + (dropInsertIndex * rowHeight) - scrollY - 1;
 
-      // Only draw if within listbox bounds (avoid drawing over header)
       g.saveState();
       g.reduceClipRegion(listBox.getBounds());
 
-      // Draw insertion line
-      g.setColour(juce::Colour(0xFF0078D4)); // Accent blue
+      g.setColour(juce::Colour(0xFF0078D4));
       g.fillRoundedRectangle(listBox.getX() + 10.0f, (float)y,
                              listBox.getWidth() - 20.0f, 3.0f, 1.5f);
 
-      // Draw small circles at ends
       g.fillEllipse(listBox.getX() + 6.0f, (float)y - 2.0f, 7.0f, 7.0f);
       g.fillEllipse(listBox.getRight() - 13.0f, (float)y - 2.0f, 7.0f, 7.0f);
 
@@ -359,10 +339,8 @@ public:
     auto area = getLocalBounds();
 
     auto toolbarArea = area.removeFromTop(48);
-    // Increase width to prevent horizontal squeezing of text
     headerLabel.setBounds(toolbarArea.removeFromLeft(140).reduced(12, 0));
 
-    // Wider buttons for text labels
     loadBtn.setBounds(toolbarArea.removeFromRight(60).reduced(4));
     saveBtn.setBounds(toolbarArea.removeFromRight(60).reduced(4));
     clearBtn.setBounds(toolbarArea.removeFromRight(60).reduced(4));
@@ -376,6 +354,7 @@ public:
 
 private:
   Listener *getAsyncListener() const {
+    // 异步回调中重新获取 listener，避免面板销毁后调用悬空对象。
     auto *component = listenerComponent.getComponent();
     return component != nullptr ? dynamic_cast<Listener *>(component) : nullptr;
   }
@@ -582,7 +561,7 @@ private:
   juce::TextButton addBtn, clearBtn, saveBtn, loadBtn;
   std::unique_ptr<juce::FileChooser> fileChooser;
   int currentTrackIndex = -1;
-  int dropInsertIndex = -1; // For drag-drop visual feedback
+  int dropInsertIndex = -1;
 
   // 脉冲动画状态（支持多行同时闪烁）
   std::vector<int> animRows;      // 正在动画的行号列表

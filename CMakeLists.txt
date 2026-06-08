@@ -8,15 +8,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ============================================================================
 # JUCE Configuration
 # ============================================================================
-# Check if JUCE subdirectory exists
+# Prefer a repo-local JUCE checkout, but allow local validation with an
+# existing JUCE tree supplied by -DJUCE_DIR=...
+set(JUCE_DIR "" CACHE PATH "Path to an existing JUCE checkout")
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
     message(STATUS "Using JUCE from subdirectory")
     add_subdirectory(JUCE)
+elseif(JUCE_DIR AND EXISTS "${JUCE_DIR}/CMakeLists.txt")
+    message(STATUS "Using JUCE from JUCE_DIR: ${JUCE_DIR}")
+    add_subdirectory("${JUCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
 else()
     message(FATAL_ERROR 
-        "JUCE not found! Please run:\n"
+        "JUCE not found! Please either run:\n"
         "  git clone https://github.com/juce-framework/JUCE.git\n"
-        "in the project directory."
+        "in the project directory, or configure with:\n"
+        "  cmake -DJUCE_DIR=/path/to/JUCE ..."
     )
 endif()
 

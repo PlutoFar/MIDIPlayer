@@ -22,14 +22,13 @@ public:
       slot.snapshot.reset();
   }
 
-  // newSequence must contain timestamps in seconds. Snapshot allocation,
-  // timestamp conversion and reclamation all remain on the message thread.
+  // newSequence 的时间戳必须是秒。快照分配、时间戳换算和旧快照回收都留在
+  // 消息线程完成，音频线程只读取已发布的不可变快照。
   void setSequence(std::unique_ptr<juce::MidiMessageSequence> newSequence,
                    double newSampleRate) {
     if (hasSequence()) {
       pendingAllNotesOff.store(true);
-      // Trigger crossfade so AudioEngine mutes the buffer containing
-      // the allSoundOff, eliminating track-switch pops.
+      // 触发 AudioEngine 静音包含 allSoundOff 的 buffer，避免切曲爆音
       seekOccurred.store(true, std::memory_order_release);
     }
 
@@ -38,7 +37,7 @@ public:
     publishSnapshot(std::move(snapshot), false);
   }
 
-  // Called from the message thread when the audio device rate changes.
+  // 音频设备采样率变化时由消息线程调用。
   void setSampleRate(double newSampleRate) {
     const double rate = sanitiseSampleRate(newSampleRate);
     const double oldRate = cachedSampleRate.load();
@@ -62,9 +61,8 @@ public:
     applyPublishedSequence();
     applyPendingSeekRequest(buffer, numSamples);
 
-    // Panic messages are only sent when audio is already silent
-    // (triggered by AudioEngine after fade-out, or by setSequence
-    // which pairs this with a crossfade mute).
+    // 清理消息只在音频已静音时发送：停止播放由 AudioEngine 淡出后触发，
+    // 切曲由 setSequence 搭配交叉淡入静音块触发。
     if (pendingAllNotesOff.exchange(false)) {
       addPanicMessages(buffer);
       cleanupOccurred.store(true, std::memory_order_release);
@@ -109,8 +107,7 @@ public:
       } else {
         isPlaying.store(false);
         finishedFlag.store(true);
-        // Don't send panic here — AudioEngine will trigger cleanup
-        // after its fade-out reaches silence.
+        // 这里不直接发送清理消息；AudioEngine 会在淡出到静音后触发 allSoundOff
       }
     }
   }
@@ -118,11 +115,9 @@ public:
   void setPlaying(bool play) {
     if (play && !hasSequence())
       return;
-    // Pause: just stop advancing the sequence. No MIDI reset here —
-    // AudioEngine's fade-out silences the output, then triggers
-    // cleanup (allSoundOff) once audio reaches zero.
-    // Resume: the caller (UI) should call seekTo(currentPos) first
-    // to chase-restore all CC and note state.
+    // 暂停只停止序列推进，不在这里重置 MIDI；AudioEngine 会先淡出输出，
+    // 再在静音后触发 allSoundOff 清理。恢复播放前 UI 应先 seekTo(currentPos)，
+    // 用 MIDI chase 重建 CC、Program、PitchWheel 和活跃音符状态。
     isPlaying.store(play);
   }
 
@@ -136,8 +131,7 @@ public:
     if (currentSequence == nullptr)
       return;
 
-    // Seek performs a full reset + state rebuild, so any pending
-    // stop-cleanup is now redundant.
+    // seek 会执行完整重置和状态重建，之前排队的停止清理已不再需要
     pendingAllNotesOff.store(false);
 
     SeekRequest request;
@@ -170,20 +164,17 @@ public:
 
   bool hasSequence() const { return sequenceLoaded.load(); }
 
-  // Returns true exactly once after a seek/reset has been applied on the
-  // audio thread.  AudioEngine uses this to trigger a crossfade.
+  // seek/reset 在音频线程真正应用后只返回一次 true，供 AudioEngine 触发交叉淡入。
   bool consumeSeekOccurred() {
     return seekOccurred.exchange(false, std::memory_order_acquire);
   }
 
-  // Returns true exactly once after a stop-cleanup (allSoundOff) has been applied.
-  // AudioEngine uses this to mute the exact block containing the cleanup click.
+  // 停止清理的 allSoundOff 应用后只返回一次 true，供 AudioEngine 精确静音清理块。
   bool consumeCleanupOccurred() {
     return cleanupOccurred.exchange(false, std::memory_order_acquire);
   }
 
-  // Called by AudioEngine after its fade-out reaches silence.
-  // Sends allSoundOff on the next processBlock to free VST voices.
+  // AudioEngine 淡出到静音后调用；下一次 processBlock 发送 allSoundOff 释放 VST3 声部。
   void triggerStopCleanup() {
     pendingAllNotesOff.store(true);
   }
@@ -222,8 +213,8 @@ private:
     std::atomic<SlotState> state{SlotState::Free};
   };
 
-  // The message thread alone creates and destroys snapshots. The audio thread
-  // only transitions fixed slot states and reads the active immutable object.
+  // 实时线程快照模型：消息线程独占创建/销毁 SequenceSnapshot，并通过固定槽位发布；
+  // 音频线程只切换槽位状态和读取当前活动的不可变对象，避免在 processBlock 分配或加锁。
   std::array<SequenceSlot, sequenceSlotCount> sequenceSlots;
   std::atomic<int> publishedSlot{-1};
   std::atomic<int> audioActiveSlot{-1};
@@ -236,6 +227,8 @@ private:
   std::atomic<bool> seekOccurred{false};
   std::atomic<bool> cleanupOccurred{false};
 
+  // seek FIFO 是消息线程到音频线程的有界队列。UI 连续拖动时可能写入多个请求，
+  // 音频线程每块只取同 generation 标记的最新请求，丢弃过期 seek，保持实时路径有界。
   std::array<SeekRequest, seekQueueCapacity> pendingSeekRequests;
   juce::AbstractFifo pendingSeekFifo{seekQueueCapacity};
 
@@ -369,6 +362,7 @@ private:
   }
 
   void applyPublishedSequence() {
+    // 槽位状态转换只能在音频线程消费，消息线程只负责发布 Ready 槽位。
     const int nextSlot = publishedSlot.exchange(-1, std::memory_order_acq_rel);
     if (nextSlot < 0)
       return;
@@ -394,21 +388,17 @@ private:
 
   static void addPanicMessages(juce::MidiBuffer &buffer) {
     for (int channel = 1; channel <= 16; ++channel) {
-      // This only fires when audio output is already at zero (after
-      // AudioEngine's fade-out, or inside a crossfade-muted buffer).
-      // allSoundOff is safe here — no pop because nobody can hear it.
+      // 只在输出已为 0 时触发：AudioEngine 淡出后，或交叉淡入静音块内。
+      // 此处发送 allSoundOff 不会产生可听爆音。
       buffer.addEvent(juce::MidiMessage::allSoundOff(channel), 0);
     }
   }
 
   static void addSeekResetMessages(juce::MidiBuffer &buffer) {
     for (int channel = 1; channel <= 16; ++channel) {
-      // Use All Sound Off (CC#120) for an immediate hard-kill of every voice.
-      // This avoids the problem of releasing pedals first (which triggers a
-      // burst of release tails) and then sending All Notes Off.  The
-      // resulting audio discontinuity is masked by the AudioEngine's
-      // seek-crossfade (a short fade-out/fade-in at the audio output level),
-      // exactly like Pianoteq and professional DAWs do it.
+      // seek 重置使用 allSoundOff (CC#120) 立即切断所有声部，再清控制器。
+      // 这样避免先释放踏板造成尾音突发；由 AudioEngine 的静音块和短淡入屏蔽
+      // allSoundOff 带来的波形不连续。
       buffer.addEvent(juce::MidiMessage::allSoundOff(channel), 0);
       buffer.addEvent(juce::MidiMessage::allControllersOff(channel), 0);
     }
@@ -432,6 +422,7 @@ private:
 
     LOG_DEBUG("MidiPlayer::seekTo - dropping seek request because the queue is "
               "full");
+    // 拖动 seek 时允许丢弃过密请求；实时路径保持有界比完整保留每次拖动更重要。
     return false;
   }
 
@@ -469,18 +460,16 @@ private:
     pendingSeekFifo.finishedRead(size1 + size2);
   }
 
-  // ---------- Forward-scan CC/Program/PitchWheel chase ----------
-  // Professional MIDI players (Pianoteq, Cubase, Logic) use a *forward* scan
-  // from event 0 to the seek point.  Each CC/program/pitch-wheel value is
-  // overwritten as we go, so the final value is guaranteed to be the correct
-  // state at the seek time.  No iteration limit, no edge-case boundary bugs.
+  // ---------- 前向扫描 CC/Program/PitchWheel chase ----------
+  // 从第 0 个事件扫描到 seek 点，记录每个通道最后出现的 controller、
+  // program-change 和 pitch-wheel 值，用于重建目标位置应当生效的 MIDI 状态。
   void restoreControllersState(const juce::MidiMessageSequence *seq,
                                double timeInSamples, int nextIndex,
                                juce::MidiBuffer &buffer) {
     if (seq == nullptr)
       return;
 
-    // Per-channel state arrays.
+    // 每通道状态缓存
     int ccValues[17][128];
     for (int ch = 1; ch <= 16; ++ch)
       for (int cc = 0; cc < 128; ++cc)
@@ -493,9 +482,8 @@ private:
       pitchWheelValues[ch] = -1;
     }
 
-    // Forward scan: walk every event from the start up to (but not
-    // including) the seek point. The last value we see for each
-    // controller/program/pitch-wheel is the definitive state.
+    // 前向扫描：从开头走到 seek 点之前，最后出现的 controller/program/pitch-wheel
+    // 就是目标位置的确定状态。
     const int limit = juce::jmin(nextIndex, seq->getNumEvents());
     for (int i = 0; i < limit; ++i) {
       auto *event = seq->getEventPointer(i);
@@ -519,10 +507,10 @@ private:
       }
     }
 
-    // Emit chased state in correct instrument-reset order:
-    //   bank-select → program-change → all other CCs → pitch-wheel
+    // 按乐器重置顺序发出 chase 状态：
+    //   bank-select -> program-change -> 其他 CC -> pitch-wheel
     for (int channel = 1; channel <= 16; ++channel) {
-      // 1. Bank Select (CC0, CC32) first
+      // 1. 先发送 Bank Select (CC0, CC32)
       for (int cc : {0, 32}) {
         if (ccValues[channel][cc] != -1) {
           buffer.addEvent(juce::MidiMessage::controllerEvent(
@@ -538,10 +526,10 @@ private:
                         0);
       }
 
-      // 3. All remaining CCs (including pedals, modulation, volume, etc.)
+      // 3. 其他 CC，包括踏板、modulation、volume 等
       for (int cc = 0; cc < 128; ++cc) {
         if (cc == 0 || cc == 32)
-          continue; // already emitted above
+          continue; // 已在前面发送
 
         int value = ccValues[channel][cc];
         if (value != -1) {
@@ -560,9 +548,8 @@ private:
   }
 
   // ---------- Note chase ----------
-  // Re-trigger every note whose [note-on .. note-off) interval spans the
-  // seek point.  The original note-off that lives in the future part of the
-  // sequence will fire at its correct time, preserving the intended duration.
+  // 重新触发所有跨过 seek 点的 [note-on .. note-off) 音符。原始 note-off 仍留在
+  // 未来序列中按原时间发送，从而保持目标位置之后的实际音符长度。
   static void restoreActiveNotes(const juce::MidiMessageSequence *seq,
                                  double timeInSamples, int nextIndex,
                                  juce::MidiBuffer &buffer) {
@@ -591,11 +578,9 @@ private:
       noteSeen[channel][noteNum] = true;
 
       auto *noteOff = event->noteOffObject;
-      // Skip notes that have already ended strictly before the seek point.
-      // A note-off exactly AT the seek time means the note is still
-      // sounding at the instant we land, so we re-trigger it (the
-      // upcoming note-off at offset 0 in processBlock will release it
-      // immediately, which is the correct musical result).
+      // 严格早于 seek 点结束的音符跳过。note-off 正好等于 seek 时间时，
+      // 落点瞬间仍视为发声，因此重触发；随后 processBlock 中 offset 0 的
+      // note-off 会立即释放它，这是正确的音乐结果。
       if (noteOff == nullptr ||
           noteOff->message.getTimeStamp() < timeInSamples)
         continue;

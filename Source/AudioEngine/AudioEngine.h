@@ -9,24 +9,27 @@
 #include "MidiPlayerProcessor.h"
 #include <atomic>
 
+/**
+    离线导出参数。UI 负责文件路径和交互校验，这里只描述编码、采样率和尾音策略。
+*/
 struct ExportSettings {
-  juce::String formatName = "WAV"; // "WAV", "FLAC", "Ogg Vorbis"
-  double sampleRate = 96000.0;
-  int bitDepth = 24;
-  bool autoTail = true;
-  double fixedTailSeconds = 3.0;
+  juce::String formatName = "WAV"; // 编码格式："WAV"、"FLAC" 或 "Ogg Vorbis"
+  double sampleRate = 96000.0;      // 导出采样率；无效值在导出入口回退到 44100 Hz
+  int bitDepth = 24;                // 目标位深，必须由对应 JUCE AudioFormat 支持
+  bool autoTail = true;             // true 时按实际尾音电平结束，false 时使用 fixedTailSeconds
+  double fixedTailSeconds = 3.0;    // 固定尾音长度，仅在 autoTail 为 false 时生效
 
-  juce::String title;
-  int qualityIndex = 0;
+  juce::String title;               // 可选文件元数据标题
+  int qualityIndex = 0;             // FLAC/Ogg Vorbis 的质量或压缩等级索引
 };
 
 /**
     核心音频引擎，管理音频设备、路由图（AudioProcessorGraph）和插件扫描。
 
     设计要点：
-    - 采用 JUCE 的 AudioProcessorGraph 架构，方便灵活连接音频节点。
-    - 提供对音频组件的安全访问，包含必要的空指针检查。
-    - 负责保存和恢复音频设备设置，确保用户体验的一连贯性。
+    - 使用 AudioProcessorGraph 承载 MIDI 文件播放器、VST3 插件和音频输出。
+    - 负责音频设备初始化、插件扫描/加载和离线导出。
+    - 运行时 MIDI 来源是内置 MidiPlayerProcessor，不连接外部 MIDI 输入。
 */
 class AudioEngine : public juce::AudioProcessor,
                     public juce::ChangeListener,
@@ -36,17 +39,11 @@ public:
       : AudioProcessor(BusesProperties().withOutput(
             "Output", juce::AudioChannelSet::stereo(), true)),
         mainGraph(std::make_unique<juce::AudioProcessorGraph>()) {
-    // Register VST3 format for plugin hosting
+    // 初始化插件格式、扫描缓存和音频设备回调。
     formatManager.addFormat(std::make_unique<juce::VST3PluginFormat>());
-
-    // Setup Plugin Scanning
     pluginList.addChangeListener(this);
     loadKnownPluginList();
-
-    // Try to restore saved audio device settings
     restoreAudioDeviceSettings();
-
-    // Listen for audio device changes
     deviceManager.addChangeListener(this);
 
     devicePlayer.setProcessor(this);
@@ -81,13 +78,12 @@ public:
         }
       }
       DBG("Failed to restore saved audio device from XML: " + result);
-      // Saved device not found, fallback to default
+      // 已保存设备不可用时回退到系统默认设备
       result = deviceManager.initialiseWithDefaultDevices(0, 2);
       if (result.isEmpty() && deviceManager.getCurrentAudioDevice() != nullptr)
-        hadDeviceFallback = true; // Mark for UI notification at startup
+        hadDeviceFallback = true; // 仅用于启动时提示 UI：已发生设备回退
     } else {
-      // First run: do NOT initialise default device. Leave it null so UI
-      // prompts the user.
+      // 首次运行不自动初始化默认设备，保留空状态让 UI 引导用户选择
       return;
     }
 
@@ -97,6 +93,15 @@ public:
     }
   }
 
+  /**
+      进入离线导出状态。
+
+      离线导出直接驱动 mainGraph 渲染，实时 AudioProcessorPlayer 回调会被
+      offlineExportActive 静音。这里同时把插件切到 non-realtime，并用导出采样率
+      重新 prepareToPlay，避免实时设备配置影响文件渲染。
+
+      调用方必须确保没有并发插件加载/卸载；离线导出会暂停实时处理并重配 graph。
+  */
   void prepareForOfflineExport(const ExportSettings &settings) {
     if (mainGraph == nullptr || vst3Node == nullptr) return;
     offlineExportActive.store(true, std::memory_order_release);
@@ -113,11 +118,15 @@ public:
       return;
     }
     processor->setNonRealtime(true);
+    // 大块离线渲染减少宿主调度开销；实时线程不使用这个块大小
     const int offlineBlockSize = 16384;
     mainGraph->setPlayConfigDetails(0, 2, exportSampleRate, offlineBlockSize);
     mainGraph->prepareToPlay(exportSampleRate, offlineBlockSize);
   }
 
+  /**
+      离开离线导出状态，恢复实时设备的采样率、块大小和插件 realtime 模式。
+  */
   void restoreFromOfflineExport() {
     if (mainGraph == nullptr || vst3Node == nullptr) {
       offlineExportActive.store(false, std::memory_order_release);
@@ -139,6 +148,12 @@ public:
     suspendProcessing(false);
   }
 
+  /**
+      离线导出 RAII 会话。
+
+      构造时切入离线导出环境，析构时无条件恢复实时环境，保证取消、失败或提前
+      return 时不会把 VST3 插件留在 non-realtime 配置里。
+  */
   class OfflineExportSession {
   public:
     OfflineExportSession(AudioEngine &owner, const ExportSettings &settings)
@@ -168,6 +183,7 @@ public:
                         std::function<void(float)> progressCallback,
                         std::function<bool()> shouldCancel) {
     lastExportError.clear();
+    // 应在 OfflineExportSession 生效后调用，保证采样率和插件 non-realtime 状态一致。
 
     auto fail = [this](const juce::String &message) {
       lastExportError = message;
@@ -181,10 +197,10 @@ public:
     const double exportSampleRate =
         settings.sampleRate > 0.0 ? settings.sampleRate : 44100.0;
 
-    // Start playing for offline render
+    // 离线渲染期间由 mainGraph 主动拉取 MIDI 事件
     midiPlayer.setPlaying(true);
 
-    // Create format writer
+    // 解析导出格式并校验编码参数。
     juce::AudioFormatManager localFormatManager;
     localFormatManager.registerBasicFormats();
     juce::AudioFormat *format = nullptr;
@@ -256,6 +272,8 @@ public:
     double totalSamples = midiPlayer.getDurationInSamples();
     if (totalSamples <= 0) totalSamples = exportSampleRate * 60.0;
 
+    // 进度前 90% 对应 MIDI 主体，后 10% 留给尾音；自动尾音最多渲染 60 秒，
+    // 并要求连续 0.5 秒低于 0.00001 线性电平后结束，避免混响和释放音被截断。
     int tailSamplesRendered = 0;
     int maxFixedTail = (int)(exportSampleRate * juce::jmax(0.0, settings.fixedTailSeconds));
     int maxAutoTail = (int)(exportSampleRate * 60.0);
@@ -285,7 +303,7 @@ public:
 
         mainGraph->processBlock(buffer, midi);
 
-        // Fast SIMD hard clipping instead of heavy std::tanh
+        // 离线导出用 JUCE SIMD clip 代替实时路径的 std::tanh，避免长文件导出过慢
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
             juce::FloatVectorOperations::clip(buffer.getWritePointer(ch), buffer.getReadPointer(ch), -1.0f, 1.0f, buffer.getNumSamples());
         }
@@ -351,7 +369,6 @@ public:
         tempFile.deleteTemporaryFile();
     }
 
-    // Real-time state restoration has been moved to restoreFromOfflineExport()
     return result;
   }
 
@@ -364,19 +381,19 @@ public:
   }
 
   /**
-      Get the last initialization error message
+      获取最近一次音频设备初始化错误。
   */
   juce::String getLastInitError() const { return lastInitError; }
 
   /**
-      Get the last plugin loading error message
+      获取最近一次插件加载错误。
   */
   juce::String getLastPluginError() const { return lastPluginError; }
 
   juce::String getLastExportError() const { return lastExportError; }
 
   /**
-      Check if this is the very first run (no AudioDevice.xml config exists)
+      判断是否首次运行音频设置（不存在 AudioDevice.xml）。
   */
   bool isFirstRunAudio() const {
     auto file =
@@ -385,8 +402,8 @@ public:
   }
 
   /**
-      Check if the saved audio device was missing at startup and we fell back
-      to the system default. Only true for startup fallback, not runtime.
+      判断启动时保存的音频设备是否缺失，并已回退到系统默认设备。
+      仅表示启动阶段的回退，不表示运行时设备恢复。
   */
   bool wasDeviceRestoredWithFallback() const { return hadDeviceFallback; }
 
@@ -400,14 +417,14 @@ public:
      理论上会处理，但显式断开更安全且可控）。
   */
   void unloadPlugin() {
-    // Thread assertion - unloadPlugin must be called from the UI thread
+    // unloadPlugin 必须从消息线程（UI线程）调用
     JUCE_ASSERT_MESSAGE_THREAD;
 
     suspendProcessing(true);
     midiPlayer.setPlaying(false);
 
     if (vst3Node != nullptr && mainGraph != nullptr) {
-      // Disconnect all connections involving this node
+      // 断开所有涉及当前插件节点的连接
       auto connections = mainGraph->getConnections();
       for (const auto &connection : connections) {
         if (connection.source.nodeID == vst3Node->nodeID ||
@@ -424,20 +441,20 @@ public:
   }
 
   /**
-      Check if a plugin is currently loaded
+      判断当前是否已加载插件。
   */
   bool hasPluginLoaded() const { return vst3Node != nullptr; }
 
   ~AudioEngine() override {
-    // Ensure audio output is silent before tearing down
+    // 析构前先让音频输出静音
     suspendProcessing(true);
 
-    // Clean shutdown order is important
+    // 先移除回调和监听，再释放图节点
     deviceManager.removeChangeListener(this);
     deviceManager.removeAudioCallback(&devicePlayer);
     devicePlayer.setProcessor(nullptr);
 
-    // Release plugin before saving
+    // 保存插件列表前释放当前插件节点
     if (vst3Node != nullptr && mainGraph != nullptr) {
       mainGraph->removeNode(vst3Node->nodeID);
       vst3Node = nullptr;
@@ -483,7 +500,7 @@ public:
       return;
     }
 
-    // Clear any input (we're output only)
+    // 本引擎只输出音频，清空任何输入通道
     for (auto i = getTotalNumInputChannels(); i < getTotalNumOutputChannels();
          ++i)
       buffer.clear(i, 0, buffer.getNumSamples());
@@ -494,22 +511,20 @@ public:
     const int numSamples = buffer.getNumSamples();
     bool isPlaying = midiPlayer.getPlaying();
 
-    // ----- Seek / track-switch crossfade -----
-    // When allSoundOff fires inside the graph, the VST hard-kills its
-    // voices at sample 0 — a waveform discontinuity.  We completely
-    // MUTE this buffer (the artifact becomes inaudible), then fade-in
-    // the next buffer from 0→1.  Total gap: one buffer (~5ms at 256
-    // samples / 48kHz) — imperceptible in practice.
+    // ----- seek/切曲交叉淡入 -----
+    // allSoundOff 在图内触发时，VST3 插件会在样本 0 立即切断声部并产生波形不连续。
+    // 这里把包含该事件的整块 buffer 静音，再让下一块从 0 淡入到 1；在 48 kHz、
+    // 256 samples 下空隙约 5 ms，换取无爆音的 seek/切曲。
     if (midiPlayer.consumeSeekOccurred()) {
-      // Mute entire buffer — artifact is silenced
+      // 整块静音，屏蔽 allSoundOff 造成的瞬态
       buffer.clear();
-      // Go straight to fade-in on the next buffer
+      // 下一块直接进入淡入阶段
       seekCrossfadePhase = 2;
       seekCrossfadeSamples = seekCrossfadeDuration;
     }
 
     if (seekCrossfadePhase == 2) {
-      // Fade-in: ramp gain from 0 → 1
+      // 淡入：增益从 0 线性爬升到 1
       int toFade = juce::jmin(seekCrossfadeSamples, numSamples);
       float startGain = 1.0f - (float)seekCrossfadeSamples / (float)seekCrossfadeDuration;
       float endGain = 1.0f - (float)(seekCrossfadeSamples - toFade) / (float)seekCrossfadeDuration;
@@ -519,7 +534,7 @@ public:
         seekCrossfadePhase = 0;
     }
 
-    // ----- Stop fade-out -----
+    // ----- 停止淡出 -----
     if (!isPlaying && fadeOutSamples > 0) {
       int samplesToFade = juce::jmin(fadeOutSamples, numSamples);
       float startGain = (float)fadeOutSamples / (float)fadeOutDuration;
@@ -539,26 +554,25 @@ public:
       stopCleanupDone = false;
     }
 
-    // ----- Post-fade cleanup -----
-    // Once the fade-out reaches silence, tell MidiPlayer to send
-    // allSoundOff to free VST voices.  This is completely inaudible
-    // because the audio output is already at zero.
+    // ----- 淡出后清理 -----
+    // 淡出到静音后再让 MidiPlayer 发送 allSoundOff 释放 VST3 声部；
+    // 此时输出已为 0，所以清理事件不会被听到。
     if (!isPlaying && fadeOutSamples <= 0 && !stopCleanupDone) {
       midiPlayer.triggerStopCleanup();
       stopCleanupDone = true;
     }
 
-    // Mute the single block where the VST processes the allSoundOff click
+    // 静音 VST3 处理 allSoundOff 的单个音频块，屏蔽释放瞬态
     if (midiPlayer.consumeCleanupOccurred()) {
       buffer.clear();
     }
 
-    // Apply master volume
+    // 应用主音量
     float vol = masterVolume.load();
     if (fadeOutSamples > 0 || isPlaying || seekCrossfadePhase != 0) {
       buffer.applyGain(vol);
 
-      // Soft clipper to prevent hard digital clipping (0dBFS)
+      // 软削波器：用 std::tanh 避免超过 0 dBFS 的硬削波
       for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
         float *channelData = buffer.getWritePointer(ch);
         for (int i = 0; i < numSamples; ++i) {
@@ -568,14 +582,14 @@ public:
     }
   }
 
-  // --- Graph Logic ---
+  // --- AudioProcessorGraph ---
   void setupNodes() {
     if (mainGraph == nullptr)
       return;
 
     mainGraph->clear();
 
-    // Reset node pointers
+    // 重置节点指针
     audioOutputNode = nullptr;
     midiInputNode = nullptr;
     playerNode = nullptr;
@@ -584,6 +598,8 @@ public:
         std::make_unique<juce::AudioProcessorGraph::AudioGraphIOProcessor>(
             juce::AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode));
 
+    // 保留 JUCE 图 I/O 节点给未来外部 MIDI 路由；当前播放只把内置
+    // MIDI 文件播放器路由到乐器插件。
     midiInputNode = mainGraph->addNode(
         std::make_unique<juce::AudioProcessorGraph::AudioGraphIOProcessor>(
             juce::AudioProcessorGraph::AudioGraphIOProcessor::midiInputNode));
@@ -592,7 +608,7 @@ public:
         mainGraph->addNode(std::make_unique<MidiPlayerProcessor>(midiPlayer));
   }
 
-  // --- Plugin Scanning & Loading ---
+  // --- VST3 插件扫描与加载 ---
 
   /**
       获取所有 VST3 扫描路径。
@@ -651,7 +667,8 @@ public:
   }
 
   /**
-      扫描所有 VST3 插件。
+      同步扫描所有 VST3 插件。调用方用模态进度窗承载等待状态，
+      当前扫描循环未向 UI 报告逐插件进度。
   */
   void scanPlugins() {
     juce::FileSearchPath searchPath = getVst3SearchPaths();
@@ -664,7 +681,6 @@ public:
 
         juce::String name;
         while (scanner.scanNextFile(true, name)) {
-          // Progress callback could be added here
         }
       }
     }
@@ -725,24 +741,22 @@ public:
       通过插件描述信息加载 VST3 插件。
       必须从消息线程调用。
 
-      实现逻辑解析：
+      实现逻辑：
       1. 检查音频设备是否就绪，若无输出设备则无法承载插件。
-      2. 暂停音频回调（suspendProcessing），确保在修改 Graph
-     拓扑结构时音频线程不活动。
-      3. 清除旧插件：手动移除所有连接并删除旧节点。
+      2. 暂停处理并停止 MIDI 播放，降低切换插件时的音频回调竞争。
+      3. 清除旧插件节点及其连接。
       4. 实例化与路径连接：
-         - 播放节点 (MidiPlayer) -> VST3 插件 (MIDI 连接)
-         - 外部 MIDI 输入 -> VST3 插件 (MIDI 连接，用于实时键盘演奏支持)
+         - MidiPlayerProcessor -> VST3 插件 (MIDI)
          - VST3 插件 -> 系统音频输出 (左/右声道连接)
 
       @param description 要加载的插件描述
       @return 加载成功返回 true
   */
   bool loadPlugin(const juce::PluginDescription &description) {
-    // Thread assertion - loadPlugin must be called from the UI thread
+    // loadPlugin 必须从消息线程（UI线程）调用
     JUCE_ASSERT_MESSAGE_THREAD;
 
-    // Check if audio device is ready
+    // 插件宿主需要可用音频输出设备
     if (!hasAudioDevice()) {
       lastPluginError = L"没有可用的音频输出设备，请先在音频设置中选择设备";
       return false;
@@ -754,10 +768,10 @@ public:
       return false;
     }
 
-    // Suspend audio processing during plugin switch to prevent race conditions
+    // 切换插件期间暂停音频处理，避免回调访问正在变更的 AudioProcessorGraph
     suspendProcessing(true);
 
-    // Send All Notes Off to release any sounding notes before switching
+    // 这里只停止 MIDI 序列推进，不会立即发送 All Notes Off 或 allSoundOff
     midiPlayer.setPlaying(false);
 
     juce::String error;
@@ -803,6 +817,7 @@ public:
     vst3Node = newNode;
     juce::String routeError;
     if (!reconnectPluginRoutes(routeError)) {
+      // 新插件路由失败时优先恢复旧节点；旧节点也恢复失败才移除它。
       removeConnectionsForNode(newNode->nodeID);
       mainGraph->removeNode(newNode->nodeID);
       vst3Node = previousNode;
@@ -830,27 +845,26 @@ public:
     if (previousNode != nullptr)
       mainGraph->removeNode(previousNode->nodeID);
 
-    // Resume audio processing
+    // 恢复音频处理
     suspendProcessing(false);
     lastPluginError.clear();
 
     return true;
   }
 
-  // --- Volume Control ---
+  // --- 音量控制 ---
   void setMasterVolume(float volume) {
     masterVolume.store(juce::jlimit(0.0f, 1.0f, volume));
   }
 
   float getMasterVolume() const { return masterVolume.load(); }
 
-  // --- Persistence ---
+  // --- 设备设置 ---
   juce::File getSettingsDir() {
-    // 便携模式检测
     auto exeDir =
         juce::File::getSpecialLocation(juce::File::currentExecutableFile)
             .getParentDirectory();
-    // 同时识别 portable.dat 和 portable_debug.dat 作为便携模式标记
+    // 这里需与 UserSettings::getSettingsDirectory() 的便携标记保持一致。
     bool isPortable = exeDir.getChildFile("portable.dat").existsAsFile() ||
                       exeDir.getChildFile("portable_debug.dat").existsAsFile();
 
@@ -878,12 +892,12 @@ public:
         DBG("Loaded " + juce::String(pluginList.getNumTypes()) +
             " plugins from cache");
       } else {
-        // Invalid or corrupt XML, delete the file
+        // XML 无效或损坏时删除缓存文件
         DBG("Invalid Plugins.xml format, deleting...");
         xmlFile.deleteFile();
       }
     } catch (...) {
-      // If loading fails, delete corrupt file
+      // 读取失败时删除损坏的缓存文件
       xmlFile.deleteFile();
     }
   }
@@ -896,22 +910,22 @@ public:
       if (xml == nullptr)
         return;
 
-      // Create backup before overwriting
+      // 覆盖前先创建备份
       auto backupFile = getSettingsDir().getChildFile("Plugins.xml.bak");
       if (xmlFile.existsAsFile()) {
         xmlFile.copyFileTo(backupFile);
       }
 
-      // Write to temporary file first, then rename (atomic operation)
+      // 先写临时文件，再重命名替换，降低写入中断导致缓存损坏的概率
       auto tempFile = getSettingsDir().getChildFile("Plugins.xml.tmp");
       if (xml->writeTo(tempFile, {})) {
-        // Successfully written, now replace original
+        // 写入成功后替换原文件
         tempFile.moveFileTo(xmlFile);
-        backupFile.deleteFile(); // Clean up backup
+        backupFile.deleteFile(); // 清理备份
         DBG("Saved " + juce::String(pluginList.getNumTypes()) +
             " plugins to cache");
       } else {
-        // Write failed, keep backup
+        // 写入失败时保留备份
         tempFile.deleteFile();
         DBG("Failed to write Plugins.xml");
       }
@@ -923,13 +937,13 @@ public:
   void changeListenerCallback(juce::ChangeBroadcaster *source) override {
     if (source == &deviceManager) {
       if (isRecoveringDevice)
-        return; // Prevent recursion during auto-recovery
+        return; // 防止自动恢复期间递归触发
 
       if (deviceManager.getCurrentAudioDevice() != nullptr) {
-        // Device is active, save settings normally
+        // 设备有效时正常保存设置
         saveAudioDeviceSettings();
       } else if (!isFirstRunAudio()) {
-        // Device was lost (not first run) — silently recover to default
+        // 非首次运行时设备丢失，静默恢复到默认设备
         isRecoveringDevice = true;
         auto result = deviceManager.initialiseWithDefaultDevices(0, 2);
         isRecoveringDevice = false;
@@ -947,8 +961,7 @@ public:
   }
 
   /**
-      重新建立 VST3 插件的所有路由连接。
-      在设备切换或插件加载后调用，确保 MIDI 和音频路由正确。
+      移除 AudioProcessorGraph 中与指定节点相关的所有连接。
   */
   void removeConnectionsForNode(juce::AudioProcessorGraph::NodeID nodeID) {
     if (mainGraph == nullptr)
@@ -961,6 +974,10 @@ public:
     }
   }
 
+  /**
+      重新建立 VST3 插件的所有路由连接。
+      在设备切换或插件加载后调用，确保 MIDI 和音频输出连接正确。
+  */
   bool reconnectPluginRoutes(juce::String &error) {
     if (vst3Node == nullptr || mainGraph == nullptr || playerNode == nullptr ||
         audioOutputNode == nullptr) {
@@ -1012,7 +1029,7 @@ public:
     return true;
   }
 
-  // --- Getters ---
+  // --- 访问器 ---
   juce::AudioDeviceManager &getDeviceManager() { return deviceManager; }
   juce::KnownPluginList &getPluginList() { return pluginList; }
 
@@ -1022,7 +1039,7 @@ public:
 
   MidiPlayer &getMidiPlayer() { return midiPlayer; }
 
-  // --- Required AudioProcessor overrides ---
+  // --- JUCE AudioProcessor 必需覆写 ---
   const juce::String getName() const override {
     return "ModernMidiPlayerEngine";
   }
@@ -1059,25 +1076,23 @@ private:
   std::atomic<bool> offlineExportActive{false};
   juce::StringArray customVst3Paths;
 
-  // Audio fade-out to prevent pops when stopping (about 50ms at 44.1kHz)
+  // 停止播放时的音频淡出，用于避免爆音（44.1 kHz 下约 50 ms）
   int fadeOutDuration = 2048;
   int fadeOutSamples = 2048;
   bool stopCleanupDone = false;
 
-  // Seek/track-switch crossfade: mutes the buffer containing the
-  // allSoundOff artifact, then fades in the next clean buffer.
-  // Phase: 0=idle, 2=fade-in.  (Phase 1 removed — we now mute
-  // the entire buffer immediately instead of fading it out.)
+  // seek/切曲交叉淡入：静音包含 allSoundOff 瞬态的 buffer，
+  // 再对下一块干净 buffer 淡入。阶段值：0=空闲，2=淡入。
   int seekCrossfadeDuration = 128;
   int seekCrossfadeSamples = 0;
   int seekCrossfadePhase = 0;
 
-  // Error messages for UI guidance
+  // 提供给 UI 的错误信息
   juce::String lastInitError;
   juce::String lastPluginError;
   juce::String lastExportError;
   bool isRecoveringDevice = false;
-  bool hadDeviceFallback = false; // Startup-only: saved device was missing
+  bool hadDeviceFallback = false; // 仅启动期使用：保存的设备缺失并已回退
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };

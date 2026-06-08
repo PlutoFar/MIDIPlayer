@@ -3,7 +3,7 @@
 #include "CustomLookAndFeel.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
-// Button rendered from an SVG string
+// 从 SVG 字符串绘制的按钮。
 class SvgButton : public juce::Button, public juce::Timer {
 public:
   SvgButton(const juce::String& svgString) : juce::Button("") {
@@ -34,7 +34,6 @@ public:
     g.saveState();
     g.addTransform(transform);
 
-    // Draw Fluent hover/pressed background
     if (isEnabled() && (isMouseOver || isButtonDown)) {
       if (auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel())) {
         auto &colors = laf->getColors();
@@ -46,7 +45,7 @@ public:
     g.setOpacity(currentAlpha);
 
     if (drawable != nullptr) {
-      // Create a white version of the SVG for dark mode UI
+      // 源 SVG 应使用黑色图标，深色主题下统一替换为白色。
       drawable->replaceColour(juce::Colours::black, juce::Colours::white);
       drawable->drawWithin(g, bounds.reduced(6.0f), juce::RectanglePlacement::centred, currentAlpha);
     }
@@ -69,7 +68,7 @@ private:
   float currentAlpha = 0.7f;
 };
 
-// Animated icon button (like play, prev, next)
+// 带轻微缩放反馈的图标按钮。
 class AnimatedIconButton : public juce::Button, public juce::Timer {
 public:
   AnimatedIconButton() : juce::Button("") { startTimerHz(60); }
@@ -77,7 +76,6 @@ public:
 
   void paintButton(juce::Graphics &g, bool isMouseOver,
                    bool isButtonDown) override {
-    // Simplified animation (very subtle)
     float targetScale = isButtonDown ? 0.98f : (isMouseOver ? 1.01f : 1.0f);
     currentScale += (targetScale - currentScale) * 0.2f;
 
@@ -114,7 +112,7 @@ private:
   float currentScale = 1.0f;
 };
 
-// Transparent button with rounded rect and text
+// 透明背景的文本/图标按钮。
 class TransparentButton : public juce::Button, public juce::Timer {
 public:
   TransparentButton(const juce::String &btnText = "") : juce::Button(btnText) {
@@ -124,7 +122,6 @@ public:
 
   void paintButton(juce::Graphics &g, bool isMouseOver,
                    bool isButtonDown) override {
-    // Minimal scaling, focus on opacity
     float targetScale = isButtonDown ? 0.99f : 1.0f;
     currentScale += (targetScale - currentScale) * 0.2f;
 
@@ -146,13 +143,14 @@ public:
             dynamic_cast<class FluentLookAndFeel *>(&getLookAndFeel())) {
       laf->drawButtonBackground(g, *this, juce::Colours::transparentBlack,
                                 isMouseOver, isButtonDown);
-      const auto text = getButtonText();
-      if (text.isNotEmpty()) {
-        const auto firstChar = (uint32_t)text.getCharPointer().getAndAdvance();
+      const auto buttonText = getButtonText();
+      if (buttonText.isNotEmpty()) {
+        const auto firstChar =
+            (uint32_t)buttonText.getCharPointer().getAndAdvance();
         g.setFont(firstChar >= 0xE000 ? laf->getIconFont(16.0f)
-                                      : laf->getDefaultFont(14.0f));
+                                       : laf->getDefaultFont(14.0f));
         g.setColour(laf->getColors().textPrimary);
-        g.drawText(text, getLocalBounds(), juce::Justification::centred,
+        g.drawText(buttonText, getLocalBounds(), juce::Justification::centred,
                    false);
       }
     }
@@ -182,11 +180,10 @@ private:
 };
 
 /**
-    EmbeddedTooltip: 嵌入式悬浮提示框
+    嵌入式悬浮提示框。
 
-    与 JUCE TooltipWindow 不同，此组件直接嵌入父窗口中绘制，
-    完全避免系统窗口边框问题，确保圆角完美无残留。
-    工作原理与 ToastComponent 相同。
+    直接作为父窗口子组件绘制，不创建原生 TooltipWindow，
+    避免独立窗口在圆角和透明区域留下残影。
 */
 class EmbeddedTooltip : public juce::Component, public juce::Timer {
 public:
@@ -196,7 +193,6 @@ public:
     setVisible(false);
   }
 
-  // --- MouseListener ---
   void mouseMove(const juce::MouseEvent &event) override {
     auto *comp = event.eventComponent;
     if (comp != nullptr && comp != this && comp != getParentComponent()) {
@@ -220,13 +216,13 @@ public:
     }
   }
 
-  // 为特定组件显示 tooltip（需要从父组件坐标系转换）
+  // 为特定组件显示 tooltip，需要转换到父组件坐标系。
   void showForComponent(juce::Component *target, const juce::String &text) {
     if (target == nullptr || text.isEmpty()) {
       return;
     }
 
-    // 如果已经在显示同一个目标的 tooltip，不重复
+    // 已在显示同一个目标时不重复启动延迟。
     if (isVisible() && currentTarget == target && currentText == text) {
       return;
     }
@@ -246,7 +242,7 @@ public:
       return;
     }
 
-    // 立即隐藏，不使用淡出动画
+    // 立即隐藏，不使用淡出动画。
     isWaitingToShow = false;
     isFadingOut = false;
     pendingText.clear();
@@ -254,7 +250,7 @@ public:
     setVisible(false);
     stopTimer();
 
-    // 重置大小为 0x0 确保不影响点击判定
+    // 重置为 0x0，避免隐藏后影响点击命中。
     setBounds(0, 0, 0, 0);
   }
 
@@ -263,15 +259,12 @@ public:
 
     auto bounds = getLocalBounds().toFloat();
 
-    // 深色圆角背景（与 ToastComponent 风格一致）
     g.setColour(juce::Colour(0xE6202020));
     g.fillRoundedRectangle(bounds, 6.0f);
 
-    // 细微边框
     g.setColour(juce::Colours::white.withAlpha(0.1f * alpha));
     g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
 
-    // 文本
     g.setColour(juce::Colours::white.withAlpha(alpha));
     g.setFont(juce::Font(juce::FontOptions(14.0f)));
     g.drawText(currentText, bounds, juce::Justification::centred, false);
@@ -280,7 +273,7 @@ public:
   void timerCallback() override {
     if (isWaitingToShow) {
       delayCounter++;
-      // 500ms 延迟后显示 (30 frames at 60Hz)
+      // 60 Hz 下 30 帧约等于 500 ms。
       if (delayCounter >= 30) {
         showTooltipNow();
       }
@@ -323,7 +316,6 @@ private:
 #endif
     int h = 32;
 
-    // 获取目标组件在顶层父组件中的位置
     auto *topLevel = getParentComponent();
     if (topLevel == nullptr)
       return;
@@ -331,16 +323,13 @@ private:
     auto targetBounds = topLevel->getLocalArea(
         currentTarget->getParentComponent(), currentTarget->getBounds());
 
-    // 定位在目标上方
     int x = targetBounds.getCentreX() - w / 2;
     int y = targetBounds.getY() - h - 8;
 
-    // 如果上方空间不足，显示在下方
     if (y < 4) {
       y = targetBounds.getBottom() + 8;
     }
 
-    // 确保不超出父组件边界
     x = juce::jlimit(4, topLevel->getWidth() - w - 4, x);
     y = juce::jlimit(4, topLevel->getHeight() - h - 4, y);
 
@@ -361,7 +350,7 @@ private:
   bool isFadingOut = false;
 };
 
-// Toast notification for mode changes
+// 播放模式切换提示。
 class ToastComponent : public juce::Component, public juce::Timer {
 public:
   ToastComponent() {
@@ -385,7 +374,6 @@ public:
 #endif
     int h = 36;
 
-    // Position above the button
     setBounds(targetBounds.getCentreX() - w / 2, targetBounds.getY() - h - 10,
               w, h);
 
@@ -420,17 +408,17 @@ private:
   float alpha = 0.0f;
 };
 
-// Implementation for LookAndFeel (to avoid circular dependency)
+// LookAndFeel 的窗口按钮工厂放在文件尾部，避免与 TransparentButton 循环依赖。
 inline juce::Button *
 FluentLookAndFeel::createDocumentWindowButton(int buttonType) {
   auto *b = new TransparentButton("");
 
   if (buttonType == juce::DocumentWindow::closeButton) {
-    b->setButtonText(L"\uE8BB"); // Segoe Fluent Icons Close
+    b->setButtonText(L"\uE8BB"); // 关闭。
   } else if (buttonType == juce::DocumentWindow::minimiseButton) {
-    b->setButtonText(L"\uE921"); // Minimise
+    b->setButtonText(L"\uE921"); // 最小化。
   } else if (buttonType == juce::DocumentWindow::maximiseButton) {
-    b->setButtonText(L"\uE922"); // Maximise
+    b->setButtonText(L"\uE922"); // 最大化。
   }
 
   return b;
