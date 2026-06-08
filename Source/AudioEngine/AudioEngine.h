@@ -24,9 +24,9 @@ struct ExportSettings {
     核心音频引擎，管理音频设备、路由图（AudioProcessorGraph）和插件扫描。
 
     设计要点：
-    - 采用 JUCE 的 AudioProcessorGraph 架构，方便灵活连接音频节点。
-    - 提供对音频组件的安全访问，包含必要的空指针检查。
-    - 负责保存和恢复音频设备设置，确保用户体验的一连贯性。
+    - 使用 AudioProcessorGraph 承载 MIDI 文件播放器、VST3 插件和音频输出。
+    - 负责音频设备初始化、插件扫描/加载和离线导出。
+    - 运行时 MIDI 来源是内置 MidiPlayerProcessor，不连接外部 MIDI 输入。
 */
 class AudioEngine : public juce::AudioProcessor,
                     public juce::ChangeListener,
@@ -568,7 +568,7 @@ public:
     }
   }
 
-  // --- Graph Logic ---
+  // --- Audio Graph ---
   void setupNodes() {
     if (mainGraph == nullptr)
       return;
@@ -584,6 +584,8 @@ public:
         std::make_unique<juce::AudioProcessorGraph::AudioGraphIOProcessor>(
             juce::AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode));
 
+    // Kept as JUCE graph I/O node for future routing; current playback only
+    // routes the internal MIDI file player into the instrument plugin.
     midiInputNode = mainGraph->addNode(
         std::make_unique<juce::AudioProcessorGraph::AudioGraphIOProcessor>(
             juce::AudioProcessorGraph::AudioGraphIOProcessor::midiInputNode));
@@ -651,7 +653,8 @@ public:
   }
 
   /**
-      扫描所有 VST3 插件。
+      同步扫描所有 VST3 插件。调用方用模态进度窗承载等待状态，
+      当前扫描循环未向 UI 报告逐插件进度。
   */
   void scanPlugins() {
     juce::FileSearchPath searchPath = getVst3SearchPaths();
@@ -664,7 +667,6 @@ public:
 
         juce::String name;
         while (scanner.scanNextFile(true, name)) {
-          // Progress callback could be added here
         }
       }
     }
@@ -725,14 +727,12 @@ public:
       通过插件描述信息加载 VST3 插件。
       必须从消息线程调用。
 
-      实现逻辑解析：
+      实现逻辑：
       1. 检查音频设备是否就绪，若无输出设备则无法承载插件。
-      2. 暂停音频回调（suspendProcessing），确保在修改 Graph
-     拓扑结构时音频线程不活动。
-      3. 清除旧插件：手动移除所有连接并删除旧节点。
+      2. 暂停处理并停止 MIDI 播放，降低切换插件时的音频回调竞争。
+      3. 清除旧插件节点及其连接。
       4. 实例化与路径连接：
-         - 播放节点 (MidiPlayer) -> VST3 插件 (MIDI 连接)
-         - 外部 MIDI 输入 -> VST3 插件 (MIDI 连接，用于实时键盘演奏支持)
+         - MidiPlayerProcessor -> VST3 插件 (MIDI)
          - VST3 插件 -> 系统音频输出 (左/右声道连接)
 
       @param description 要加载的插件描述
@@ -844,7 +844,7 @@ public:
 
   float getMasterVolume() const { return masterVolume.load(); }
 
-  // --- Persistence ---
+  // --- Device Settings ---
   juce::File getSettingsDir() {
     // 便携模式检测
     auto exeDir =

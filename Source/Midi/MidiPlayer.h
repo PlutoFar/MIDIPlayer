@@ -406,9 +406,8 @@ private:
       // Use All Sound Off (CC#120) for an immediate hard-kill of every voice.
       // This avoids the problem of releasing pedals first (which triggers a
       // burst of release tails) and then sending All Notes Off.  The
-      // resulting audio discontinuity is masked by the AudioEngine's
-      // seek-crossfade (a short fade-out/fade-in at the audio output level),
-      // exactly like Pianoteq and professional DAWs do it.
+      // resulting audio discontinuity is masked by the AudioEngine's muted
+      // seek block and short fade-in at the audio output level.
       buffer.addEvent(juce::MidiMessage::allSoundOff(channel), 0);
       buffer.addEvent(juce::MidiMessage::allControllersOff(channel), 0);
     }
@@ -470,10 +469,9 @@ private:
   }
 
   // ---------- Forward-scan CC/Program/PitchWheel chase ----------
-  // Professional MIDI players (Pianoteq, Cubase, Logic) use a *forward* scan
-  // from event 0 to the seek point.  Each CC/program/pitch-wheel value is
-  // overwritten as we go, so the final value is guaranteed to be the correct
-  // state at the seek time.  No iteration limit, no edge-case boundary bugs.
+  // Walk from event 0 to the seek point and keep the last controller,
+  // program-change, and pitch-wheel value seen for each channel. This rebuilds
+  // the MIDI state that should be active at the target position.
   void restoreControllersState(const juce::MidiMessageSequence *seq,
                                double timeInSamples, int nextIndex,
                                juce::MidiBuffer &buffer) {

@@ -63,7 +63,8 @@ public:
     LOG_DEBUG("BackgroundComponent::loadAsync - Path: " + path);
 
     if (isFirstLoad && path.isNotEmpty()) {
-      // Stage 2 Fix: Load synchronously on first startup to avoid black screen
+      // First startup uses the current image immediately so the persisted
+      // background is visible before later async refreshes.
       loadSynchronously(path, forceExtraction);
     } else {
       // Start background loading job
@@ -1163,8 +1164,8 @@ private:
       LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - signaling thread to exit");
       workerThread->stopThread(2000);
 
-      // 减少等待时间避免长时间阻塞UI
-      // 如果线程没能在500ms内退出，强制继续（线程会自行清理）
+      // Wait briefly for the worker to notice the stop request, then release
+      // the owned thread object.
       workerThread.reset();
       LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - done");
     }
@@ -1740,8 +1741,8 @@ public:
     forceExitBtn.setColour(juce::TextButton::textColourOffId,
                            juce::Colours::white);
     forceExitBtn.onClick = [this]() {
-      // Direct process exit to bypass any potential deadlocks in shutdown
-      // sequence
+      // Emergency exit path for this dialog; bypasses normal application
+      // shutdown and unsaved-change prompts.
       std::exit(0);
     };
 
@@ -2068,8 +2069,8 @@ public:
     } else {
       paletteSelector.setVisible(getAppSettings().getMonetEnabled());
       paletteSelector.setPalette(background.getPalette());
-      // V4 Fix: Re-sync selection because setPalette() clears index-based
-      // tracking
+      // setPalette() refreshes the palette list; restore the selected accent
+      // after the list update.
       paletteSelector.setSelectedColor(background.getTargetAccentColor());
     }
 

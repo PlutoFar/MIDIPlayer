@@ -1471,7 +1471,8 @@ private:
     if (isScanningPlugins)
       return;
 
-    // Use ThreadWithProgressWindow for proper progress display
+    // Modal, indeterminate scan. The scanner loop does not currently publish
+    // per-plugin progress or cooperative cancellation.
     class ScanThread : public juce::ThreadWithProgressWindow {
     public:
       ScanThread(AudioEngine &e)
@@ -1522,8 +1523,8 @@ public:
     return playlist.getChangeSummary();
   }
 
-  // Save current playlist (Proposes Save As if new)
-  // Returns true if saved (or user accepted SaveAs), false if cancelled/failed
+  // Save current playlist, asking for a path when the playlist has no file yet.
+  // Returns false when the chooser is cancelled or the write fails.
   bool savePlaylist() {
     if (currentPlaylistFile.existsAsFile()) {
       return playlist.save(currentPlaylistFile);
@@ -1539,31 +1540,8 @@ public:
             .getChildFile("playlist.json"),
         "*.json");
 
-    // Note: Since we are likely called from closeButtonPressed, we need
-    // synchronous behavior or careful async.
-    // However, closeButtonPressed in Main.cpp usually expects a return value
-    // immediately or handles async quit.
-    // For now, we'll use a modal loop or assume this is triggered by a button
-    // (Manual Save).
-    // If triggered by Exit Prompt, the Exit Prompt itself (AlertWindow) is
-    // handling the flow. Use browseForFileToSave for synchronous if needed, OR
-    // launchAsync.
-    // Given Juce 7/8 trends, async is preferred. But for 'closeButtonPressed'
-    // it's tricky.
-    // We will use synchronous browse for simplicity in this specific "Save As"
-    // flow if allowed, otherwise we might need a workaround for exit.
-    // Let's use launchAsync with a callback that updates the file.
-    // BUT: If this is called from Exit Prompt, we need to know the result to
-    // proceed closing.
-    // Refactoring: The Exit Prompt in Main.cpp will be the one driving this.
-    // If "Save" is clicked, Main.cpp calls savePlaylist().
-    // If savePlaylist returns false (e.g. cancelled SaveAs), we shouldn't quit?
-    // User requirement: "options to save, discard, or cancel".
-    // If Save is chosen -> Save.
-    // If SaveAs is needed -> Show dialog.
-    // If user cancels SaveAs -> Cancel exit?
-
-    // Ideally use browseForFileToSave (modal) for simplicity on Desktop.
+    // Close handling needs an immediate result, so this path deliberately uses
+    // the synchronous desktop file chooser.
     if (fileChooser->browseForFileToSave(true)) {
       currentPlaylistFile = fileChooser->getResult();
       return playlist.save(currentPlaylistFile);
@@ -2108,9 +2086,10 @@ public:
       从 Shell 打开 MIDI 文件（双击文件、命令行传入等场景）。
 
       行为逻辑：
-      - 播放列表为空（冷启动）：新建播放列表，自动加载上次使用的插件并播放。
-      - 播放列表已有内容（程序已运行）：添加到现有列表末尾并自动播放。
-      - 未加载且无法自动加载插件时，提示用户先手动加载乐器插件。
+      - 播放列表为空：新建列表并加载 MIDI。
+      - 播放列表已有内容：添加到列表末尾并加载该 MIDI。
+      - 已有插件时会延迟开始播放。
+      - 没有插件时只尝试加载上次插件并打开插件窗口，等待用户确认音色后手动播放。
   */
   void openMidiFileFromShell(const juce::File &file) {
     if (!file.existsAsFile())
@@ -2190,7 +2169,7 @@ public:
   /**
       尝试自动加载上次使用的插件，并显示加载提示。
       如果没有上次使用的插件记录，则提示用户手动加载。
-      加载成功后自动播放当前已加载的 MIDI 文件。
+      加载成功后只打开插件窗口，不自动开始播放；很多乐器插件需要用户先加载音色。
   */
   void tryLoadLastPluginWithDialog() {
     // 前置检查：无音频设备时不尝试加载插件
@@ -2482,7 +2461,7 @@ public:
       // Get system fonts
       availableFonts = juce::Font::findAllTypefaceNames();
 
-      // Implement Fallback Logic for Playlist Font
+      // Resolve saved playlist font to an installed font where possible.
       juce::String currentPlaylistFont = getAppSettings().getPlaylistFontName();
       bool fontExists = false;
       if (availableFonts.contains(currentPlaylistFont)) {

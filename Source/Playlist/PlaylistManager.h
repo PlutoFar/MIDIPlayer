@@ -157,7 +157,7 @@ public:
 
       实现说明：
       - 使用 JUCE DynamicObject 构建 JSON 树，保存所有文件的绝对路径。
-      - 写入过程包含截断（Truncate）操作，确保旧数据被彻底覆盖。
+      - 先写临时文件，再替换目标文件，避免半写入文件被当成有效播放列表。
   */
   bool save(const juce::File &file) const {
     try {
