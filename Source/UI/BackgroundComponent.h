@@ -14,15 +14,11 @@
 #include <random>
 
 /**
-    BackgroundComponent: 全窗口背景组件，支持模糊和亚克力（Acrylic）特效。
+    BackgroundComponent: 全窗口背景组件，负责背景图片、Monet 取色和
+    GaussianBlur/Aero/Acrylic 等背景材质效果。
 
-    核心功能：
-    - 高斯模糊 (Gaussian Blur)
-    - 亚克力效果 (Acrylic)：模糊 + 噪点 + 混合色。
-    - 动态叠加层透明度调节。
-    - 覆盖全窗口（包括侧边栏），通过毛玻璃感营造现代 UI 体验。
-    - 线程安全的图像处理：通过 BackgroundWorkerThread
-   在后台线程处理大图加载和模糊计算，避免阻塞 UI。
+    图像加载、缩放、效果计算和主题色提取交给 BackgroundWorkerThread，
+    避免大图处理阻塞 UI 线程。
 */
 class BackgroundComponent : public juce::Component,
                             public juce::ChangeBroadcaster,
@@ -47,7 +43,7 @@ public:
   }
 
   ~BackgroundComponent() override {
-    // Cancel any pending work and wait for threads to finish
+    // 取消待处理任务并等待线程结束
     cancelPendingWork();
   }
 
@@ -63,11 +59,10 @@ public:
     LOG_DEBUG("BackgroundComponent::loadAsync - Path: " + path);
 
     if (isFirstLoad && path.isNotEmpty()) {
-      // First startup uses the current image immediately so the persisted
-      // background is visible before later async refreshes.
+      // 首次启动同步加载已保存背景，避免异步刷新前出现空白
       loadSynchronously(path, forceExtraction);
     } else {
-      // Start background loading job
+      // 启动后台加载任务
       startImageLoadJob(path, forceExtraction);
     }
   }
@@ -82,7 +77,7 @@ public:
     BackgroundWorkerThread::LoadSettingsSnapshot settingsSnapshot;
     settingsSnapshot.monetEnabled = getAppSettings().getMonetEnabled();
     workerThread->setLoadTask(path, settingsSnapshot, forceExtraction);
-    workerThread->notify(); // Wake up thread
+    workerThread->notify(); // 唤醒后台线程
   }
 
   void setMaterialType(MaterialType type) {
@@ -139,19 +134,18 @@ public:
       imageLock.exit();
     }
 
-    // 1. Draw solid background
+    // 1. 绘制基础背景
     juce::ColourGradient gradient(juce::Colour(0xFF0D0D0F), 0.0f, 0.0f,
                                   juce::Colour(0xFF1A1A22), 0.0f,
                                   (float)getHeight(), false);
     g.setGradientFill(gradient);
     g.fillRect(bounds);
 
-    // 2. Draw images with cross-fade
+    // 2. 交叉淡入淡出绘制图片
     auto drawImageWithAlpha = [&](const juce::Image &img, float alpha) {
       if (!img.isNull()) {
         g.setOpacity(alpha);
-        // Optimization: Use low-quality resampling when drawing large images
-        // during heavy UI operations
+        // UI 繁忙时用低质量重采样绘制大图，降低绘制开销
         g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
         g.drawImage(img, bounds.toFloat(),
                     juce::RectanglePlacement::fillDestination);
@@ -159,12 +153,12 @@ public:
     };
 
     if (transitioningImage) {
-      // Drawing previous image fading out
+      // 旧图片淡出
       drawImageWithAlpha(previousImageCopy, 1.0f - imageTransitionAlpha);
-      // Drawing current image fading in
+      // 新图片淡入
       drawImageWithAlpha(currentImage, imageTransitionAlpha);
     } else {
-      // Normal constant state
+      // 稳定状态直接绘制当前图
       if (!currentImage.isNull()) {
         drawImageWithAlpha(currentImage, 1.0f);
       } else if (!originalImageCopy.isNull()) {
@@ -172,17 +166,16 @@ public:
       }
     }
 
-    // 3. Draw overlay tint
+    // 3. 绘制遮罩色
     g.setOpacity(1.0f);
     g.setColour(tintColor.withAlpha(overlayOpacity));
     g.fillRect(bounds);
 
-    // 释放手动获取的锁
   }
 
-  // Timer callback for smooth transitions
+  // Timer 回调用于平滑过渡
   void timerCallback() override {
-    // Emergency stop check (Atomic)
+    // Watchdog 请求停止时立即退出过渡
     if (shouldStopNow.load()) {
       stopTimer();
       isTransitioningImage = false;
@@ -190,19 +183,19 @@ public:
       return;
     }
 
-    // 1. Image fade transition
+    // 1. 图片淡入淡出过渡
     if (isTransitioningImage) {
-      transitionAlpha += 0.08f; // ~300ms transition at 60fps
+      transitionAlpha += 0.08f; // 60fps 下约 300ms
       if (transitionAlpha >= 1.0f) {
         transitionAlpha = 1.0f;
-        checkTimerState(); // Stop if no other tasks
+        checkTimerState(); // 无其他过渡时停止 Timer
         repaint();
       } else {
         repaint();
       }
     }
 
-    // 2. Color transition
+    // 2. 主题色过渡
     if (isTransitioningColor) {
       auto c1 = lastExtractedColor;
       auto c2 = targetAccentColor;
@@ -213,11 +206,11 @@ public:
         return;
       }
 
-      // Manual blend step
+      // 单步混合
       auto stepParams = [](uint8_t current, uint8_t target) -> uint8_t {
         int diff = (int)target - (int)current;
         if (std::abs(diff) <= 2)
-          return target; // Snap if close
+          return target; // 接近目标时直接吸附
         return (uint8_t)(current + diff * 0.15f);
       };
 
@@ -228,14 +221,14 @@ public:
       lastExtractedColor = next;
       if (onAccentColorChanged)
         onAccentColorChanged(next);
-      sendChangeMessage(); // Notify listeners like PaletteSelector
+      sendChangeMessage(); // 通知 PaletteSelector 等监听者
 
       if (lastExtractedColor == targetAccentColor) {
         isTransitioningColor = false;
         checkTimerState();
-        sendChangeMessage(); // Signal transition completion
+        sendChangeMessage(); // 通知过渡完成
       }
-      // Re-check because checkTimerState might have stopped it
+      // checkTimerState 可能已停止 Timer，这里重新确认
       if (isTimerRunning())
         repaint();
     }
@@ -250,10 +243,10 @@ public:
 
   void startColorTransition() {
     isTransitioningColor = true;
-    startTimerHz(60); // Ensure timer is running
+    startTimerHz(60); // 确保 Timer 正在运行
   }
 
-  // Watchdog Emergency Reset
+  // Watchdog 紧急重置
   void emergencyReset() {
     LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - start");
     cancelPendingWork();
@@ -276,12 +269,12 @@ public:
       imageLock.exit();
     }
 
-    // Clear heavy resources if needed, otherwise just reset state
+    // 清理加载状态，重资源由取消流程处理
     loadingLabel.setVisible(false);
     LOG_DEBUG("[FREEZE_DIAG] BackgroundComponent::emergencyReset - end");
   }
 
-  // Thread-safe request to stop from Watchdog
+  // Watchdog 发出的线程安全停止请求
   void requestEmergencyStop() { shouldStopNow.store(true); }
 
   void onColorExtracted(const std::vector<juce::Colour> &palette) {
@@ -289,19 +282,19 @@ public:
       return;
 
     currentPalette = palette;
-    // Auto-select the first one (best scored)
+    // 默认选择评分最高的第一个颜色
     auto bestColor = palette[0];
 
-    // Update target immediately
+    // 立即更新目标色
     targetAccentColor = bestColor;
 
-    // Start transition
+    // 启动颜色过渡
     startColorTransition();
 
-    // Also notify immediately for UI responsiveness regarding palette list
+    // 立即通知一次，保证调色板列表响应及时
     if (onAccentColorChanged)
       onAccentColorChanged(
-          lastExtractedColor); // Send CURRENT color, let timer update it
+          lastExtractedColor); // 先发送当前色，后续由 Timer 推进
 
     sendChangeMessage();
   }
@@ -325,15 +318,14 @@ private:
 
 private:
   /**
-      后台工作线程，用于图像加载、缩放、模糊计算及主题色提取。
+      后台工作线程，用于图像加载、缩放、效果计算和主题色提取。
 
-      性能优化点：
-      1. 自动缩放：如果原图超过 1440p (2560x1440)，会自动进行降采样处理。
-         - 背景模糊不需要极高分辨率，这样做可以显著减少模糊算法的计算开销。
-      2. K-Means 色彩提取：在 150x150
-     的极小缩略图上运行，将处理时间从秒级降低到毫秒级。
-      3. 任务中断：当用户连续切换背景或效果时，abortCurrentTask
-     会立即终止当前耗时操作，响应新请求。
+      处理策略：
+      1. 原图超过 2560x1440 时先降采样，减少后续模糊计算量。
+      2. K-Means 在 150x150 缩略图上运行；内部使用 8 个聚类中心，
+         最终返回调用方请求的颜色数量。
+      3. abortCurrentTask 是协作取消标记；耗时循环定期检查它，发现新任务后
+         尽快放弃当前结果并处理最新请求。
   */
   class BackgroundWorkerThread : public juce::Thread {
   public:
@@ -352,7 +344,7 @@ private:
       pendingLoadSettings = settingsSnapshot;
       hasLoadTask = true;
       hasEffectTask = false;
-      abortCurrentTask = true; // Signal interrupt
+      abortCurrentTask = true; // 请求当前任务协作取消
       if (forceExtraction)
         lastExtractedPath = "";
     }
@@ -364,14 +356,11 @@ private:
       pendingRadius = radius;
       hasEffectTask = true;
       hasLoadTask = false;
-      abortCurrentTask = true; // Signal interrupt
+      abortCurrentTask = true; // 请求当前任务协作取消
     }
 
     void run() override {
       while (!threadShouldExit()) {
-        // abortCurrentTask = false; // MOVED: Reset inside lock when taking
-        // task
-
         juce::String loadPath;
         LoadSettingsSnapshot loadSettings;
         juce::Image imgToProcess;
@@ -380,7 +369,7 @@ private:
         bool doLoad = false;
         bool doEffect = false;
 
-        // Check for pending tasks
+        // 取出待处理任务
         {
           const juce::ScopedLock sl(taskLock);
           if (hasLoadTask) {
@@ -388,14 +377,14 @@ private:
             loadSettings = pendingLoadSettings;
             doLoad = true;
             hasLoadTask = false;
-            abortCurrentTask = false; // Reset for new task
+            abortCurrentTask = false; // 新任务开始前清除取消标记
           } else if (hasEffectTask) {
             imgToProcess = pendingImage;
             type = pendingType;
             radius = pendingRadius;
             doEffect = true;
             hasEffectTask = false;
-            abortCurrentTask = false; // Reset for new task
+            abortCurrentTask = false; // 新任务开始前清除取消标记
           }
         }
 
@@ -409,7 +398,7 @@ private:
           processEffectTask(imgToProcess, type, radius);
           LOG_DEBUG("BackgroundWorkerThread: Finished effect task");
         } else {
-          // No work, wait for signal
+          // 无任务时等待唤醒
           wait(100);
         }
       }
@@ -417,9 +406,7 @@ private:
 
   private:
     juce::String
-        lastExtractedPath; // Track last path to allow skipping if needed
-    // But user requested: "Whenever image changes... MUST update"
-    // So distinct path = update.
+        lastExtractedPath; // 记录上次取色路径，用于跳过重复取色
 
     void processLoadTask(const juce::String &path,
                          const LoadSettingsSnapshot &settingsSnapshot) {
@@ -428,30 +415,21 @@ private:
           juce::Component::SafePointer<BackgroundComponent>(&component);
 
       if (path.isEmpty()) {
-        lastExtractedPath = ""; // Reset
-        // Clear image and reset color
+        lastExtractedPath = ""; // 清空取色缓存
+        // 清空图片并恢复默认主题色
         juce::MessageManager::callAsync([safeComponent]() {
           if (safeComponent == nullptr)
             return;
 
           safeComponent->onImageLoaded(juce::Image());
           safeComponent->onColorExtracted(
-              {juce::Colour(0xFF0078D4)}); // Reset to default
+              {juce::Colour(0xFF0078D4)}); // 恢复默认色
         });
         return;
       }
 
-      // Check if we typically can skip (optimization), but user insists on
-      // updates. However, if it's the SAME path, re-extracting is wasteful and
-      // yields same result. We only extract if path differs.
-
-      // Force extraction if path changed OR we haven't extracted yet
+      // 路径变化时更新取色缓存；重复加载同一路径时沿用已有结果
       if (path == lastExtractedPath) {
-        // Same image loaded again? Maybe settings changed?
-        // If just re-loading same image, we can skip K-Means if check implies.
-        // But to be safe per user request "Every time image changes", we assume
-        // this function is only called when image changes.
-        // If called redundantly, we can skip.
       } else {
         lastExtractedPath = path;
       }
@@ -459,7 +437,7 @@ private:
       if (file.existsAsFile() && !threadShouldExit()) {
         auto img = juce::ImageFileFormat::loadFrom(file);
         if (!threadShouldExit() && !img.isNull()) {
-          // Monet Color Extraction (Palette)
+          // Monet 调色板提取
           if (settingsSnapshot.monetEnabled) {
             juce::MessageManager::callAsync([safeComponent]() {
               if (safeComponent != nullptr)
@@ -467,7 +445,7 @@ private:
                                                juce::dontSendNotification);
             });
 
-            // Request 12 clusters to find 6 distinct best ones
+            // 请求返回 6 个代表色；K-Means 内部使用 8 个聚类中心
             auto palette = extractPaletteKMeans(img, 6, [this]() {
               return threadShouldExit() || abortCurrentTask;
             });
@@ -482,9 +460,7 @@ private:
             }
           }
 
-          // Optimization: Resize huge images to max 2560x1440 to speed up
-          // effects (Blur) 4K/8K images are overkill for background blur and
-          // kill performance.
+          // 大图先缩放到 2560x1440 内，避免 4K/8K 背景拖慢模糊效果
           int maxW = 2560;
           int maxH = 1440;
           if ((img.getWidth() > maxW || img.getHeight() > maxH) &&
@@ -497,11 +473,11 @@ private:
                 img.rescaled(newW, newH, juce::Graphics::highResamplingQuality);
           }
 
-          // After potentially heavy rescale or load
+          // 加载或缩放后再次检查取消状态
           if (threadShouldExit() || abortCurrentTask)
             return;
 
-          // Store original and trigger effect processing
+          // 保存原图并触发效果处理
           juce::MessageManager::callAsync([safeComponent, img]() {
             if (safeComponent == nullptr)
               return;
@@ -510,14 +486,14 @@ private:
           });
         }
       } else {
-        // File not found - treat as clear
+        // 文件不存在时按清空背景处理
         juce::MessageManager::callAsync([safeComponent]() {
           if (safeComponent == nullptr)
             return;
 
           safeComponent->onImageLoaded(juce::Image());
           safeComponent->onColorExtracted(
-              {juce::Colour(0xFF0078D4)}); // Reset to default
+              {juce::Colour(0xFF0078D4)}); // 恢复默认色
         });
       }
     }
@@ -562,14 +538,14 @@ private:
     }
 
   public:
-    // Static versions of blur functions that accept cancellation check
+    // 带取消检查的静态效果函数
     static juce::Image
     applyGaussianBlurStatic(const juce::Image &source, int radius,
                             std::function<bool()> shouldCancel) {
       if (source.isNull() || radius < 1)
         return source.createCopy();
 
-      // Dynamic scaling based on radius to avoid "blocky" low-radius blurs
+      // 根据半径动态缩放，避免低半径模糊出现块状感
       int scale = 1;
       if (radius > 16)
         scale = 2;
@@ -585,9 +561,7 @@ private:
       auto small =
           source.rescaled(smallW, smallH, juce::Graphics::lowResamplingQuality);
 
-      // Apply box blur multiple times (approximates Gaussian)
-      // For small radius (scale=1), we need fewer passes or careful handling to
-      // not over-blur
+      // 多次 box blur 近似 Gaussian；小半径保持 scale=1，避免过度模糊
       int effectiveRadius = radius / scale;
       if (effectiveRadius < 1)
         effectiveRadius = 1;
@@ -603,7 +577,7 @@ private:
       if (shouldCancel())
         return juce::Image();
 
-      // Scale back up
+      // 缩放回原尺寸
       return small.rescaled(source.getWidth(), source.getHeight(),
                             juce::Graphics::mediumResamplingQuality);
     }
@@ -622,7 +596,7 @@ private:
       juce::Image::BitmapData dstData(result,
                                       juce::Image::BitmapData::writeOnly);
 
-      // Horizontal pass
+      // 横向模糊
       auto temp = juce::Image(juce::Image::ARGB, w, h, true);
       juce::Image::BitmapData tempData(temp,
                                        juce::Image::BitmapData::writeOnly);
@@ -633,7 +607,7 @@ private:
 
         int r = 0, g = 0, b = 0, a = 0, count = 0;
 
-        // Initialize window
+        // 初始化滑动窗口
         for (int x = 0; x <= radius && x < w; ++x) {
           auto *p = srcData.getPixelPointer(x, y);
           b += p[0];
@@ -650,7 +624,7 @@ private:
           dst[2] = (uint8_t)(r / count);
           dst[3] = (uint8_t)(a / count);
 
-          // Slide window
+          // 移动滑动窗口
           int addX = x + radius + 1;
           int remX = x - radius;
 
@@ -673,7 +647,7 @@ private:
         }
       }
 
-      // Vertical pass
+      // 纵向模糊
       juce::Image::BitmapData tempReadData(temp,
                                            juce::Image::BitmapData::readOnly);
 
@@ -730,7 +704,7 @@ private:
       if (source.isNull())
         return source.createCopy();
 
-      // Mica: Heavy blur + Desaturation + Tint
+      // Mica: 重模糊、低饱和度和浅色蒙层
       int micaRadius = std::max(60, radius * 2);
       auto blurred = applyGaussianBlurStatic(source, micaRadius, shouldCancel);
 
@@ -743,7 +717,7 @@ private:
         juce::Graphics g(result);
         g.drawImageAt(blurred, 0, 0);
 
-        // Desaturation/Tint overlay (Mica is usually very subtle)
+        // Mica 通常使用较轻的去饱和浅色蒙层
         g.setColour(juce::Colour(0xFFF3F3F3).withAlpha(0.65f));
         g.fillRect(result.getBounds());
       }
@@ -756,7 +730,7 @@ private:
       if (source.isNull())
         return source.createCopy();
 
-      // Aero: Medium blur + Stronger Glass shine to distinguish from plain blur
+      // Aero: 中等模糊和更明显的玻璃高光，区别于普通模糊
       auto blurred = applyGaussianBlurStatic(source, radius, shouldCancel);
       if (shouldCancel())
         return {};
@@ -767,18 +741,18 @@ private:
         juce::Graphics g(result);
         g.drawImageAt(blurred, 0, 0);
 
-        // Glass shine gradient - boosted to 30% start alpha for visibility
+        // 玻璃高光渐变，提高起始透明度以增强可见性
         juce::ColourGradient shine(juce::Colours::white.withAlpha(0.25f), 0, 0,
                                    juce::Colours::white.withAlpha(0.05f), 0,
                                    (float)result.getHeight() * 0.6f, false);
         g.setGradientFill(shine);
         g.fillRect(result.getBounds());
 
-        // Top highlight line for 3D glass edge
+        // 顶部高光线模拟玻璃边缘
         g.setColour(juce::Colours::white.withAlpha(0.4f));
         g.fillRect(0, 0, result.getWidth(), 1);
 
-        // Border/Glass edge
+        // 玻璃边框
         g.setColour(juce::Colours::white.withAlpha(0.15f));
         g.drawRect(result.getBounds(), 1);
       }
@@ -788,21 +762,21 @@ private:
     static juce::Image
     applyAcrylicEffectStatic(const juce::Image &source, int radius,
                              std::function<bool()> shouldCancel) {
-      // Acrylic = Blur + Saturation Boost + Luminance Noise
+      // Acrylic = 模糊 + 饱和度增强 + 亮度噪点
 
-      // 1. Blur
+      // 1. 模糊
       auto blurred = applyGaussianBlurStatic(source, radius, shouldCancel);
 
       if (shouldCancel())
         return {};
 
-      // 2. Prepare for manipulation
+      // 2. 准备像素处理
       juce::Image result = blurred.createCopy();
       juce::Image::BitmapData data(result, 0, 0, result.getWidth(),
                                    result.getHeight(),
                                    juce::Image::BitmapData::readWrite);
 
-      // Simple pseudo-random generator
+      // 简单伪随机生成器
       uint32_t seed = 123456;
       auto rand = [&seed]() {
         seed = seed * 1103515245 + 12345;
@@ -815,14 +789,14 @@ private:
 
         uint8_t *p = data.getLinePointer(y);
         for (int x = 0; x < result.getWidth(); ++x) {
-          // A. Boost Saturation (simple approx: move away from grey)
+          // A. 增强饱和度：让颜色远离灰阶
           if (data.pixelStride >= 3) {
             int b = p[0];
             int g = p[1];
             int r = p[2];
             int grey = (r + g + b) / 3;
 
-            // Increase saturation by pushing components away from grey by 30%
+            // RGB 分量相对灰阶扩大 30%
             r = grey + (int)((r - grey) * 1.3f);
             g = grey + (int)((g - grey) * 1.3f);
             b = grey + (int)((b - grey) * 1.3f);
@@ -832,12 +806,10 @@ private:
             p[0] = (uint8_t)juce::jlimit(0, 255, b);
           }
 
-          // B. Add Luminance Noise (Monochrome)
-          // Noise should affect all channels equally to look like "texture" not
-          // "static"
-          int noise = (rand() % 12) - 6; // +/- 6 noise (subtle grain)
+          // B. 添加单色亮度噪点，避免彩色噪声破坏质感
+          int noise = (rand() % 12) - 6; // +/- 6 的细微颗粒
 
-          for (int c = 0; c < 3; ++c) { // R, G, B
+          for (int c = 0; c < 3; ++c) { // R、G、B
             int val = p[data.pixelStride == 4 ? c + 1 : c] + noise;
             p[data.pixelStride == 4 ? c + 1 : c] =
                 (uint8_t)juce::jlimit(0, 255, val);
@@ -855,15 +827,13 @@ private:
       if (image.isNull())
         return {juce::Colour(0xFF0078D4)};
 
-      // 1. Downscale significantly for performance (Optimization)
-      // 150x150 is plenty for color dominance analysis (~22k pixels), vs 4K's
-      // 8M pixels. This reduces processing time from Seconds to Milliseconds.
+      // 1. 降采样到 150x150，足够做主色分析并显著降低计算量
       auto workImg =
           image.rescaled(150, 150, juce::Graphics::lowResamplingQuality);
       int w = workImg.getWidth();
       int h = workImg.getHeight();
 
-      // 2. Collect pixels
+      // 2. 收集像素
       std::vector<juce::Colour> pixels;
       pixels.reserve(w * h);
       juce::Image::BitmapData data(workImg, juce::Image::BitmapData::readOnly);
@@ -885,7 +855,7 @@ private:
       if (pixels.empty())
         return {juce::Colour(0xFF0078D4)};
 
-      // 3. Simple K-Means
+      // 3. 简化 K-Means
       struct Centroid {
         float r = 0, g = 0, b = 0;
         int count = 0;
@@ -909,7 +879,7 @@ private:
         }
       };
 
-      int numClusters = 8; // Use more internal clusters for better sampling
+      int numClusters = 8; // 内部聚类中心数，提升代表色采样质量
       std::vector<juce::Colour> centers;
       std::mt19937 rng(42);
       std::uniform_int_distribution<int> dist(0, (int)pixels.size() - 1);
@@ -949,7 +919,7 @@ private:
         }
       }
 
-      // 4. Score clusters
+      // 4. 为聚类结果评分
       struct ScoredColor {
         juce::Colour c;
         float score;
@@ -959,34 +929,34 @@ private:
         float sat = c.getSaturation();
         float bri = c.getBrightness();
         float score = sat * 2.0f +
-                      (bri > 0.5f ? 0.5f : 0.0f); // Prefer colorful and bright
+                      (bri > 0.5f ? 0.5f : 0.0f); // 偏好高饱和且较亮的颜色
         if (bri < 0.15f || bri > 0.95f)
-          score *= 0.1f; // Penalize extremes
+          score *= 0.1f; // 降低极暗或极亮颜色的权重
         ranked.push_back({c, score});
       }
 
       std::sort(ranked.begin(), ranked.end(),
                 [](const auto &a, const auto &b) { return a.score > b.score; });
 
-      // 5. Select unique colors (Greedy selection)
+      // 5. 贪心选择差异明显的颜色
       std::vector<juce::Colour> result;
       for (const auto &rc : ranked) {
         bool unique = true;
         for (const auto &ex : result) {
-          // Hue distance check
+          // 色相距离检查
           float dh = std::abs(rc.c.getHue() - ex.getHue());
           if (dh > 0.5f)
             dh = 1.0f - dh;
-          if (dh < 0.08f) { // Slightly looser Hue check to allow gradients
+          if (dh < 0.08f) { // 允许少量渐变相近色
             unique = false;
             break;
           }
-          // Strict RGB distance for visual distinctness
+          // RGB 距离保证视觉差异
           int dr = rc.c.getRed() - ex.getRed();
           int dg = rc.c.getGreen() - ex.getGreen();
           int db = rc.c.getBlue() - ex.getBlue();
           if (dr * dr + dg * dg + db * db <
-              2500) { // Increased distance requirement
+              2500) { // 较高阈值减少近似色
             unique = false;
             break;
           }
@@ -997,13 +967,11 @@ private:
           break;
       }
 
-      // Fallback: Generate variations if not enough unique colors found
+      // 代表色不足时生成变化色兜底
       while (result.size() < k) {
         if (!result.empty()) {
-          // Use the last unique color and vary it
+          // 基于最后一个颜色调整色相、亮度和饱和度
           auto base = result.back();
-          // Larger hue shift (30 degrees) and vary brightness/saturation to
-          // ensure visual difference
           result.push_back(base.withRotatedHue(0.08f * (float)result.size())
                                .withMultipliedBrightness(0.9f)
                                .withMultipliedSaturation(1.1f));
@@ -1028,8 +996,8 @@ private:
 
   void loadSettings() {
     int mode = getAppSettings().getBackgroundBlurMode();
-    // Validate: MaterialType enum is None=1, GaussianBlur=2, Aero=3, Acrylic=4
-    // Legacy value 0 (old None) maps to current None=1
+    // MaterialType 编号会持久化到设置：None=1、GaussianBlur=2、Aero=3、Acrylic=4
+    // 非法编号统一回退到 None，避免读取旧配置或损坏配置后产生未定义模式
     if (mode < 1 || mode > 4) {
       mode = static_cast<int>(MaterialType::None);
       getAppSettings().setBackgroundBlurMode(mode);
@@ -1038,7 +1006,7 @@ private:
     blurRadius = getAppSettings().getBackgroundBlurRadius();
     overlayOpacity = getAppSettings().getBackgroundOverlay();
 
-    // Restore persistent accent color
+    // 恢复持久化主题色
     auto savedColor =
         juce::Colour::fromString(getAppSettings().getThemeAccentColor());
     lastExtractedColor = savedColor;
@@ -1046,7 +1014,7 @@ private:
   }
 
   void applyEffects() {
-    // Optimization: If no effect, handle quickly but still trigger fade
+    // 无效果时快速处理，但仍走统一的淡入淡出流程
     if (materialType == MaterialType::None) {
       loadingLabel.setVisible(false);
       juce::Image img;
@@ -1090,7 +1058,7 @@ private:
     }
   }
 
-  // Synchronous loading for startup
+  // 启动阶段同步加载，保证首帧显示已保存背景
   void loadSynchronously(const juce::String &path, bool forceExtraction) {
     auto file = juce::File(path);
     if (!file.existsAsFile())
@@ -1100,20 +1068,20 @@ private:
     if (img.isNull())
       return;
 
-    // 1. Monet Extraction (Synchronous)
+    // 1. 同步 Monet 取色
     if (getAppSettings().getMonetEnabled()) {
       auto palette = BackgroundWorkerThread::extractPaletteKMeans(
           img, 6, []() { return false; });
       if (!palette.empty()) {
         currentPalette = palette;
         targetAccentColor = palette[0];
-        lastExtractedColor = targetAccentColor; // Sudden jump for first load
+        lastExtractedColor = targetAccentColor; // 首次加载直接使用目标色
         if (onAccentColorChanged)
           onAccentColorChanged(targetAccentColor);
       }
     }
 
-    // 2. Downscale for effects
+    // 2. 为效果处理降采样
     int maxW = 2560;
     int maxH = 1440;
     if ((img.getWidth() > maxW || img.getHeight() > maxH) &&
@@ -1125,7 +1093,7 @@ private:
       img = img.rescaled(newW, newH, juce::Graphics::highResamplingQuality);
     }
 
-    // 3. Apply Effects (Synchronous)
+    // 3. 同步应用效果
     juce::Image result;
     auto noCancel = []() { return false; };
 
@@ -1147,7 +1115,7 @@ private:
       break;
     }
 
-    // 4. Set state instantly
+    // 4. 直接写入显示状态
     {
       const juce::ScopedLock sl(imageLock);
       originalImage = img;
@@ -1164,14 +1132,13 @@ private:
       LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - signaling thread to exit");
       workerThread->stopThread(2000);
 
-      // Wait briefly for the worker to notice the stop request, then release
-      // the owned thread object.
+      // 短暂等待后台线程响应停止请求，再释放线程对象
       workerThread.reset();
       LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - done");
     }
   }
 
-  // Callbacks from worker thread (called on message thread)
+  // 后台线程回调，实际在消息线程执行
   void onImageLoaded(const juce::Image &img) {
     LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - start");
     {
@@ -1192,7 +1159,7 @@ private:
     {
       const juce::ScopedLock sl(imageLock);
       LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - lock acquired");
-      // Start transition: previous is what we currently show
+      // previousImage 保存当前画面，用于切换过渡
       previousImage = processedImage.isNull() ? originalImage : processedImage;
       processedImage = img;
 
@@ -1202,7 +1169,7 @@ private:
         isFirstLoad = false;
       } else {
         transitionAlpha = 0.0f;
-        isTransitioningImage = true; // Enable transition in timer
+        isTransitioningImage = true; // 交给 Timer 推进过渡
       }
     }
     LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - lock released");
@@ -1242,7 +1209,7 @@ private:
 };
 
 /**
-    ImageCropperComponent: Allows selecting a crop region on an image.
+    ImageCropperComponent: 图片裁剪区域选择组件。
 */
 class ImageCropperComponent : public juce::Component {
 public:
@@ -1251,7 +1218,7 @@ public:
   void setImage(const juce::Image &img) {
     originalImage = img;
     if (!img.isNull()) {
-      // Default crop to full image
+      // 默认选中整张图片
       cropRegion = juce::Rectangle<float>(0.0f, 0.0f, 1.0f, 1.0f);
     }
     repaint();
@@ -1290,11 +1257,11 @@ public:
       return;
     }
 
-    // Draw dimmed full image
+    // 绘制变暗的完整图片
     g.setOpacity(0.4f);
     g.drawImage(originalImage, bounds, juce::RectanglePlacement::centred);
 
-    // Calculate display rect for image
+    // 计算图片实际显示区域
     float imgAspect =
         (float)originalImage.getWidth() / originalImage.getHeight();
     float boundsAspect = bounds.getWidth() / bounds.getHeight();
@@ -1311,7 +1278,7 @@ public:
     }
     displayRect = imageDisplayRect;
 
-    // Draw bright crop region
+    // 绘制高亮裁剪区域
     auto cropDisplayRect = juce::Rectangle<float>(
         imageDisplayRect.getX() +
             cropRegion.getX() * imageDisplayRect.getWidth(),
@@ -1320,7 +1287,7 @@ public:
         cropRegion.getWidth() * imageDisplayRect.getWidth(),
         cropRegion.getHeight() * imageDisplayRect.getHeight());
 
-    // Crop area with full brightness
+    // 裁剪区域保持完整亮度
     g.setOpacity(1.0f);
     g.saveState();
     g.reduceClipRegion(cropDisplayRect.toNearestInt());
@@ -1328,11 +1295,11 @@ public:
                 juce::RectanglePlacement::centred);
     g.restoreState();
 
-    // Crop border
+    // 裁剪边框
     g.setColour(juce::Colour(0xFFFF8C00));
     g.drawRect(cropDisplayRect, 2.0f);
 
-    // Corner handles
+    // 四角拖拽手柄
     float handleSize = 10.0f;
     g.setColour(juce::Colours::white);
     g.fillRect(cropDisplayRect.getX() - handleSize / 2,
@@ -1355,7 +1322,7 @@ public:
     float handleSize = 12.0f;
     auto pos = e.position;
 
-    // Check corner handles
+    // 检查四角拖拽手柄
     if (juce::Rectangle<float>(cropDisplayRect.getX() - handleSize,
                                cropDisplayRect.getY() - handleSize,
                                handleSize * 2, handleSize * 2)
@@ -1423,7 +1390,7 @@ public:
       break;
     }
 
-    // Constrain to valid region
+    // 限制在有效区域内
     newCrop = newCrop.constrainedWithin(juce::Rectangle<float>(0, 0, 1, 1));
     if (newCrop.getWidth() > 0.05f && newCrop.getHeight() > 0.05f) {
       cropRegion = newCrop;
@@ -1462,17 +1429,14 @@ private:
 };
 
 /**
-    BackgroundSettingsDialog: Enhanced settings with blur options.
-*/
-/**
-    Helper classes for BackgroundSettingsDialog
+    BackgroundSettingsDialog 辅助组件。
 */
 class ImagePreviewButton : public juce::Button, private juce::Thread {
 public:
   ImagePreviewButton(const juce::File &f)
       : juce::Button(f.getFileName()), juce::Thread("ThumbLoader"), file(f) {
     setTooltip(f.getFileName());
-    // Important: Use SafePointer to avoid dangling pointer in async callback
+    // 使用 SafePointer 避免异步回调访问已销毁按钮
     safeThis = this;
     startThread();
   }
@@ -1500,27 +1464,26 @@ public:
                    bool isButtonDown) override {
     auto bounds = getLocalBounds().toFloat();
 
-    // Background placeholder (dark gray)
+    // 深色占位背景
     g.setColour(juce::Colours::black.withAlpha(0.3f));
     g.fillRoundedRectangle(bounds, 4.0f);
 
     if (thumbnail.isValid()) {
-      // V4.1 FIX: Simple drawImageWithin. No clipping regions.
-      // This is the most robust way to draw.
+      // 直接按按钮边界填充缩略图，避免裁剪区域和按钮坐标不一致导致错位
       g.setOpacity(1.0f);
       g.drawImage(thumbnail, bounds, juce::RectanglePlacement::fillDestination);
 
-      // Subtle border
+      // 轻微边框
       g.setColour(juce::Colours::white.withAlpha(0.1f));
       g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
     } else {
-      // Loading indicator
+      // 加载指示
       g.setColour(juce::Colours::white.withAlpha(0.2f));
       g.drawText(L"\u22EF", getLocalBounds(), juce::Justification::centred,
                  false);
     }
 
-    // Interaction feedback (Outer highlight only)
+    // 鼠标交互外框反馈
     if (isEnabled() && (isMouseOver || isButtonDown)) {
       g.setColour(juce::Colours::white.withAlpha(isButtonDown ? 0.9f : 0.5f));
       g.drawRoundedRectangle(bounds, 4.0f, isButtonDown ? 2.0f : 1.5f);
@@ -1535,17 +1498,16 @@ public:
 class PaletteSelector : public juce::Component {
 public:
   std::function<void(juce::Colour)> onColorSelected;
-  int selectedIndex = -1; // V4: Index-based tracking
+  int selectedIndex = -1; // 用索引跟踪当前选中色块
 
   void setPalette(const std::vector<juce::Colour> &colors) {
     if (palette == colors)
-      return; // Optimization: Avoid redraw if identical
+      return; // 调色板未变化时跳过重绘
     palette = colors;
     if (palette.empty())
       palette = {juce::Colour(0xFF0078D4)};
 
-    // Reset selection on new palette or keep index if valid?
-    // Safety: Reset to invalid to wait for user or default logic
+    // 新调色板需要重新匹配选中色
     selectedIndex = -1;
     repaint();
   }
@@ -1557,14 +1519,12 @@ public:
     }
   }
 
-  // Deprecated V3: kept for compatibility if needed, but implementation maps to
-  // index
   void setSelectedColor(juce::Colour c) {
-    // Try to find index of this color, otherwise -1
+    // 根据颜色查找对应索引
     if (palette.empty())
       return;
     for (size_t i = 0; i < palette.size(); ++i) {
-      // Use small tolerance for floating point / rounding errors in transition
+      // 允许过渡动画中的轻微舍入误差
       auto p = palette[i];
       if (std::abs(p.getRed() - c.getRed()) <= 1 &&
           std::abs(p.getGreen() - c.getGreen()) <= 1 &&
@@ -1573,8 +1533,7 @@ public:
         return;
       }
     }
-    // If not found (e.g. animation mid-value), DO NOTHING.
-    // This prevents the flickering.
+    // 动画中间色找不到匹配项时保持当前选择，避免闪烁
   }
 
   void paint(juce::Graphics &g) override {
@@ -1591,18 +1550,18 @@ public:
         1.0f, juce::jmin(maxSwatchWidth,
                          (area.getWidth() - totalGapSpace) / maxSlots));
 
-    // Position swatches with gaps
+    // 按固定间隔排列色块
     for (int i = 0; i < count; ++i) {
       juce::Rectangle<float> r(i * (swatchWidth + gap), 0, swatchWidth,
                                area.getHeight());
 
-      // Swatch background
+      // 色块背景
       g.setColour(palette[i]);
       g.fillRoundedRectangle(r, 4.0f);
 
-      // STRICT INDEX MATCH
+      // 严格按索引判断选中状态
       if (i == selectedIndex) {
-        // High contrast logic
+        // 根据亮度选择高对比选中标记
         float lux = (palette[i].getFloatRed() * 0.2126f +
                      palette[i].getFloatGreen() * 0.7152f +
                      palette[i].getFloatBlue() * 0.0722f);
@@ -1637,7 +1596,7 @@ public:
     for (int i = 0; i < count; ++i) {
       float startX = i * (swatchWidth + gap);
       if (e.position.x >= startX && e.position.x <= startX + swatchWidth) {
-        setSelectedIndex(i); // Lock the index (V4)
+        setSelectedIndex(i); // 固定当前选中索引
         onColorSelected(palette[i]);
         break;
       }
@@ -1649,12 +1608,12 @@ private:
 };
 
 /**
-    BackgroundSettingsDialog: Enhanced settings with blur options.
+    BackgroundSettingsDialog: 背景设置弹窗。
 */
 class BackgroundSettingsDialog : public juce::Component,
                                  public juce::ChangeListener {
 public:
-  // Helper for vector icon buttons
+  // 矢量箭头按钮
   class VectorIconButton : public juce::Button {
   public:
     VectorIconButton(const juce::String &name, bool isLeft)
@@ -1690,22 +1649,21 @@ public:
   };
 
   /**
-      HorizontalViewport: Translates vertical mouse wheel to horizontal scroll.
-      Only responds if content is actually wider than the viewport.
+      HorizontalViewport: 内容超出宽度时，将纵向滚轮转换为横向滚动。
   */
   class HorizontalViewport : public juce::Viewport {
   public:
     HorizontalViewport() {
-      setScrollBarsShown(false, false); // Hide bars for cleaner look
+      setScrollBarsShown(false, false); // 隐藏滚动条
     }
 
     void mouseWheelMove(const juce::MouseEvent &e,
                         const juce::MouseWheelDetails &wheel) override {
       if (auto *viewedComp = getViewedComponent()) {
-        // Only intervene if content is too wide to fit
+        // 仅在内容宽于视口时接管滚轮
         if (viewedComp->getWidth() > getWidth()) {
           auto newWheel = wheel;
-          // If vertical scroll is present but horizontal is not, swap them
+          // 没有横向滚动量时，把纵向滚轮映射到横向
           if (std::abs(newWheel.deltaX) < 0.001f &&
               std::abs(newWheel.deltaY) > 0.001f) {
             newWheel.deltaX = newWheel.deltaY;
@@ -1715,7 +1673,7 @@ public:
           return;
         }
       }
-      // Default behavior (bubble up or normal scroll)
+      // 其他情况沿用 Viewport 默认行为
       juce::Viewport::mouseWheelMove(e, wheel);
     }
   };
@@ -1730,29 +1688,26 @@ public:
   BackgroundSettingsDialog(BackgroundComponent &bg, Listener *l)
       : background(bg), listener(l) {
     background.addChangeListener(this);
-    setSize(400, 600); // Standard height
+    setSize(400, 600); // 标准弹窗尺寸
     setOpaque(false);
 
     addAndMakeVisible(forceExitBtn);
     forceExitBtn.setButtonText(L"强制退出并关闭程序");
-    // Windows 11 Critical System Color (#C42B1C) - Matches Win11 Dark Mode
+    // 使用 Windows 11 深色模式下的关键系统色
     forceExitBtn.setColour(juce::TextButton::buttonColourId,
                            juce::Colour(0xFFC42B1C));
     forceExitBtn.setColour(juce::TextButton::textColourOffId,
-                           juce::Colours::white);
+                            juce::Colours::white);
     forceExitBtn.onClick = [this]() {
-      // Emergency exit path for this dialog; bypasses normal application
-      // shutdown and unsaved-change prompts.
+      // 强制退出路径：绕过常规关闭流程和未保存提示
       std::exit(0);
     };
 
-    // Title
     addAndMakeVisible(titleLabel);
     titleLabel.setText(L"背景设置", juce::dontSendNotification);
     titleLabel.setFont(juce::Font(juce::FontOptions(18.0f).withStyle("Bold")));
     titleLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
-    // Image selection
     addAndMakeVisible(imageLabel);
     imageLabel.setText(L"背景图片:", juce::dontSendNotification);
     imageLabel.setColour(juce::Label::textColourId,
@@ -1760,7 +1715,7 @@ public:
 
     addAndMakeVisible(selectImageBtn);
     selectImageBtn.setButtonText(L"选择新图片");
-    // Match ComboBox idle background for consistency
+    // 与 ComboBox 空闲背景保持一致
     selectImageBtn.setColour(juce::TextButton::buttonColourId,
                              juce::Colours::black.withAlpha(0.15f));
     selectImageBtn.onClick = [this]() { selectImage(); };
@@ -1771,7 +1726,6 @@ public:
                             juce::Colours::black.withAlpha(0.15f));
     clearImageBtn.onClick = [this]() { clearImage(); };
 
-    // Recent Images
     addAndMakeVisible(recentImagesLabel);
     recentImagesLabel.setText(L"历史记录:", juce::dontSendNotification);
     recentImagesLabel.setColour(juce::Label::textColourId,
@@ -1782,7 +1736,6 @@ public:
     historyViewport.setViewedComponent(&recentImagesContainer);
     historyViewport.setScrollBarsShown(false, false);
 
-    // Use Vector Icons
     addAndMakeVisible(vectorLeftBtn);
     vectorLeftBtn.onClick = [this] {
       historyViewport.setViewPosition(
@@ -1797,8 +1750,6 @@ public:
 
     refreshRecentImages();
 
-    // Blur mode
-    // Blur mode
     addAndMakeVisible(blurModeLabel);
     blurModeLabel.setText(L"图片效果:", juce::dontSendNotification);
     blurModeLabel.setColour(juce::Label::textColourId,
@@ -1807,11 +1758,10 @@ public:
     addAndMakeVisible(blurModeCombo);
     blurModeCombo.addItem(L"无", 1);
     blurModeCombo.addItem(L"高斯模糊", 2);
-    // Mica removed as per request
     blurModeCombo.addItem(L"Aero (毛玻璃)", 3);
     blurModeCombo.addItem(L"Acrylic (亚克力)", 4);
 
-    // Map MaterialType to Combo ID
+    // MaterialType 编号与 ComboBox 选项 ID 保持一致
     int selectedId = 1;
     switch (background.getMaterialType()) {
     case BackgroundComponent::MaterialType::GaussianBlur:
@@ -1853,9 +1803,7 @@ public:
         listener->backgroundSettingsChanged(false);
     };
 
-    // Blur radius
     addAndMakeVisible(blurRadiusLabel);
-    // Blur radius
     addAndMakeVisible(blurRadiusLabel);
     blurRadiusLabel.setText(L"效果强度:", juce::dontSendNotification);
     blurRadiusLabel.setColour(juce::Label::textColourId,
@@ -1867,15 +1815,14 @@ public:
                               juce::dontSendNotification);
     blurRadiusSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 24);
 
-    // Use onDragEnd for heavy processing (Blur)
-    blurRadiusSlider.onValueChange = nullptr; // Clear if set elsewhere
+    // 模糊处理较重，只在拖动结束后应用
+    blurRadiusSlider.onValueChange = nullptr; // 清除可能存在的即时回调
     blurRadiusSlider.onDragEnd = [this]() {
       background.setBlurRadius((int)blurRadiusSlider.getValue());
       if (listener)
-        listener->backgroundSettingsChanged(false); // Refresh UI without reload
+        listener->backgroundSettingsChanged(false); // 刷新 UI，不重新加载图片
     };
 
-    // Overlay opacity
     addAndMakeVisible(overlayLabel);
     overlayLabel.setText(L"遮罩不透明度:", juce::dontSendNotification);
     overlayLabel.setColour(juce::Label::textColourId,
@@ -1887,22 +1834,20 @@ public:
                            juce::dontSendNotification);
     overlaySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 24);
 
-    // Keep onValueChange for fast UI updates (Opacity)
+    // 遮罩透明度只触发重绘，可即时响应
     overlaySlider.onValueChange = [this]() {
       background.setOverlayOpacity((float)overlaySlider.getValue());
       if (listener)
-        listener->backgroundSettingsChanged(false); // Only repaint, no reload
+        listener->backgroundSettingsChanged(false); // 只重绘，不重新加载
     };
     overlaySlider.onDragEnd = nullptr;
 
-    // Monet Toggle
     addAndMakeVisible(monetToggle);
     monetToggle.setButtonText(L"莫奈取色 (自动主题色)");
     monetToggle.setColour(juce::ToggleButton::textColourId,
                           juce::Colours::white);
 
-    // Validate if Monet can be enabled
-    // FIX: Check settings path first, because background might be loading
+    // 背景可能仍在加载，因此同时检查已加载图像和设置中的路径
     bool hasBG = background.hasBackgroundImage() ||
                  getAppSettings().getBackgroundImagePath().isNotEmpty();
     monetToggle.setEnabled(hasBG);
@@ -1913,11 +1858,11 @@ public:
     monetToggle.onClick = [this]() {
       bool enabled = monetToggle.getToggleState();
       getAppSettings().setMonetEnabled(enabled);
-      getAppSettings().save(); // Explicit save
+      getAppSettings().save(); // 立即持久化 Monet 开关
       paletteSelector.setVisible(enabled);
 
       if (enabled) {
-        background.loadAsync(true); // FORCE Monet extraction
+        background.loadAsync(true); // 强制重新提取 Monet 调色板
       } else {
         background.setCurrentAccentColor(juce::Colour(0xFF0078D4));
       }
@@ -1926,19 +1871,16 @@ public:
         listener->backgroundSettingsChanged(false);
     };
 
-    // Palette Preview
     addAndMakeVisible(paletteSelector);
     paletteSelector.setPalette(background.getPalette());
-    // Sync target color for checkmark (avoids mid-transition mismatch)
+    // 使用目标色同步选中标记，避免过渡中间色导致不匹配
     paletteSelector.setSelectedColor(background.getTargetAccentColor());
     paletteSelector.setVisible(getAppSettings().getMonetEnabled());
     paletteSelector.onColorSelected = [this](juce::Colour c) {
-      // User manually picked a color from palette
       background.setCurrentAccentColor(c);
-      paletteSelector.setSelectedColor(c); // Update UI checkmark
+      paletteSelector.setSelectedColor(c); // 更新选中标记
     };
 
-    // Sequential Icon Toggle
     addAndMakeVisible(sequentialIconToggle);
     sequentialIconToggle.setButtonText(L"更换原生图标样式");
     sequentialIconToggle.setColour(juce::ToggleButton::textColourId,
@@ -1949,12 +1891,11 @@ public:
     sequentialIconToggle.onClick = [this]() {
       getAppSettings().setSequentialIconListStyle(
           sequentialIconToggle.getToggleState());
-      // Notify listener to repaint - NO effect re-application needed here
+      // 只需通知重绘，不需要重新应用背景效果
       if (listener)
         listener->backgroundSettingsChanged(false);
     };
 
-    // Remember Window Toggle
     addAndMakeVisible(rememberWindowToggle);
     rememberWindowToggle.setButtonText(L"记住窗口位置和大小");
     rememberWindowToggle.setColour(juce::ToggleButton::textColourId,
@@ -1967,7 +1908,6 @@ public:
       getAppSettings().save();
     };
 
-    // Current image path
     addAndMakeVisible(currentPathLabel);
     currentPathLabel.setColour(juce::Label::textColourId,
                                juce::Colours::white.withAlpha(0.5f));
@@ -1996,7 +1936,6 @@ public:
     titleLabel.setBounds(area.removeFromTop(40));
     area.removeFromTop(gap);
 
-    // Image row
     auto imageRow = area.removeFromTop(rowHeight);
     imageLabel.setBounds(imageRow.removeFromLeft(labelWidth));
     clearImageBtn.setBounds(imageRow.removeFromRight(70));
@@ -2004,7 +1943,6 @@ public:
     selectImageBtn.setBounds(imageRow);
     area.removeFromTop(gap);
 
-    // Recent images row
     recentImagesLabel.setBounds(area.removeFromTop(20));
     auto historyRow = area.removeFromTop(44);
     vectorLeftBtn.setBounds(historyRow.removeFromLeft(44));
@@ -2012,23 +1950,19 @@ public:
     historyViewport.setBounds(historyRow.reduced(2, 0));
     area.removeFromTop(gap);
 
-    // Current path
     currentPathLabel.setBounds(area.removeFromTop(20));
     area.removeFromTop(gap);
 
-    // Blur mode row
     auto blurRow = area.removeFromTop(rowHeight);
     blurModeLabel.setBounds(blurRow.removeFromLeft(labelWidth));
     blurModeCombo.setBounds(blurRow);
     area.removeFromTop(gap);
 
-    // Blur radius row
     auto radiusRow = area.removeFromTop(rowHeight);
     blurRadiusLabel.setBounds(radiusRow.removeFromLeft(labelWidth));
     blurRadiusSlider.setBounds(radiusRow);
     area.removeFromTop(gap);
 
-    // Overlay row
     auto overlayRow = area.removeFromTop(rowHeight);
     overlayLabel.setBounds(overlayRow.removeFromLeft(labelWidth));
     overlaySlider.setBounds(overlayRow);
@@ -2039,11 +1973,9 @@ public:
     paletteSelector.setBounds(area.removeFromTop(44).reduced(20, 0));
     area.removeFromTop(10);
 
-    // Sequential Icon Toggle
     sequentialIconToggle.setBounds(
         area.removeFromTop(24).reduced(labelWidth, 0));
 
-    // Remember Window Toggle
     rememberWindowToggle.setBounds(
         area.removeFromTop(24).reduced(labelWidth, 0));
 
@@ -2061,7 +1993,7 @@ public:
     bool hasBG = background.hasBackgroundImage();
     monetToggle.setEnabled(hasBG);
 
-    // Auto-disable Monet if image is gone
+    // 背景清空后自动关闭 Monet
     if (getAppSettings().getMonetEnabled() && !hasBG) {
       getAppSettings().setMonetEnabled(false);
       monetToggle.setToggleState(false, juce::dontSendNotification);
@@ -2069,8 +2001,7 @@ public:
     } else {
       paletteSelector.setVisible(getAppSettings().getMonetEnabled());
       paletteSelector.setPalette(background.getPalette());
-      // setPalette() refreshes the palette list; restore the selected accent
-      // after the list update.
+      // setPalette() 会刷新列表，之后恢复当前目标色选中状态
       paletteSelector.setSelectedColor(background.getTargetAccentColor());
     }
 
@@ -2180,8 +2111,7 @@ private:
         "bg_" + juce::String(juce::Time::currentTimeMillis()) + ".png";
     auto uniqueFile = settingsDir.getChildFile(uniqueName);
 
-    // Optimization: Resize huge images to max 2560x1440 before saving
-    // This prevents 20MB PNG files and slow loading
+    // 保存前缩放超大图片，避免 PNG 过大和加载变慢
     juce::Image imageToSave = croppedImage;
     int maxW = 2560;
     int maxH = 1440;
@@ -2239,7 +2169,7 @@ private:
     recentImagesContainer.removeAllChildren();
     recentButtons.clear();
 
-    // Validating directory existence
+    // 确保背景缓存目录存在
     auto settingsDir =
         UserSettings::getSettingsDirectory().getChildFile("Backgrounds");
     if (!settingsDir.exists())
@@ -2248,14 +2178,14 @@ private:
     auto files =
         settingsDir.findChildFiles(juce::File::findFiles, false, "bg_*.png");
 
-    // Sort by modification time (Newest first)
+    // 按修改时间倒序排列
     std::sort(files.begin(), files.end(),
               [](const juce::File &a, const juce::File &b) {
                 return a.getLastModificationTime() >
                        b.getLastModificationTime();
               });
 
-    int limit = juce::jmin((int)files.size(), 10); // Increased limit to 10
+    int limit = juce::jmin((int)files.size(), 10); // 最多显示 10 张
     int w = 70, h = 40, gap = 8;
 
     int totalWidth = limit * (w + gap);
@@ -2270,7 +2200,7 @@ private:
         getAppSettings().setBackgroundImagePath(f.getFullPathName());
         getAppSettings().save();
         background.startImageLoadJob(f.getFullPathName(),
-                                     true); // FORCE Monet refresh
+                                     true); // 重新提取 Monet 调色板
         updateCurrentPath();
         if (listener)
           listener->backgroundSettingsChanged(true);
@@ -2278,11 +2208,7 @@ private:
       recentImagesContainer.addAndMakeVisible(btn);
     }
 
-    // Button visibility: Always show if there are recent items (user
-    // preference)
-
-    // Initially we might not know viewport width if not resized, but buttons
-    // should exist
+    // 只要存在历史图片就显示滚动按钮
     vectorLeftBtn.setVisible(limit > 0);
     vectorRightBtn.setVisible(limit > 0);
   }
@@ -2322,22 +2248,22 @@ private:
   std::unique_ptr<CropDialog> cropDialog;
   std::unique_ptr<juce::FileChooser> fileChooser;
 
-  BackgroundComponent &background; // 背景组件引用
-  Listener *listener;              // 监听器指针
-  juce::Label titleLabel, imageLabel, recentImagesLabel, blurModeLabel, // 标签
-      blurRadiusLabel, overlayLabel, currentPathLabel;                  // 标签
-  juce::TextButton selectImageBtn, clearImageBtn, forceExitBtn;         // 按钮
+  BackgroundComponent &background;
+  Listener *listener;
+  juce::Label titleLabel, imageLabel, recentImagesLabel, blurModeLabel,
+      blurRadiusLabel, overlayLabel, currentPathLabel;
+  juce::TextButton selectImageBtn, clearImageBtn, forceExitBtn;
   VectorIconButton vectorLeftBtn{"<", true}, vectorRightBtn{">", false};
-  HorizontalViewport historyViewport;                 // Use new custom viewport
-  juce::Component recentImagesContainer;              // 最近图片容器
-  juce::OwnedArray<ImagePreviewButton> recentButtons; // 最近图片按钮数组
-  juce::ComboBox blurModeCombo;                       // 模糊模式下拉框
-  juce::Slider blurRadiusSlider, overlaySlider; // 模糊半径滑块,遮罩不透明度滑块
-  juce::ToggleButton monetToggle;               // 莫奈取色开关
-  PaletteSelector paletteSelector;              // 调色板选择器
-  juce::String pendingImagePath;                // 待处理的图片路径
-  juce::ToggleButton sequentialIconToggle;      // New toggle for icon style
-  juce::ToggleButton rememberWindowToggle;      // Remember window bounds toggle
+  HorizontalViewport historyViewport;
+  juce::Component recentImagesContainer;
+  juce::OwnedArray<ImagePreviewButton> recentButtons;
+  juce::ComboBox blurModeCombo;
+  juce::Slider blurRadiusSlider, overlaySlider;
+  juce::ToggleButton monetToggle;
+  PaletteSelector paletteSelector;
+  juce::String pendingImagePath;
+  juce::ToggleButton sequentialIconToggle;
+  juce::ToggleButton rememberWindowToggle;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BackgroundSettingsDialog)
 };

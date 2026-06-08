@@ -156,16 +156,16 @@ public:
             juce::AlertWindow::QuestionIcon, L"未保存的更改", message,
             L"保存并退出", L"不保存", L"取消", this);
 
-        if (result == 1) { // Save
+        if (result == 1) {
           if (content->savePlaylist()) {
             JUCEApplication::getInstance()->systemRequestedQuit();
           } else {
-            // User cancelled SaveAs or save failed
+            // 用户取消另存为或保存失败时留在窗口内。
             isClosing = false;
           }
-        } else if (result == 2) { // No (Don't Save)
+        } else if (result == 2) {
           JUCEApplication::getInstance()->systemRequestedQuit();
-        } else { // Cancel (0)
+        } else {
           isClosing = false;
         }
       } else {

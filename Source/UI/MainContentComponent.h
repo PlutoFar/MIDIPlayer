@@ -1,43 +1,41 @@
 #pragma once
 
-// Forward-declare Registry & Shell APIs needed for file association.
-// Do NOT include <windows.h> here - it conflicts with Win11Helpers.h
-// (HWND redefinition) and pollutes the namespace with min/max/BYTE macros
-// that break BackgroundComponent.h.
-// Win11Helpers.h already declares: HWND, HRESULT, DWORD, BOOL.
+// 文件关联只需要 Registry/Shell 的窄接口声明。
+// 不在此处包含 <windows.h>：它会与 Win11Helpers.h 的 HWND 声明冲突，
+// 还会把 min/max/BYTE 等宏带进来，影响 BackgroundComponent.h。
+// Win11Helpers.h 已声明 HWND、HRESULT、DWORD、BOOL。
 #if JUCE_WINDOWS
 extern "C" {
-// Types needed for Registry APIs
-// (DWORD will also be declared in Win11Helpers.h - MSVC allows identical
-// redefs)
+// Registry API 所需类型。
+// DWORD 也会在 Win11Helpers.h 中声明；MSVC 允许相同 typedef 重复出现。
 typedef unsigned long DWORD;
 typedef void *HKEY;
 typedef unsigned char BYTE;
 typedef BYTE *LPBYTE;
 
-// Registry handle constants
+// Registry 句柄常量。
 #ifndef HKEY_CURRENT_USER
 #define HKEY_CURRENT_USER ((HKEY)(unsigned long long)0x80000001)
 #endif
 
-// Registry access rights
+// Registry 访问权限。
 #ifndef KEY_READ
 #define KEY_READ 0x20019
 #define KEY_WRITE 0x20006
 #endif
 
-// Registry options & types
+// Registry 选项与类型。
 #ifndef REG_SZ
 #define REG_OPTION_NON_VOLATILE 0x00000000
 #define REG_SZ 1
 #endif
 
-// Error code
+// WinAPI 成功返回码。
 #ifndef ERROR_SUCCESS
 #define ERROR_SUCCESS 0L
 #endif
 
-// Registry functions (from advapi32.dll)
+// Registry 函数，来自 advapi32.dll。
 __declspec(dllimport) long __stdcall
 RegOpenKeyExW(HKEY hKey, const wchar_t *lpSubKey, DWORD ulOptions,
               DWORD samDesired, HKEY *phkResult);
@@ -58,80 +56,7 @@ RegDeleteValueW(HKEY hKey, const wchar_t *lpValueName);
 __declspec(dllimport) long __stdcall RegDeleteTreeW(HKEY hKey,
                                                     const wchar_t *lpSubKey);
 
-// Shell notification (from shell32.dll)
-#ifndef SHCNE_ASSOCCHANGED
-#define SHCNE_ASSOCCHANGED 0x08000000L
-#define SHCNF_IDLIST 0x0000
-#endif
-__declspec(dllimport) void __stdcall SHChangeNotify(long wEventId,
-                                                    unsigned int uFlags,
-                                                    const void *dwItem1,
-                                                    const void *dwItem2);
-}
-#endif
-
-#include "../AudioEngine/AudioEngine.h"
-#pragma once
-
-// Forward-declare Registry & Shell APIs needed for file association.
-// Do NOT include <windows.h> here - it conflicts with Win11Helpers.h
-// (HWND redefinition) and pollutes the namespace with min/max/BYTE macros
-// that break BackgroundComponent.h.
-// Win11Helpers.h already declares: HWND, HRESULT, DWORD, BOOL.
-#if JUCE_WINDOWS
-extern "C" {
-// Types needed for Registry APIs
-// (DWORD will also be declared in Win11Helpers.h - MSVC allows identical
-// redefs)
-typedef unsigned long DWORD;
-typedef void *HKEY;
-typedef unsigned char BYTE;
-typedef BYTE *LPBYTE;
-
-// Registry handle constants
-#ifndef HKEY_CURRENT_USER
-#define HKEY_CURRENT_USER ((HKEY)(unsigned long long)0x80000001)
-#endif
-
-// Registry access rights
-#ifndef KEY_READ
-#define KEY_READ 0x20019
-#define KEY_WRITE 0x20006
-#endif
-
-// Registry options & types
-#ifndef REG_SZ
-#define REG_OPTION_NON_VOLATILE 0x00000000
-#define REG_SZ 1
-#endif
-
-// Error code
-#ifndef ERROR_SUCCESS
-#define ERROR_SUCCESS 0L
-#endif
-
-// Registry functions (from advapi32.dll)
-__declspec(dllimport) long __stdcall
-RegOpenKeyExW(HKEY hKey, const wchar_t *lpSubKey, DWORD ulOptions,
-              DWORD samDesired, HKEY *phkResult);
-__declspec(dllimport) long __stdcall
-RegCreateKeyExW(HKEY hKey, const wchar_t *lpSubKey, DWORD Reserved,
-                wchar_t *lpClass, DWORD dwOptions, DWORD samDesired,
-                void *lpSecurityAttributes, HKEY *phkResult,
-                DWORD *lpdwDisposition);
-__declspec(dllimport) long __stdcall
-RegSetValueExW(HKEY hKey, const wchar_t *lpValueName, DWORD Reserved,
-               DWORD dwType, const BYTE *lpData, DWORD cbData);
-__declspec(dllimport) long __stdcall
-RegQueryValueExW(HKEY hKey, const wchar_t *lpValueName, DWORD *lpReserved,
-                 DWORD *lpType, LPBYTE lpData, DWORD *lpcbData);
-__declspec(dllimport) long __stdcall RegCloseKey(HKEY hKey);
-__declspec(dllimport) long __stdcall
-RegDeleteValueW(HKEY hKey, const wchar_t *lpValueName);
-__declspec(dllimport) long __stdcall RegDeleteTreeW(HKEY hKey,
-                                                    const wchar_t *lpSubKey);
-
-// Shell notification (from shell32.dll)
+// Shell 通知函数，来自 shell32.dll。
 #ifndef SHCNE_ASSOCCHANGED
 #define SHCNE_ASSOCCHANGED 0x08000000L
 #define SHCNF_IDLIST 0x0000
@@ -160,6 +85,8 @@ public:
         : ThreadWithProgressWindow(L"正在导出高保真音频...", true, true), engine(e), file(f), settings(s) {}
 
     void run() override {
+        // 离线导出在工作线程中驱动 AudioEngine：上报进度并把取消请求转交给渲染循环。
+        // UI 线程只负责模态进度窗口和结果提示，避免长时间阻塞消息循环。
         bool success = engine.runOfflineExport(
             file, settings,
             [this](float p) { setProgress(p); },
@@ -203,7 +130,7 @@ public:
       维护要点：
       - 该线程独立于消息线程运行。
       - 它定期检查 lastHeartbeatTime（由计时器回调在主线程更新）。
-      - 如果发现 3 秒钟内没有心跳，判定 UI 冻结。
+      - 超过 5 秒记录卡顿日志，超过 30 秒触发恢复流程。
       - 恢复机制：紧急停止 BackgroundComponent
      的高负载操作，并向消息队列发送异步恢复信号。
   */
@@ -218,7 +145,6 @@ public:
     setWantsKeyboardFocus(true);
     loadSettings();
 
-    // Background (covers entire window)
     addAndMakeVisible(background);
     background.toBack();
     background.onAccentColorChanged =
@@ -228,18 +154,15 @@ public:
             safeThis->onAccentColorChanged(c);
         };
 
-    // Navigation sidebar (collapsible)
     addAndMakeVisible(navigation);
     navigation.setListener(this);
 
-    // Page title - uses dedicated title font
     addAndMakeVisible(pageTitle);
     pageTitle.setText(L"乐器库", juce::dontSendNotification);
     pageTitle.setFont(fluentLookAndFeel.getDefaultFont(26.0f, true));
     pageTitle.setColour(juce::Label::textColourId,
                         fluentLookAndFeel.getColors().textPrimary);
 
-    // Plugin controls with tooltips
     addAndMakeVisible(pluginSelector);
     pluginSelector.setTextWhenNothingSelected(L"选择乐器...");
     pluginSelector.addListener(this);
@@ -258,30 +181,25 @@ public:
     openPluginBtn.setEnabled(false);
     openPluginBtn.setTooltip(L"在新窗口中打开插件界面");
 
-    // Start disabled until plugin loads
+    // 插件加载成功前禁止卸载操作。
     unloadBtn.setEnabled(false);
 
-    // Scan progress indicator
     addChildComponent(scanSpinner);
 
-    // Content area label
     addAndMakeVisible(contentLabel);
     contentLabel.setFont(fluentLookAndFeel.getDefaultFont(16.0f));
     contentLabel.setColour(juce::Label::textColourId,
                            fluentLookAndFeel.getColors().textSecondary);
-    contentLabel.setInterceptsMouseClicks(false, false); // Let clicks through
+    contentLabel.setInterceptsMouseClicks(false, false);
     contentLabel.setJustificationType(juce::Justification::centred);
     contentLabel.setText(L"选择一个 VST3 乐器插件开始演奏",
                          juce::dontSendNotification);
 
-    // Playlist
     addChildComponent(playlistPanel);
     playlistPanel.setListener(this);
 
-    // === Transport Bar ===
     addAndMakeVisible(transportBar);
-    transportBar.setInterceptsMouseClicks(
-        false, true); // Allow clicks to pass through empty areas if needed
+    transportBar.setInterceptsMouseClicks(false, true);
 
     // 嵌入式 Tooltip（最后添加，确保在最上层）
     addAndMakeVisible(embeddedTooltip);
@@ -292,8 +210,7 @@ public:
     trackLabel.setFont(fluentLookAndFeel.getDefaultFont(14.0f, true));
     trackLabel.setColour(juce::Label::textColourId,
                          fluentLookAndFeel.getColors().textPrimary);
-    trackLabel.setInterceptsMouseClicks(
-        true, false); // Allow clicks for hover, forward later
+    trackLabel.setInterceptsMouseClicks(true, false);
 
     addAndMakeVisible(timeLabel);
     timeLabel.setText("0:00 / 0:00", juce::dontSendNotification);
@@ -306,7 +223,6 @@ public:
     progressSlider.addListener(this);
     progressSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
     progressSlider.setPopupDisplayEnabled(true, true, this);
-    // Allow clicking on track to jump
     progressSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     progressSlider.setVelocityBasedMode(false);
     progressSlider.setScrollWheelEnabled(false);
@@ -316,22 +232,19 @@ public:
       return formatTime((int)(v * dur / sr));
     };
 
-    // Transport buttons (icon buttons)
     setupIconButton(prevBtn, L"\uE892", L"上一首 (←)");
     setupIconButton(playBtn, L"\uE768", L"播放/暂停 (空格)");
     setupIconButton(nextBtn, L"\uE893", L"下一首 (→)");
     setupIconButton(stopBtn, L"\uE71A", L"停止");
 
-    // Loop Mode
     addAndMakeVisible(loopModeBtn);
     loopModeBtn.addListener(this);
-    loopModeBtn.setTooltip(L"播放模式: 连续播放"); // Initial tooltip
+    loopModeBtn.setTooltip(L"播放模式: 连续播放");
 
     addAndMakeVisible(exportBtn);
     exportBtn.addListener(this);
     exportBtn.setTooltip(L"离线渲染导出高保真音频");
 
-    // Volume
     addAndMakeVisible(volumeBtn);
     volumeBtn.addListener(this);
     volumeBtn.setTooltip(L"点击切换静音");
@@ -339,7 +252,7 @@ public:
     addAndMakeVisible(volumeSlider);
 
     volumeSlider.setRange(0.0, 1.0);
-    // Restore volume from settings
+    // 启动时同步保存的主音量到 UI 与 AudioEngine。
     float savedVol = getAppSettings().getMasterVolume();
     volumeSlider.setValue(savedVol, juce::dontSendNotification);
     engine.setMasterVolume(savedVol);
@@ -353,22 +266,21 @@ public:
 
     updateLoopButtonTooltip();
 
-    // Background mouse listener for deselecting
+    // 背景点击用于取消播放列表选择。
     background.addMouseListener(this, false);
 
-    // Progress slider starts disabled until a track is loaded
+    // 曲目加载前进度条不可操作。
     progressSlider.setEnabled(false);
 
     startTimerHz(30);
     updatePluginList();
 
-    // Apply saved accent color if any
     auto savedColor =
         juce::Colour::fromString(getAppSettings().getThemeAccentColor());
     fluentLookAndFeel.updateAccentColor(savedColor);
     fluentLookAndFeel.updateAccentColor(savedColor);
 
-    // Apply Windows 11 style and handle audio initialization alerts
+    // 应用 Windows 11 窗口样式，并统一调度启动期音频设备提示。
     runLater(150, [](MainContentComponent &self) {
       if (auto *topLevel = self.getTopLevelComponent())
         Win11Helpers::applyWin11Style(topLevel);
@@ -379,7 +291,7 @@ public:
         return;
 
       if (self.engine.isFirstRunAudio()) {
-        // First run - no audio settings found. Guide user to settings.
+        // 首次运行且没有音频设置时，引导用户配置输出设备。
         juce::AlertWindow::showOkCancelBox(
             juce::AlertWindow::QuestionIcon, L"首次运行 - 音频设置",
             L"检测到当前未配置音频输出设备。为了正确加载乐器插件，建议"
@@ -392,13 +304,13 @@ public:
                     safeThis->showAudioSettings();
             }));
       } else if (!self.engine.hasAudioDevice()) {
-        // Not first run, but no audio device available at all
+        // 非首次运行但当前没有可用音频设备。
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon, L"音频设备不可用",
             L"未检测到可用的音频输出设备，请检查您的音频设备是否正常工作。"
             L"\n\n您可以在侧栏「设置」中手动配置音频输出。");
       } else if (self.engine.wasDeviceRestoredWithFallback()) {
-        // Saved device was missing at startup, fell back to default
+        // 保存的设备缺失时已回退到系统默认设备。
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::InfoIcon, L"音频设备已重置",
             L"由于上次使用的音频设备未找到，已自动切换到系统的默认播放设备。");
@@ -465,14 +377,12 @@ public:
     auto currentTime = juce::Time::getMillisecondCounter();
     bool isPlaying = engine.getMidiPlayer().getPlaying();
 
-    // Enable/disable progress slider based on track state
     bool hasTrack = player.hasSequence();
     if (progressSlider.isEnabled() != hasTrack) {
       progressSlider.setEnabled(hasTrack);
     }
 
-    // 1. Update Progress (only if not dragging and NOT in "Confirm Seek" grace
-    // period)
+    // 拖动或刚完成 seek 时暂缓刷新，避免进度条被计时器回拉。
     if (!isUserDraggingProgress &&
         (currentTime - lastSeekRequestTime.load() > 250)) {
       double pos = engine.getMidiPlayer().getPositionInSamples();
@@ -490,7 +400,6 @@ public:
       }
     }
 
-    // Update play button icon based on state
     if (isPlaying != lastPlayingState) {
       lastPlayingState = isPlaying;
       repaint();
@@ -507,19 +416,19 @@ public:
     // 只在 timerCallback 执行时间异常时输出完成日志，避免每次都输出导致日志爆炸
     auto tcEndTime = juce::Time::getMillisecondCounter();
     auto tcDuration = tcEndTime - now;
-    if (tcDuration > 20) { // 超过20ms视为慢速执行
+    if (tcDuration > 20) { // 超过 20ms 视为慢速执行。
       LOG_DEBUG("[FREEZE_DIAG] TC completed (slow: " +
                 juce::String(tcDuration) + "ms)");
     }
 
-    // 根据插件加载状态禁用/启用交通控制按钮
+    // 根据插件加载状态启用/禁用播放控制按钮。
     bool hasPlugin = engine.getVst3Instance() != nullptr;
     if (playBtn.isEnabled() != hasPlugin) {
       playBtn.setEnabled(hasPlugin);
       stopBtn.setEnabled(hasPlugin);
       prevBtn.setEnabled(hasPlugin);
       nextBtn.setEnabled(hasPlugin);
-      // progressSlider 只有在有插件且有曲目时才启用
+      // progressSlider 只有在有插件且有曲目时才启用。
       progressSlider.setEnabled(hasPlugin && hasTrack);
     }
 
@@ -533,12 +442,8 @@ public:
       timeLabel.setText("0:00 / 0:00", juce::dontSendNotification);
     }
 
-    // Handle playback resumption with debouncing
+    // seekTo 已改为异步，这里只保留很短的恢复播放缓冲，避免 UI 抖动。
     if (!isExporting && pendingResumePlayback) {
-      // We don't need a heavy debounce here anymore because seekTo is now async
-      // and doesn't block. We can resume pretty much immediately or keep a
-      // small buffer. Keeping a small delay is still good for UI
-      // feel/smoothing.
       if (juce::Time::getMillisecondCounter() - lastSeekRequestTime > 50) {
         engine.getMidiPlayer().setPlaying(true);
         pendingResumePlayback = false;
@@ -552,32 +457,25 @@ public:
       repaint();
     }
 
-    // Update watchdog heartbeat here (in Message Thread) instead of paint()
-    // This ensures detection works even if window is minimized or covered.
-    // lastHeartbeatTime.store(juce::Time::getMillisecondCounter()); // MOVED
-    // to top
   }
 
   void handleFreezeRecovery() {
     LOG_DEBUG("!!! UI WATCHDOG TRIGGERED RECOVERY !!!");
-    // Prevent multiple dialogs stacking up
+    // 防止恢复弹窗重复堆叠。
     if (isWatchdogDialogActive.load())
       return;
 
     isWatchdogDialogActive.store(true);
 
-    // 1. Emergency Reset Background
+    // 紧急降载 BackgroundComponent，优先恢复消息线程响应。
     background.emergencyReset();
 
-    // 2. Resume playback if it was supposed to be playing
     if (lastPlayingState || engine.getMidiPlayer().getPlaying()) {
       engine.getMidiPlayer().setPlaying(true);
     }
 
-    // 3. Force Repaint
     repaint();
 
-    // 4. Notify User
     juce::AlertWindow::showMessageBoxAsync(
         juce::AlertWindow::WarningIcon, L"界面响应恢复",
         L"检测到界面长时间未响应，已自动尝试恢复。", L"OK", nullptr,
@@ -593,15 +491,12 @@ public:
     SCOPED_TIMER_SLOW("MainContentComponent::paint", 10);
     auto &colors = fluentLookAndFeel.getColors();
 
-    // Transport bar background
     g.setColour(colors.transportBackground);
     g.fillRect(transportBar.getBounds());
 
-    // Transport bar top border
     g.setColour(colors.cardBorder);
     g.drawHorizontalLine(transportBar.getY(), 0.0f, (float)getWidth());
 
-    // Drag-over highlight
     if (isDragOver) {
       g.setColour(colors.accentPrimary.withAlpha(0.15f));
       g.fillAll();
@@ -611,27 +506,22 @@ public:
   }
 
   void paintOverChildren(juce::Graphics &g) override {
-    // auto &colors = lookAndFeel.getColors(); // Removed unused variable
     bool isPlaying = engine.getMidiPlayer().getPlaying();
 
-    // Draw toolbar button icons
-    drawIconButton(g, scanBtn, L"\uE9A1");       // Search/Scan
-    drawIconButton(g, unloadBtn, L"\uE74D");     // Delete
-    drawIconButton(g, openPluginBtn, L"\uE8A7"); // OpenPane
+    drawIconButton(g, scanBtn, L"\uE9A1");       // 搜索/扫描
+    drawIconButton(g, unloadBtn, L"\uE74D");     // 删除
+    drawIconButton(g, openPluginBtn, L"\uE8A7"); // 打开窗格
 
-    // Transport buttons
     drawIconButton(g, prevBtn, L"\uE892");
     drawPlayButton(g, playBtn, isPlaying);
     drawIconButton(g, nextBtn, L"\uE893");
     drawIconButton(g, stopBtn, L"\uE71A");
 
-    // Volume icon
     float vol = (float)volumeSlider.getValue();
     juce::String volIcon =
         vol > 0.5f ? L"\uE995" : (vol > 0 ? L"\uE994" : L"\uE992");
     drawIconButton(g, volumeBtn, volIcon);
 
-    // Loop mode icon
     juce::String loopIcon;
     bool isSequential = false;
     switch (playlist.getPlaybackMode()) {
@@ -639,13 +529,13 @@ public:
       isSequential = true;
       break;
     case PlaylistManager::PlaybackMode::LoopList:
-      loopIcon = L"\uE8EE"; // RepeatAll
+      loopIcon = L"\uE8EE"; // 全部循环
       break;
     case PlaylistManager::PlaybackMode::LoopSingle:
-      loopIcon = L"\uE8ED"; // RepeatOne
+      loopIcon = L"\uE8ED"; // 单曲循环
       break;
     case PlaylistManager::PlaybackMode::Shuffle:
-      loopIcon = L"\uE8B1"; // Shuffle
+      loopIcon = L"\uE8B1"; // 随机播放
       break;
     }
 
@@ -667,41 +557,34 @@ public:
       g.restoreState();
     }
 
-    // Draw toasts always on top
     modeToast.toFront(false);
   }
 
   void resized() override {
     SCOPED_TIMER_SLOW("MainContentComponent::resized", 10);
-    triggerAsyncUpdate(); // Throttled layout
+    triggerAsyncUpdate(); // 合并频繁布局请求。
   }
 
   void handleAsyncUpdate() override {
     SCOPED_TIMER_ALWAYS("MainContentComponent::performLayout");
     auto area = getLocalBounds();
 
-    // Background covers everything
     background.setBounds(area);
 
-    // Sidebar
     int navWidth = navigation.getPreferredWidth();
     navigation.setBounds(area.removeFromLeft(navWidth));
 
-    // Transport bar
     int transportHeight = 80;
     auto transportArea = area.removeFromBottom(transportHeight);
     transportBar.setBounds(transportArea);
     layoutTransportBar(transportArea);
 
-    // Content area
     int padding = 24;
     auto content = area.reduced(padding, 16);
 
-    // Header row
     auto header = content.removeFromTop(48);
     pageTitle.setBounds(header.removeFromLeft(180));
 
-    // Toolbar with icon buttons
     int btnSize = 36;
     int comboWidth = 200;
 
@@ -716,7 +599,6 @@ public:
 
     content.removeFromTop(12);
 
-    // Main content
     if (currentPage == "playlist") {
       playlistPanel.setVisible(true);
       contentLabel.setVisible(false);
@@ -731,43 +613,34 @@ public:
   void layoutTransportBar(juce::Rectangle<int> area) {
     area = area.reduced(20, 8);
 
-    // Progress bar at top (needs enough height for thumb)
     progressSlider.setBounds(area.removeFromTop(24));
     area.removeFromTop(4);
 
-    // Control row
     auto controlRow = area;
     int btnSize = 36;
-    int playBtnSize = 44; // Keep it square
+    int playBtnSize = 44; // 保持播放按钮为正方形。
 
-    // Volume right (reserve this space first)
     auto volumeArea = controlRow.removeFromRight(180);
-    // Loop button and Volume button layout
     loopModeBtn.setBounds(volumeArea.removeFromLeft(btnSize).reduced(2));
     volumeBtn.setBounds(volumeArea.removeFromLeft(btnSize).reduced(2));
 
-    volumeSlider.setBounds(
-        volumeArea.reduced(4, 4)); // Less vertical padding for taller slider
+    volumeSlider.setBounds(volumeArea.reduced(4, 4));
 
-    // Transport buttons center (calculate center space needed)
     int gap = 8;
     int controlsWidth = btnSize * 3 + playBtnSize + gap * 3;
 
-    // Calculate available space for track info
-    // Leave space for centered controls (controlsWidth + some padding)
+    // 为居中的播放控制预留空间后，动态分配左侧曲目信息宽度。
     int minTrackWidth = 200;
-    int centerPadding = 40; // Padding around center controls
+    int centerPadding = 40;
     int availableForTrack =
         (controlRow.getWidth() - controlsWidth) / 2 - centerPadding;
     int trackInfoWidth = juce::jmax(minTrackWidth, availableForTrack);
 
-    // Track info left - responsive width
     auto leftInfo = controlRow.removeFromLeft(trackInfoWidth);
     trackLabel.setBounds(leftInfo.removeFromTop(22));
     timeLabel.setBounds(leftInfo);
 
-    // Transport buttons center - use already calculated values
-    int controlsHeight = playBtnSize; // Use play button size for the row height
+    int controlsHeight = playBtnSize;
     auto centerArea =
         controlRow.withSizeKeepingCentre(controlsWidth, controlsHeight);
 
@@ -784,7 +657,7 @@ public:
         btnSize, btnSize));
   }
 
-  // === Navigation ===
+  // === 导航 ===
   void navigationItemSelected(const juce::String &itemId) override {
     if (itemId == "settings")
       showAudioSettings();
@@ -796,7 +669,6 @@ public:
       showPage("playlist", L"音乐列表");
     else if (itemId == "library")
       showPage("library", L"乐器库");
-    // "pin" is handled by navigationPinToggled
   }
 
   void navigationPinToggled(bool isPinned) override {
@@ -808,7 +680,7 @@ public:
     playlistPanel.deselectAllRows();
   }
 
-  // === Buttons ===
+  // === 按钮 ===
   void buttonClicked(juce::Button *b) override {
     if (b == &scanBtn)
       startPluginScan();
@@ -834,11 +706,10 @@ public:
 
   void toggleLoopMode() {
     auto current = playlist.getPlaybackMode();
-    // Correctly cycle through 1, 2, 3, 4
     auto next = static_cast<PlaylistManager::PlaybackMode>(
         (static_cast<int>(current) % 4) + 1);
     playlist.setPlaybackMode(next);
-    getAppSettings().setPlayMode((int)next); // Persist setting
+    getAppSettings().setPlayMode((int)next);
 
     juce::String tip;
     juce::String toastText;
@@ -862,12 +733,11 @@ public:
     }
     loopModeBtn.setTooltip(tip);
 
-    // Hide hover tooltip so it doesn't overlap with the toast
+    // 切换模式时隐藏悬浮提示，避免与 ToastComponent 重叠。
     embeddedTooltip.hideTooltip();
 
-    // Trigger animations and toast
     modeToast.show(toastText, loopModeBtn.getBounds());
-    playbackModeAnimationScale = 0.8f; // Start pulse
+    playbackModeAnimationScale = 0.8f;
 
     repaint();
   }
@@ -902,20 +772,19 @@ public:
     loopModeBtn.setTooltip(tip);
   }
 
-  // === Sliders ===
+  // === 滑块 ===
   void sliderValueChanged(juce::Slider *s) override {
     if (s == &volumeSlider) {
       float vol = (float)s->getValue();
       engine.setMasterVolume(vol);
-      getAppSettings().setMasterVolume(vol); // Persist setting
-      repaint();                             // Update volume icon
+      getAppSettings().setMasterVolume(vol);
+      repaint();
     } else if (s == &progressSlider) {
-      // If we clicked (not dragging), update the seek timestamp to prevent
-      // timer jump
+      // 点击跳转时记录 seek 时间，避免 timerCallback 立即回写旧位置。
       if (!isUserDraggingProgress)
         lastSeekRequestTime.store(juce::Time::getMillisecondCounter());
 
-      // During drag, only update the time label
+      // 拖动中只更新显示时间，真正的 seek 在拖动结束后异步执行。
       double dur = engine.getMidiPlayer().getDurationInSamples();
       if (dur > 0) {
         double currentVal = s->getValue();
@@ -940,7 +809,7 @@ public:
       isUserDraggingProgress = false;
       lastSeekRequestTime.store(juce::Time::getMillisecondCounter());
 
-      // Use AsyncUpdater to perform the seek off-drag-event
+      // 使用 AsyncUpdater 把 seek 移出拖动事件栈。
       triggerSeekUpdate(s->getValue());
     }
   }
@@ -956,9 +825,9 @@ public:
       loadSelectedPlugin();
   }
 
-  // === Playlist ===
+  // === 播放列表 ===
   void playlistTrackSelected(int index) override {
-    // Logic handled by PlaylistPanel internally
+    // 选择逻辑由 PlaylistPanel 内部处理。
   }
 
   // 当播放列表被加载或清空时调用，重置播放索引
@@ -978,7 +847,7 @@ public:
       return;
     }
 
-    // 中断任何正在进行的 handleTrackEnd 流程
+    // 中断正在进行的自动切歌流程。
     isHandlingTrackEnd = false;
     engine.getMidiPlayer().setPlaying(false);
 
@@ -986,7 +855,7 @@ public:
     if (const auto *track = playlist.getTrack(index)) {
       if (loadMidiFile(track->file)) {
         playlistPanel.setCurrentTrackIndex(index);
-        // 延迟播放，给 VSL 插件时间处理重置消息
+        // 延迟播放给 VSL 等插件处理重置消息；generation 防止旧回调过期后误播放。
         ++trackSwitchGeneration;
         int gen = trackSwitchGeneration;
         runLater(100, [gen](MainContentComponent &self) {
@@ -1002,7 +871,7 @@ public:
     juce::StringArray newFiles;
     juce::StringArray duplicateFiles;
 
-    // 保存当前播放曲目的文件对象,用于在添加文件后重新定位
+    // 保存当前播放曲目的文件对象，用于添加文件后重新定位。
     const auto *currentlyPlaying = (currentTrackIndex >= 0)
                                        ? playlist.getTrack(currentTrackIndex)
                                        : nullptr;
@@ -1010,7 +879,7 @@ public:
     if (currentlyPlaying)
       currentPlayingFile = currentlyPlaying->file;
 
-    // 1. 分离新文件与重复文件
+    // 分离新文件与重复文件。
     for (auto &f : files) {
       juce::File file(f);
       if (playlist.contains(file)) {
@@ -1020,7 +889,6 @@ public:
       }
     }
 
-    // 2. 根据是否有重复文件决定流程
     enum class DupAction { AddNewOnly, OverwriteExisting, Cancel };
     DupAction action = DupAction::AddNewOnly; // 默认：仅添加新文件
 
@@ -1034,27 +902,27 @@ public:
           L"仅保存新的", L"保存并覆盖", L"取消");
 
       if (result == 0)
-        return; // 取消
+        return;
       if (result == 1)
         action = DupAction::AddNewOnly;
       else if (result == 2)
         action = DupAction::OverwriteExisting;
     }
 
-    // 3. 添加新文件（两种模式都会执行）
+    // 两种导入模式都会先添加新文件。
     bool anythingChanged = false;
     for (const auto &f : newFiles) {
       if (playlist.addFile(juce::File(f), false))
         anythingChanged = true;
     }
 
-    // 4. 处理重复文件
+    // 覆盖模式下刷新重复条目的缓存元数据。
     std::vector<int> overwrittenRows;
     if (action == DupAction::OverwriteExisting) {
       for (const auto &f : duplicateFiles) {
         int idx = playlist.findTrackIndex(juce::File(f));
         if (idx >= 0) {
-          playlist.refreshTrack(idx); // 刷新缓存元数据
+          playlist.refreshTrack(idx);
           overwrittenRows.push_back(idx);
           anythingChanged = true;
         }
@@ -1062,7 +930,7 @@ public:
     }
 
     if (anythingChanged) {
-      // 如果有曲目正在播放,重新查找其在列表中的索引
+      // 如果有曲目正在播放，重新查找其在列表中的索引。
       if (currentlyPlaying && currentPlayingFile.existsAsFile()) {
         int newIndex = playlist.findTrackIndex(currentPlayingFile);
         if (newIndex != -1 && newIndex != currentTrackIndex) {
@@ -1073,14 +941,14 @@ public:
 
       playlistPanel.refresh();
 
-      // 对被覆盖的条目播放闪烁动画提示
+      // 对被覆盖的条目播放闪烁动画提示。
       if (!overwrittenRows.empty()) {
         playlistPanel.startDropAnimation(overwrittenRows, false);
       }
     }
   }
 
-  // === FileDragAndDrop ===
+  // === 文件拖放 ===
   bool isInterestedInFileDrag(const juce::StringArray &files) override {
     for (auto &f : files)
       if (f.endsWithIgnoreCase(".mid") || f.endsWithIgnoreCase(".midi"))
@@ -1094,13 +962,11 @@ public:
     repaint();
   }
 
-  // === Background ===
+  // === 背景 ===
   void backgroundSettingsChanged(bool reapplyEffects) override {
-    // If we are just refreshing settings, reload
     if (reapplyEffects)
       background.loadAsync();
 
-    // If this was triggered by Monet toggle restore or normal update
     auto accentColor =
         juce::Colour::fromString(getAppSettings().getThemeAccentColor());
     fluentLookAndFeel.updateAccentColor(accentColor);
@@ -1121,24 +987,22 @@ public:
     });
   }
 
-  // Callback when extracting color
   void onAccentColorChanged(juce::Colour newColor) {
     getAppSettings().setThemeAccentColor(newColor.toString());
     fluentLookAndFeel.updateAccentColor(newColor);
 
-    // Repaint heavy areas immediately
+    // 先重绘视觉负载较高的区域，避免主题色切换残留。
     navigation.repaint();
     playlistPanel.repaint();
     repaint();
 
-    // Throttled notification: Only broadcast when transition is complete
-    // background sends change message when target == current
+    // 仅在 BackgroundComponent 过渡到目标色后广播，避免频繁刷新 LookAndFeel。
     if (newColor == background.getTargetAccentColor()) {
       sendLookAndFeelChange();
     }
   }
 
-  // === Keyboard shortcuts ===
+  // === 键盘快捷键 ===
   bool keyPressed(const juce::KeyPress &key) override {
     if (key == juce::KeyPress::spaceKey) {
       togglePlayPause();
@@ -1153,7 +1017,7 @@ public:
       showOpenFileDialog();
       return true;
     } else if (key == juce::KeyPress::escapeKey) {
-      // Escape closes plugin window if open
+      // Escape 关闭已打开的插件窗口。
       if (pluginWindow && pluginWindow->isVisible()) {
         pluginWindow->setVisible(false);
         return true;
@@ -1162,7 +1026,7 @@ public:
     return false;
   }
 
-  // === Drag-drop visual feedback ===
+  // === 拖放视觉反馈 ===
   void fileDragEnter(const juce::StringArray &, int, int) override {
     isDragOver = true;
     repaint();
@@ -1173,9 +1037,7 @@ public:
     repaint();
   }
 
-  // Handle global mouse clicks to deselect playlist
   void mouseDown(const juce::MouseEvent &e) override {
-    // If we clicked background or this component directly
     playlistPanel.deselectAllRows();
   }
 
@@ -1232,7 +1094,7 @@ private:
                       {
                           AudioEngine::OfflineExportSession exportSession(engine, s);
                           thread = std::make_unique<OfflineExportThread>(engine, result, s);
-                          thread->runThread(); // blocks modal
+                          thread->runThread(); // 阻塞当前模态导出流程。
                       }
                       restoreExportPlaybackState(originalState);
 
@@ -1282,6 +1144,8 @@ private:
   };
 
   ExportPlaybackState captureExportPlaybackState() {
+      // 导出可能临时切换到其他曲目；进入导出前保存播放现场并终止待恢复播放。
+      // trackSwitchGeneration 同步递增，防止旧的延迟播放回调在导出期间误触发。
       ExportPlaybackState state;
       state.trackIndex = currentTrackIndex;
       if (currentTrackIndex >= 0) {
@@ -1301,6 +1165,8 @@ private:
   }
 
   void restoreExportPlaybackState(const ExportPlaybackState& state) {
+      // 导出结束后恢复用户原本的曲目、位置和播放状态。
+      // 再次递增 trackSwitchGeneration，让导出过程中排队的旧回调全部过期。
       ++trackSwitchGeneration;
       currentTrackIndex = state.trackIndex;
       pendingResumePlayback = state.hadPendingResume;
@@ -1347,14 +1213,12 @@ private:
     auto bounds = btn.getBounds().toFloat();
     auto &colors = fluentLookAndFeel.getColors();
 
-    // Background on hover
     if (btn.isEnabled() && (btn.isMouseOver() || btn.isMouseButtonDown())) {
       g.setColour(btn.isMouseButtonDown() ? colors.controlPressed
                                           : colors.controlHover);
       g.fillRoundedRectangle(bounds.reduced(2.0f), 6.0f);
     }
 
-    // Icon
     g.setFont(fluentLookAndFeel.getIconFont(16.0f));
     g.setColour(btn.isEnabled() ? colors.textPrimary
                                 : colors.textSecondary.withAlpha(0.5f));
@@ -1370,7 +1234,6 @@ private:
     auto bounds = btn.getBounds().toFloat();
     auto &colors = fluentLookAndFeel.getColors();
 
-    // Background on hover
     if (btn.isEnabled() && (btn.isMouseOver() || btn.isMouseButtonDown())) {
       g.setColour(btn.isMouseButtonDown() ? colors.controlPressed
                                           : colors.controlHover);
@@ -1381,12 +1244,10 @@ private:
                                      : colors.textSecondary.withAlpha(0.5f);
     g.setColour(iconColor);
 
-    // Main Icon (shifted slightly left and up)
     g.setFont(fluentLookAndFeel.getIconFont(16.0f));
     auto mainArea = btn.getBounds().translated(-2, -1);
     g.drawText(mainIcon, mainArea, juce::Justification::centred, false);
 
-    // Sub Icon (smaller and at bottom right)
     g.setFont(fluentLookAndFeel.getIconFont(10.0f));
     auto subArea = btn.getBounds().translated(6, 6);
     g.drawText(subIcon, subArea, juce::Justification::centred, false);
@@ -1399,7 +1260,6 @@ private:
     auto bounds = btn.getBounds().toFloat();
     auto &colors = fluentLookAndFeel.getColors();
 
-    // Background on hover
     if (btn.isEnabled() && (btn.isMouseOver() || btn.isMouseButtonDown())) {
       g.setColour(btn.isMouseButtonDown() ? colors.controlPressed
                                           : colors.controlHover);
@@ -1410,14 +1270,11 @@ private:
                                      : colors.textSecondary.withAlpha(0.5f);
     g.setColour(iconColor);
 
-    // Check user preference for icon style
     if (getAppSettings().getSequentialIconListStyle()) {
-      // Draw List Icon (\uEA42)
       g.setFont(fluentLookAndFeel.getIconFont(16.0f));
       g.drawText(L"\uEA42", btn.getBounds(), juce::Justification::centred,
                  false);
     } else {
-      // Draw two horizontal parallel arrows (\uEBE7)
       g.setFont(fluentLookAndFeel.getIconFont(9.0f));
       auto b = btn.getBounds();
       g.drawText(L"\uEBE7", b.translated(0, -8), juce::Justification::centred,
@@ -1432,28 +1289,24 @@ private:
     auto &colors = fluentLookAndFeel.getColors();
     bool isEnabled = btn.isEnabled();
 
-    // Circular gradient border
     juce::ColourGradient gradient(colors.accentLight, bounds.getTopLeft(),
                                   colors.accentPrimary, bounds.getBottomRight(),
                                   false);
     g.setGradientFill(gradient);
     g.drawEllipse(bounds, 2.5f);
 
-    // Fill on hover (only if enabled)
     if (isEnabled && (btn.isMouseOver() || btn.isMouseButtonDown())) {
       g.setColour(colors.accentPrimary.withAlpha(
           btn.isMouseButtonDown() ? 0.25f : 0.15f));
       g.fillEllipse(bounds.reduced(3.0f));
     }
 
-    // Icon
     g.setFont(fluentLookAndFeel.getIconFont(18.0f));
     g.setColour(isEnabled ? colors.textPrimary
                           : colors.textSecondary.withAlpha(0.4f));
     g.drawText(isPlaying ? L"\uE769" : L"\uE768", btn.getBounds(),
                juce::Justification::centred, false);
 
-    // Fade the border if disabled
     if (!isEnabled) {
       g.setColour(colors.background.withAlpha(0.3f));
       g.drawEllipse(bounds, 2.5f);
@@ -1471,8 +1324,7 @@ private:
     if (isScanningPlugins)
       return;
 
-    // Modal, indeterminate scan. The scanner loop does not currently publish
-    // per-plugin progress or cooperative cancellation.
+    // 插件扫描目前不提供单插件进度，进度窗口以不确定状态显示。
     class ScanThread : public juce::ThreadWithProgressWindow {
     public:
       ScanThread(AudioEngine &e)
@@ -1480,7 +1332,7 @@ private:
             engine(e) {}
 
       void run() override {
-        setProgress(-1.0); // Indeterminate
+        setProgress(-1.0);
         engine.scanPlugins();
       }
 
@@ -1516,15 +1368,15 @@ private:
   }
 
 public:
-  // === Persistence ===
+  // === 持久化 ===
   bool hasUnsavedChanges() const { return playlist.hasChanges(); }
 
   juce::String getPlaylistChangeSummary() const {
     return playlist.getChangeSummary();
   }
 
-  // Save current playlist, asking for a path when the playlist has no file yet.
-  // Returns false when the chooser is cancelled or the write fails.
+  // 保存当前播放列表；没有文件路径时先询问保存位置。
+  // 用户取消或写入失败时返回 false。
   bool savePlaylist() {
     if (currentPlaylistFile.existsAsFile()) {
       return playlist.save(currentPlaylistFile);
@@ -1540,8 +1392,7 @@ public:
             .getChildFile("playlist.json"),
         "*.json");
 
-    // Close handling needs an immediate result, so this path deliberately uses
-    // the synchronous desktop file chooser.
+    // 关闭窗口时需要立即得到结果，因此这里保留同步桌面文件选择器。
     if (fileChooser->browseForFileToSave(true)) {
       currentPlaylistFile = fileChooser->getResult();
       return playlist.save(currentPlaylistFile);
@@ -1554,11 +1405,11 @@ public:
     engine.unloadPlugin();
     pluginSelector.setSelectedId(0, juce::dontSendNotification);
     openPluginBtn.setEnabled(false);
-    unloadBtn.setEnabled(false); // Disable unload button
+    unloadBtn.setEnabled(false);
     contentLabel.setText(L"选择一个 VST3 乐器插件开始演奏",
                          juce::dontSendNotification);
 
-    // Reset playback UI
+    // 卸载插件后重置播放 UI。
     progressSlider.setValue(0.0, juce::dontSendNotification);
     progressSlider.setEnabled(false);
     timeLabel.setText("0:00 / 0:00", juce::dontSendNotification);
@@ -1618,9 +1469,8 @@ public:
 
     const auto pluginName = instance->getName();
 
-    // Keep the plugin editor alive when the user closes its window. Some
-    // instruments, including Ivory, are not safe to repeatedly destroy and
-    // recreate their native editor while the processor remains active.
+    // 用户关闭窗口时只隐藏编辑器窗口。Ivory 等插件在处理器仍存活时，
+    // 反复销毁和重建原生编辑器不稳定。
     if (pluginWindow != nullptr) {
       pluginWindow->setVisible(true);
       pluginWindow->toFront(true);
@@ -1628,9 +1478,7 @@ public:
       return;
     }
 
-    // Heavy sample instruments may continue initialization after the processor
-    // instance is created. Give them a full message-loop turn before opening
-    // their native editor.
+    // 重型采样插件在处理器创建后可能继续初始化，延后一轮消息循环再打开编辑器。
     auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
     const int editorDelayMs =
         pluginName.containsIgnoreCase("Ivory") ? 1500 : 300;
@@ -1668,7 +1516,7 @@ public:
               inst->getName(), editor, w, h);
           LOG_DEBUG("Plugin window shown for " + pluginName);
         }
-      } catch (const std::exception &e) {
+      } catch ([[maybe_unused]] const std::exception &e) {
         DBG("Plugin editor creation failed: " + juce::String(e.what()));
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon, L"插件窗口打开失败",
@@ -1720,13 +1568,12 @@ public:
     if (!engine.getMidiPlayer().hasSequence() ||
         engine.getVst3Instance() == nullptr)
       return;
-    pendingResumePlayback = false; // Cancel any pending seek resumption
+    pendingResumePlayback = false;
     if (engine.getMidiPlayer().getPlaying()) {
       engine.getMidiPlayer().setPlaying(false);
     } else {
-      // Chase-restore all CC/note state at the current position before
-      // resuming.  This guarantees pedals, volume, pitch wheel etc.
-      // are correct even after a long pause (where allSoundOff ran).
+      // 恢复播放前在当前位置追踪 CC、音符、踏板和弯音状态，
+      // 避免暂停期间 allSoundOff 清理过的控制状态丢失。
       double pos = engine.getMidiPlayer().getPositionInSamples();
       engine.getMidiPlayer().seekTo(pos);
       engine.getMidiPlayer().setPlaying(true);
@@ -1734,7 +1581,7 @@ public:
   }
 
   void stopPlayback() {
-    pendingResumePlayback = false; // Cancel any pending seek resumption
+    pendingResumePlayback = false;
     engine.getMidiPlayer().setPlaying(false);
     engine.getMidiPlayer().seekTo(0);
   }
@@ -1753,7 +1600,7 @@ public:
     currentTrackIndex =
         playlist.getNextIndex(currentTrackIndex);
 
-    // If -1 (end of list in sequential), we stop.
+    // 顺序播放到列表末尾时停止。
     if (currentTrackIndex == -1) {
       stopPlayback();
       return;
@@ -1824,11 +1671,9 @@ public:
         return;
       }
 
-      // Use PlaylistManager's Mode logic
       int next = self.playlist.getNextIndex(self.currentTrackIndex);
       if (next != -1) {
         self.currentTrackIndex = next;
-        // Load and play
         if (const auto *track = self.playlist.getTrack(self.currentTrackIndex)) {
           if (self.loadMidiFile(track->file)) {
             self.playlistPanel.setCurrentTrackIndex(self.currentTrackIndex);
@@ -2331,7 +2176,7 @@ public:
   }
 
   void updatePluginList() {
-    // Capture current state before clearing
+    // 清空列表前保存当前插件选择，避免扫描刷新后丢失选择状态。
     juce::String idToRestore;
     if (engine.getVst3Instance() != nullptr) {
       idToRestore = getAppSettings().getLastPluginId();
@@ -2392,11 +2237,11 @@ public:
     playlist.setPlaybackMode(
         static_cast<PlaylistManager::PlaybackMode>(savedMode));
 
-    // Apply saved font settings to LookAndFeel
+    // 将保存的字体设置同步到 LookAndFeel。
     fluentLookAndFeel.setUIFont(settings.getUIFontName());
     fluentLookAndFeel.setPlaylistFont(settings.getPlaylistFontName());
 
-    // Refresh components that depend on fonts
+    // 刷新依赖字体的组件。
     playlistPanel.refresh();
   }
 
@@ -2406,7 +2251,7 @@ public:
     getAppSettings().save();
   }
 
-  // Audio Settings content - using LookAndFeel colors
+  // 音频设置面板。
   struct AudioSettingsContent : public juce::Component {
     AudioSettingsContent(AudioEngine &e)
         : engine(e),
@@ -2414,7 +2259,7 @@ public:
       setSize(520, 500);
       setOpaque(false);
 
-      // Apply dark theme colors to the selector
+      // AudioDeviceSelectorComponent 使用独立颜色表，需要显式同步深色主题。
       juce::Colour darkBg(0xFF2D2D2D);
       juce::Colour textColour(0xFFE0E0E0);
 
@@ -2450,7 +2295,7 @@ public:
     juce::AudioDeviceSelectorComponent selector;
   };
 
-  // Font Settings content
+  // 字体设置面板。
   struct FontSettingsContent : public juce::Component {
     std::function<void()> onSettingsChanged;
 
@@ -2458,28 +2303,20 @@ public:
       setSize(420, 360);
       setOpaque(false);
 
-      // Get system fonts
       availableFonts = juce::Font::findAllTypefaceNames();
 
-      // Resolve saved playlist font to an installed font where possible.
+      // 尽量把保存的播放列表字体解析到当前系统已安装字体。
       juce::String currentPlaylistFont = getAppSettings().getPlaylistFontName();
       bool fontExists = false;
       if (availableFonts.contains(currentPlaylistFont)) {
         fontExists = true;
       } else {
-        // Check mapped name
-        // (Simple check: iterate mappings or easier: just check if
-        // availableFonts contains the display name if that was stored? No, we
-        // store real names. but maybe system has changed or mapped name logic
-        // needed) For now, simpler check:
-        juce::String displayName =
-            getDisplayName(currentPlaylistFont); // This might return Chinese
+        juce::String displayName = getDisplayName(currentPlaylistFont);
         if (availableFonts.contains(displayName))
           fontExists = true;
       }
 
       if (!fontExists) {
-        // Fallback to Microsoft YaHei UI
         juce::String fallback = "Microsoft YaHei UI";
         if (availableFonts.contains(fallback)) {
           getAppSettings().setPlaylistFontName(fallback);
@@ -2490,12 +2327,10 @@ public:
         }
       }
 
-      // UI Font label
       addAndMakeVisible(uiFontLabel);
       uiFontLabel.setText(L"界面字体:", juce::dontSendNotification);
       uiFontLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
-      // UI Font ComboBox
       addAndMakeVisible(uiFontCombo);
       populateFontCombo(uiFontCombo, getAppSettings().getUIFontName());
       uiFontCombo.onChange = [this]() {
@@ -2509,13 +2344,11 @@ public:
         }
       };
 
-      // Playlist Font label
       addAndMakeVisible(playlistFontLabel);
       playlistFontLabel.setText(L"列表字体:", juce::dontSendNotification);
       playlistFontLabel.setColour(juce::Label::textColourId,
                                   juce::Colours::white);
 
-      // Playlist Font ComboBox
       addAndMakeVisible(playlistFontCombo);
       populateFontCombo(playlistFontCombo,
                         getAppSettings().getPlaylistFontName(), true);
@@ -2529,19 +2362,14 @@ public:
           if (onSettingsChanged)
             onSettingsChanged();
 
-          // Refresh list to show updated recent
-          // populateFontCombo(playlistFontCombo, fontName, true);
-          // Note: Re-populating immediately might reset scroll/focus, so maybe
-          // skip for now
+          // 不立即重建下拉列表，避免重置滚动位置和焦点。
         }
       };
 
-      // Playlist Font Size Label
       addAndMakeVisible(fontSizeLabel);
       fontSizeLabel.setText(L"列表字号:", juce::dontSendNotification);
       fontSizeLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
-      // Playlist Font Size Slider
       addAndMakeVisible(fontSizeSlider);
       fontSizeSlider.setRange(12.0, 36.0, 1.0);
       fontSizeSlider.setValue(getAppSettings().getPlaylistFontSize());
@@ -2554,7 +2382,6 @@ public:
           onSettingsChanged();
       };
 
-      // Info label
       addAndMakeVisible(infoLabel);
       infoLabel.setText(L"更改字体后可能需要重启应用才能完全生效",
                         juce::dontSendNotification);
@@ -2593,14 +2420,11 @@ public:
 
       juce::StringArray topFonts;
 
-      // 1. Top Section: Pinned + Recent (Playlist only)
       if (isPlaylist) {
         combo.addSectionHeading(L"常用 & 最近");
 
-        // Pinned fonts (Always show if available)
         juce::StringArray pinned = {"Microsoft YaHei UI", "SimHei", "SimSun"};
 
-        // Helper to add if available
         auto tryAdd = [&](const juce::String &name) {
           if (topFonts.contains(name))
             return;
@@ -2620,7 +2444,6 @@ public:
         for (const auto &p : pinned)
           tryAdd(p);
 
-        // Recent fonts
         auto recent = getAppSettings().getRecentFonts();
         for (const auto &f : recent)
           tryAdd(f);
@@ -2628,7 +2451,6 @@ public:
         combo.addSeparator();
       }
 
-      // 2. All Others
       for (const auto &font : availableFonts) {
         if (!topFonts.contains(font) &&
             !topFonts.contains(getDisplayName(font))) {
@@ -2645,19 +2467,16 @@ public:
       int rowHeight = 40;
       int gap = 10;
 
-      // UI Font
       auto row1 = area.removeFromTop(rowHeight);
       uiFontLabel.setBounds(row1.removeFromLeft(labelWidth));
       uiFontCombo.setBounds(row1.reduced(0, 5));
       area.removeFromTop(gap);
 
-      // Playlist Font
       auto row2 = area.removeFromTop(rowHeight);
       playlistFontLabel.setBounds(row2.removeFromLeft(labelWidth));
       playlistFontCombo.setBounds(row2.reduced(0, 5));
       area.removeFromTop(gap);
 
-      // Playlist Size
       auto row3 = area.removeFromTop(rowHeight);
       fontSizeLabel.setBounds(row3.removeFromLeft(labelWidth));
       fontSizeSlider.setBounds(row3.reduced(0, 5));
@@ -2675,8 +2494,6 @@ public:
     juce::ComboBox uiFontCombo, playlistFontCombo;
     juce::Slider fontSizeSlider;
   };
-
-  // ToastComponent and TransparentButton move to CustomControls.h
 
   class ScrollingLabel : public juce::Component, public juce::Timer {
   public:
@@ -2709,11 +2526,9 @@ public:
       float availableWidth = (float)getWidth();
 
       if (textWidth <= availableWidth || !isHovered) {
-        // Text fits or not hovered - draw normally (left aligned)
         g.drawText(text, getLocalBounds(), juce::Justification::centredLeft,
                    true);
       } else {
-        // Scrolling mode - draw text with offset
         float x = -scrollOffset;
         g.drawText(text, (int)x, 0, (int)textWidth + 20, getHeight(),
                    juce::Justification::centredLeft, false);
@@ -2721,7 +2536,7 @@ public:
     }
 
     void mouseDown(const juce::MouseEvent &e) override {
-      // Forward click to parent to allow "deselect all" behavior
+      // 转发点击，让播放列表空白区仍可触发取消选择。
       if (auto *parent = getParentComponent())
         parent->mouseDown(e.getEventRelativeTo(parent));
     }
@@ -2749,9 +2564,8 @@ public:
 
       scrollOffset += 1.5f;
 
-      // Loop back to start when reaching end
       if (scrollOffset >= maxScroll + 50.0f) {
-        scrollOffset = -50.0f; // Start from slightly before visible area
+        scrollOffset = -50.0f;
       }
 
       repaint();
@@ -2812,7 +2626,7 @@ public:
         auto lastHeartbeat = owner.lastHeartbeatTime.load();
         auto diff = currentTime - lastHeartbeat;
 
-        if (diff > 5000) { // Log warning at 5s
+        if (diff > 5000) {
           static uint32_t lastWarnTime = 0;
           if (currentTime - lastWarnTime > 5000) {
             LOG_DEBUG("CRITICAL: UI HEARTBEAT LAG: " + juce::String(diff) +
@@ -2821,7 +2635,7 @@ public:
           }
         }
 
-        if (diff > 30000) { // 30 seconds timeout
+        if (diff > 30000) {
           if (!owner.isWatchdogDialogActive.load()) {
             LOG_DEBUG("!!! UI WATCHDOG: MT FREEZE DETECTED !!!");
             // 使用 SafePointer 防止组件销毁后访问悬空指针
@@ -2841,7 +2655,7 @@ public:
     MainContentComponent &owner;
   };
 
-  // Spinner for scan progress - optimized to only run when visible
+  // 插件扫描进度指示器，仅在可见时运行定时器。
   class SpinnerComponent : public juce::Component, public juce::Timer {
   public:
     SpinnerComponent() = default;
@@ -2857,7 +2671,7 @@ public:
     void timerCallback() override {
       angle += 0.15f;
       if (angle > juce::MathConstants<float>::twoPi * 100.0f)
-        angle = 0.0f; // Prevent overflow
+        angle = 0.0f;
       repaint();
     }
 
@@ -2874,7 +2688,7 @@ public:
     float angle = 0.0f;
   };
 
-  // === Members ===
+  // === 成员 ===
   AudioEngine &engine;
   FluentLookAndFeel fluentLookAndFeel;
   // 嵌入式 Tooltip，直接在父窗口中绘制，确保完美圆角
@@ -2885,7 +2699,7 @@ public:
 
   juce::Label pageTitle;
   juce::ComboBox pluginSelector;
-  TransparentButton loopModeBtn; // Added LoopMode button
+  TransparentButton loopModeBtn;
   SvgButton exportBtn{R"(<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 15V3M12 15L8 11M12 15L16 11" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 16V18C20 19.1046 19.1046 20 18 20H6C4.89543 20 4 19.1046 4 18V16" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>)"};
   juce::Slider volumeSlider;
   TransparentButton scanBtn, unloadBtn, openPluginBtn;
@@ -2895,7 +2709,6 @@ public:
   PlaylistManager playlist;
   PlaylistPanel playlistPanel;
 
-  // Re-added missing transport and state members
   juce::Component transportBar;
   ScrollingLabel trackLabel;
   juce::Label timeLabel;

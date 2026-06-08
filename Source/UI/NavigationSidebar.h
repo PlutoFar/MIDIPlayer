@@ -7,23 +7,13 @@ class FluentLookAndFeel;
 #include <map>
 
 /**
-    NavigationSidebar: Collapsible Windows 11 style navigation.
-
-    Features:
-    - Collapsible (shows only icons when collapsed)
-    - Smooth animation
-    - Proper Segoe Fluent Icons rendering
-    - Remembers collapsed state
-    - Pin (always-on-top) button
-    - Collapsed tooltips
-    - Animated icon shift on selection
-    - Footer click ripple animation
+    可折叠的 Windows 11 风格侧边导航。
 */
 class NavigationSidebar : public juce::Component, public juce::Timer {
 public:
   struct NavItem {
     juce::String id;
-    juce::String icon; // Segoe Fluent Icons character
+    juce::String icon; // Segoe Fluent Icons 字符。
     juce::String label;
   };
 
@@ -38,13 +28,12 @@ public:
   NavigationSidebar(FluentLookAndFeel &laf) : fluentLookAndFeel(laf) {
     setOpaque(false);
 
-    // Main navigation items
     items = {
         {"library", L"\uE8D6", L"乐器库"},
         {"playlist", L"\uE90B", L"音乐列表"},
     };
 
-    // Footer items (settings-like, no selection highlight)
+    // 底部功能项不参与页面选中高亮。
     footerItems = {
         {"pin", L"\uE718", L"置顶"},
         {"fonts", L"\uE8D2", L"字体"},
@@ -52,16 +41,13 @@ public:
         {"settings", L"\uE713", L"设置"},
     };
 
-    // Collapse button
     addAndMakeVisible(collapseBtn);
     collapseBtn.onClick = [this]() { toggleCollapsed(); };
 
-    // Load saved state
     isCollapsed = getAppSettings().getSidebarCollapsed();
     currentWidth = isCollapsed ? collapsedWidth : expandedWidth;
     targetWidth = currentWidth;
 
-    // Load pin state
     isPinned = getAppSettings().getAlwaysOnTop();
   }
 
@@ -92,7 +78,6 @@ public:
     bool needsMore = false;
     bool widthChanged = false;
 
-    // 1. Sidebar width animation (slower factor for visible collapse/expand)
     float widthDiff = targetWidth - currentWidth;
     if (std::abs(widthDiff) > 0.5f) {
       float prevWidth = currentWidth;
@@ -104,7 +89,6 @@ public:
       widthChanged = true;
     }
 
-    // 2. Indicator height animation (main items only)
     for (auto &item : items) {
       float target = (item.id == selectedItemId) ? 1.0f : 0.0f;
       auto it = indicatorHeights.find(item.id);
@@ -118,14 +102,13 @@ public:
       }
     }
 
-    // 3. Icon scale animation (all items: main + footer)
     auto animateScales = [&](const std::vector<NavItem> &navItems) {
       for (auto &ni : navItems) {
         float target = 1.0f;
         if (ni.id == pressedItemId)
-          target = 0.85f; // mouseDown: shrink
+          target = 0.85f;
         else if (ni.id == hoveredItemId)
-          target = 1.15f; // hover: grow
+          target = 1.15f;
 
         auto it = iconScales.find(ni.id);
         float current = (it != iconScales.end()) ? it->second : 1.0f;
@@ -144,7 +127,7 @@ public:
     if (!needsMore)
       stopTimer();
 
-    // Only trigger parent layout when sidebar width actually changed
+    // 只有宽度变化时才触发布局，避免动画期间反复重排。
     if (widthChanged) {
       if (auto *parent = getParentComponent())
         parent->resized();
@@ -157,7 +140,6 @@ public:
     g.setColour(colors.sidebarBackground);
     g.fillRect(getLocalBounds());
 
-    // Right border
     g.setColour(colors.cardBorder);
     g.drawVerticalLine(getWidth() - 1, 0.0f, (float)getHeight());
   }
@@ -169,21 +151,18 @@ public:
     int topPadding = 8;
     int sidePadding = 6;
 
-    // Collapse button at top
     auto collapseArea =
         area.removeFromTop(collapseHeight).reduced(sidePadding, 4);
     collapseBtn.setBounds(collapseArea.removeFromLeft(36));
 
     area.removeFromTop(topPadding);
 
-    // Main items
     itemBounds.clear();
     for (size_t i = 0; i < items.size(); ++i) {
       itemBounds.push_back(
           area.removeFromTop(itemHeight).reduced(sidePadding, 4));
     }
 
-    // Footer at bottom
     footerBounds.clear();
     auto footerArea = getLocalBounds().removeFromBottom(
         itemHeight * (int)footerItems.size() + 16);
@@ -197,15 +176,13 @@ public:
   void paintOverChildren(juce::Graphics &g) override {
     auto &colors = fluentLookAndFeel.getColors();
 
-    // Draw collapse button icon
     g.setFont(fluentLookAndFeel.getIconFont(14.0f));
     g.setColour(colors.textPrimary);
     juce::String collapseIcon =
-        isCollapsed ? L"\uE76C" : L"\uE76B"; // ChevronRight / ChevronLeft
+        isCollapsed ? L"\uE76C" : L"\uE76B";
     g.drawText(collapseIcon, collapseBtn.getBounds(),
                juce::Justification::centred, false);
 
-    // Draw main nav items (with animated selection)
     for (size_t i = 0; i < items.size(); ++i) {
       if (i < itemBounds.size())
         drawMainNavItem(g, items[i], itemBounds[i],
@@ -213,7 +190,6 @@ public:
                         items[i].id == hoveredItemId);
     }
 
-    // Draw footer items (no selection, with click animation)
     for (size_t i = 0; i < footerItems.size(); ++i) {
       if (i < footerBounds.size())
         drawFooterItem(g, footerItems[i], footerBounds[i],
@@ -239,11 +215,9 @@ public:
   void mouseDown(const juce::MouseEvent &e) override {
     auto clickedId = getItemAtPoint(e.getPosition());
     if (clickedId.isNotEmpty()) {
-      // Track pressed state for scale animation (all items)
       pressedItemId = clickedId;
       ensureAnimating();
 
-      // Check if it's a main item for selection
       bool isMainItem = false;
       for (auto &item : items) {
         if (item.id == clickedId) {
@@ -257,7 +231,6 @@ public:
         repaint();
       }
 
-      // Handle pin toggle
       if (clickedId == "pin") {
         isPinned = !isPinned;
         getAppSettings().setAlwaysOnTop(isPinned);
@@ -270,7 +243,6 @@ public:
       if (listener)
         listener->navigationItemSelected(clickedId);
     } else {
-      // Clicked background of sidebar
       if (listener)
         listener->navigationBackgroundClicked();
     }
@@ -298,7 +270,6 @@ private:
     if (it != indicatorHeights.end())
       indicatorProgress = it->second;
 
-    // Background
     if (isSelected) {
       g.setColour(colors.navSelected);
       g.fillRoundedRectangle(bounds.toFloat(), 6.0f);
@@ -307,7 +278,7 @@ private:
       g.fillRoundedRectangle(bounds.toFloat(), 6.0f);
     }
 
-    // Selection indicator - 从中心向上下展开的动画
+    // 选中指示条从中心向上下展开。
     if (indicatorProgress > 0.01f) {
       float fullHeight = (float)bounds.getHeight() - 16.0f;
       float animHeight = fullHeight * indicatorProgress;
@@ -319,21 +290,18 @@ private:
       g.fillRoundedRectangle(indicator, 1.5f);
     }
 
-    // Icon - 固定位置：收起时居中，展开时左对齐
+    // 图标固定位置：收起时居中，展开时左对齐。
     int iconAreaWidth = 40;
     auto iconArea = bounds;
     if (isCollapsed || currentWidth <= collapsedWidth + 10) {
-      // 收起状态：图标居中
       iconArea = bounds.withWidth(iconAreaWidth);
       int centerX = bounds.getX() + (bounds.getWidth() - iconAreaWidth) / 2;
       iconArea.setX(centerX);
     } else {
-      // 展开状态：图标左对齐（留出指示条空间）
       iconArea.removeFromLeft(indicatorPadding + indicatorWidth + 4);
       iconArea = iconArea.removeFromLeft(iconAreaWidth);
     }
 
-    // Apply icon scale transform (hover/press animation)
     float scale = 1.0f;
     auto scaleIt = iconScales.find(item.id);
     if (scaleIt != iconScales.end())
@@ -351,7 +319,7 @@ private:
     g.drawText(item.icon, iconArea, juce::Justification::centred, false);
     g.restoreState();
 
-    // Label (fade with sidebar width)
+    // 标签随侧栏宽度淡入淡出。
     {
       float fadeStart = collapsedWidth + 10.0f;
       float fadeEnd = collapsedWidth + 50.0f;
@@ -377,13 +345,11 @@ private:
                       juce::Rectangle<int> bounds, bool isHovered) {
     auto &colors = fluentLookAndFeel.getColors();
 
-    // Hover background
     if (isHovered) {
       g.setColour(colors.navHover);
       g.fillRoundedRectangle(bounds.toFloat(), 6.0f);
     }
 
-    // Icon
     int iconAreaWidth = 40;
     auto iconArea = bounds;
     if (isCollapsed || currentWidth <= collapsedWidth + 10) {
@@ -395,7 +361,6 @@ private:
       iconArea = iconArea.removeFromLeft(iconAreaWidth);
     }
 
-    // Apply icon scale transform (hover/press animation)
     float scale = 1.0f;
     auto scaleIt = iconScales.find(item.id);
     if (scaleIt != iconScales.end())
@@ -420,7 +385,7 @@ private:
     }
     g.restoreState();
 
-    // Label (fade with sidebar width)
+    // 标签随侧栏宽度淡入淡出。
     {
       float fadeStart = collapsedWidth + 10.0f;
       float fadeEnd = collapsedWidth + 50.0f;
@@ -461,7 +426,7 @@ private:
       startTimerHz(60);
   }
 
-  // Transparent button for collapse
+  // 折叠按钮只接收点击，图标由侧边栏统一绘制。
   class TransparentButton : public juce::Button {
   public:
     TransparentButton() : juce::Button("") {}
@@ -491,7 +456,7 @@ private:
   // 指示条高度动画 (0.0=隐藏, 1.0=完全显示)
   std::map<juce::String, float> indicatorHeights;
 
-  // Icon scale animation for all items (hover/press)
+  // 所有导航项共享 hover/press 缩放动画。
   std::map<juce::String, float> iconScales;
   juce::String pressedItemId;
 

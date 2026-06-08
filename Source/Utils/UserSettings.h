@@ -19,7 +19,6 @@
 class UserSettings {
 public:
   UserSettings() {
-    // 设置文件路径
     settingsFile = getSettingsDirectory().getChildFile("Settings.xml");
     load();
   }
@@ -27,20 +26,17 @@ public:
   ~UserSettings() { save(); }
 
   static juce::File getSettingsDirectory() {
-    // 检查是否为便携模式（程序目录下有 portable.txt）
     auto exeDir =
         juce::File::getSpecialLocation(juce::File::currentExecutableFile)
             .getParentDirectory();
-    // 同时识别 portable.dat 和 portable_debug.dat 作为便携模式标记
+    // 便携模式由程序目录下的 portable.dat 或 portable_debug.dat 启用。
     bool isPortable = exeDir.getChildFile("portable.dat").existsAsFile() ||
                       exeDir.getChildFile("portable_debug.dat").existsAsFile();
 
     juce::File dir;
     if (isPortable) {
-      // 便携模式：设置保存在程序目录下的 Settings 文件夹
       dir = exeDir.getChildFile("Settings");
     } else {
-      // 安装模式：设置保存在用户 AppData 目录
       dir = juce::File::getSpecialLocation(
                 juce::File::userApplicationDataDirectory)
                 .getChildFile("ModernMidiPlayer");
@@ -50,7 +46,7 @@ public:
     return dir;
   }
 
-  // 获取便携模式的 VST3 目录
+  // 便携模式下的本地 VST3 插件目录。
   static juce::File getPortableVst3Directory() {
     auto exeDir =
         juce::File::getSpecialLocation(juce::File::currentExecutableFile)
@@ -60,12 +56,10 @@ public:
     return vst3Dir;
   }
 
-  // 检查是否为便携模式
   static bool isPortableMode() {
     auto exeDir =
         juce::File::getSpecialLocation(juce::File::currentExecutableFile)
             .getParentDirectory();
-    // 同时识别 portable.dat 和 portable_debug.dat
     return exeDir.getChildFile("portable.dat").existsAsFile() ||
            exeDir.getChildFile("portable_debug.dat").existsAsFile();
   }
@@ -95,7 +89,7 @@ public:
     settings.setValue("sequentialIconListStyle", useListStyle);
   }
 
-  // --- Keep Window Position ---
+  // --- 记住窗口位置 ---
   bool getRememberWindowBounds() const {
     return settings.getBoolValue("rememberWindowBounds", false);
   }
@@ -193,7 +187,7 @@ public:
 
   juce::String getThemeAccentColor() const {
     return settings.getValue("themeAccentColor",
-                             "FF0078D4"); // Default Windows Blue
+                             "FF0078D4");
   }
   void setThemeAccentColor(const juce::String &colorCode) {
     settings.setValue("themeAccentColor", colorCode);
@@ -214,7 +208,6 @@ public:
     settings.setValue("uiFontName", fontName);
   }
 
-  // Playlist Font settings
   juce::String getPlaylistFontName() const {
     return settings.getValue("playlistFontName", "Microsoft YaHei UI");
   }
@@ -229,7 +222,7 @@ public:
     settings.setValue("playlistFontSize", juce::jlimit(12.0f, 36.0f, size));
   }
 
-  // Recent Fonts (stored as semicolon delimited string)
+  // 最近使用字体以分号分隔保存。
   juce::StringArray getRecentFonts() const {
     juce::StringArray fonts;
     fonts.addTokens(settings.getValue("recentFonts", ""), ";", "");
@@ -238,10 +231,9 @@ public:
 
   void addRecentFont(const juce::String &fontName) {
     auto fonts = getRecentFonts();
-    fonts.removeString(fontName); // Remove if exists (to move to top)
-    fonts.insert(0, fontName);    // Add to top
+    fonts.removeString(fontName);
+    fonts.insert(0, fontName);
 
-    // Keep only top 3
     while (fonts.size() > 3)
       fonts.remove(3);
 
@@ -259,7 +251,7 @@ public:
   int getBackgroundBlurMode() const {
     return settings.getIntValue(
         "backgroundBlurMode",
-        0); // MaterialType: 1=None, 2=GaussianBlur, 3=Aero, 4=Acrylic
+        0); // 0 表示旧版本未设置；BackgroundComponent 会回退到 None=1。
   }
   void setBackgroundBlurMode(int mode) {
     settings.setValue("backgroundBlurMode", juce::jlimit(0, 4, mode));
@@ -336,6 +328,7 @@ public:
   // --- 持久化 ---
   bool save() {
     if (auto xml = settings.createXml("ModernMidiPlayerSettings")) {
+      // 先写临时文件再替换，避免 Settings.xml 半写入损坏。
       auto tempFile =
           settingsFile.getSiblingFile(settingsFile.getFileName() + ".tmp");
       if (tempFile.exists() && !tempFile.deleteFile())
@@ -366,6 +359,7 @@ public:
 
   void load() {
     if (settingsFile.existsAsFile()) {
+      // XML 损坏时保持默认值，不删除原文件，方便用户手动恢复。
       if (auto xml = juce::XmlDocument::parse(settingsFile)) {
         settings = juce::PropertySet();
         settings.restoreFromXml(*xml);
@@ -384,7 +378,7 @@ private:
   juce::File settingsFile;
 };
 
-// 全局设置单例
+// 全局设置单例。
 inline UserSettings &getAppSettings() {
   static UserSettings instance;
   return instance;

@@ -3,74 +3,62 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 /**
-    FluentLookAndFeel: Windows 11 Media Player style implementation.
+    Windows 11 风格 LookAndFeel。
 
-    Based on the actual Windows Media Player design with:
-    - Light theme support (matching reference)
-    - Full high DPI support
-    - Proper icon sizing and spacing
-    - Clean typography
+    统一应用主题色、字体回退、图标字体、弹出菜单和自定义窗口按钮。
 */
 class TransparentButton;
 
 class FluentLookAndFeel : public juce::LookAndFeel_V4 {
 public:
-  // Windows 11 Light/Dark theme colors
+  // Windows 11 浅色/深色主题色。
   struct FluentColors {
-    // Light theme (matching Windows Media Player)
     juce::Colour background{0xFFF3F3F3};
     juce::Colour sidebarBackground{0xFFF9F9F9};
     juce::Colour cardBackground{0xFFFFFFFF};
     juce::Colour cardBorder{0xFFE5E5E5};
 
-    // Accent
-    juce::Colour accentPrimary{0xFF0078D4}; // Windows Blue
+    juce::Colour accentPrimary{0xFF0078D4};
     juce::Colour accentLight{0xFF2B88D8};
     juce::Colour navIndicator{0xFF0078D4};
 
-    // Text
     juce::Colour textPrimary{0xFF1A1A1A};
     juce::Colour textSecondary{0xFF606060};
     juce::Colour textDisabled{0xFFA0A0A0};
 
-    // Controls
     juce::Colour controlBackground{0xFFFFFFFF};
     juce::Colour controlBorder{0xFFD0D0D0};
     juce::Colour controlHover{0xFFF0F0F0};
     juce::Colour controlPressed{0xFFE8E8E8};
 
-    // Navigation
     juce::Colour navSelected{0x15000000};
     juce::Colour navHover{0x08000000};
 
-    // Transport bar
     juce::Colour transportBackground{0xFFFAFAFA};
     juce::Colour sliderTrack{0xFFE0E0E0};
-    juce::Colour sliderProgress{0xFF0078D4}; // Match accent
+    juce::Colour sliderProgress{0xFF0078D4};
   };
 
   FluentLookAndFeel(bool darkMode = true) : isDarkMode(darkMode) {
     if (darkMode) {
-      // Dark theme colors with optimized Glassmorphism
-      // Dark theme colors - Opaque background to avoid desktop bleed
+      // 深色主题背景保持不透明，避免透出桌面内容。
       colors.background = juce::Colour(0xFF121212);
       colors.sidebarBackground =
-          juce::Colour(0x40000000); // Overlay over background
-      colors.cardBackground = juce::Colour(0xFF1E1E1E); // Solid base for cards
+          juce::Colour(0x40000000);
+      colors.cardBackground = juce::Colour(0xFF1E1E1E);
       colors.cardBorder = juce::Colour(0x30FFFFFF);
       colors.textPrimary = juce::Colour(0xFFFFFFFF);
       colors.textSecondary = juce::Colour(0xFFB0B0B0);
       colors.textDisabled = juce::Colour(0xFF606060);
 
-      // Control colors (Translucent Glass)
-      colors.controlBackground = juce::Colour(0x25FFFFFF); // 15% white
-      colors.controlBorder = juce::Colour(0x30FFFFFF);     // 20% white border
-      colors.controlHover = juce::Colour(0x40FFFFFF);      // 25% white
-      colors.controlPressed = juce::Colour(0x50FFFFFF);    // 30% white
+      colors.controlBackground = juce::Colour(0x25FFFFFF);
+      colors.controlBorder = juce::Colour(0x30FFFFFF);
+      colors.controlHover = juce::Colour(0x40FFFFFF);
+      colors.controlPressed = juce::Colour(0x50FFFFFF);
 
       colors.navSelected = juce::Colour(0x35FFFFFF);
       colors.navHover = juce::Colour(0x15FFFFFF);
-      colors.transportBackground = juce::Colour(0x60000000); // 38% black
+      colors.transportBackground = juce::Colour(0x60000000);
       colors.sliderTrack = juce::Colour(0x40FFFFFF);
     }
     applyScheme();
@@ -81,7 +69,7 @@ public:
     colors.navIndicator = newColor;
     colors.sliderProgress = newColor;
 
-    // Generate a lighter variant for hover/gradients
+    // hover 和渐变使用同一套强调色派生值。
     colors.accentLight = newColor.brighter(0.2f);
 
     applyScheme();
@@ -106,16 +94,13 @@ public:
               juce::Colours::transparentBlack);
   }
 
-  // JUCE gives components logical pixels on HiDPI displays. Keep LookAndFeel
-  // metrics in that same coordinate space to avoid double-scaling fonts/icons.
+  // JUCE 在 HiDPI 下传入逻辑像素，LookAndFeel 度量保持同一坐标系，避免字体/图标二次缩放。
   float scaled(float value) const { return value; }
   int scaledInt(int value) const { return value; }
 
-
-  // === Typography ===
-  // Configurable font names
-  juce::String uiFontName = "Source Han Sans SC"; // 思源黑体 for UI elements
-  juce::String playlistFontName = "Microsoft YaHei UI"; // Default playlist font
+  // === 字体 ===
+  juce::String uiFontName = "Source Han Sans SC";
+  juce::String playlistFontName = "Microsoft YaHei UI";
 
   void setUIFont(const juce::String &fontName) { uiFontName = fontName; }
   void setPlaylistFont(const juce::String &fontName) {
@@ -126,19 +111,17 @@ public:
   const juce::String &getPlaylistFontName() const { return playlistFontName; }
 
   juce::Font getDefaultFont(float size = 14.0f, bool semibold = false) const {
-    // Try configured UI font first (Source Han Sans SC)
     juce::FontOptions options(uiFontName, scaled(size),
                               semibold ? juce::Font::bold : juce::Font::plain);
     juce::Font font(options);
 
-    // If not available, try Microsoft YaHei for Chinese support
+    // 中文界面优先回退到微软雅黑，避免系统默认字体缺字。
     if (font.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
       font = juce::Font(
           juce::FontOptions("Microsoft YaHei UI", scaled(size),
                             semibold ? juce::Font::bold : juce::Font::plain));
     }
 
-    // Final fallback to Segoe UI
     if (font.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
       font = juce::Font(
           juce::FontOptions("Segoe UI", scaled(size),
@@ -149,22 +132,19 @@ public:
   }
 
   juce::Font getPlaylistFont(float size = 16.0f, bool bold = false) const {
-    // Use configured playlist font
     juce::FontOptions options(playlistFontName, scaled(size),
                               bold ? juce::Font::bold : juce::Font::plain);
     juce::Font font(options);
 
-    // Initial Fallback
     if (font.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
       font = juce::Font(
           juce::FontOptions("Microsoft YaHei UI", scaled(size),
                             bold ? juce::Font::bold : juce::Font::plain));
     }
 
-    // Final Fallback
     if (font.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
       font = juce::Font(juce::FontOptions(
-          "SimHei", scaled(size), // Fallback to SimHei if YaHei fails?
+          "SimHei", scaled(size),
           bold ? juce::Font::bold : juce::Font::plain));
     }
 
@@ -172,7 +152,7 @@ public:
   }
 
   juce::Font getIconFont(float size = 16.0f) const {
-    // Check if Segoe Fluent Icons is available
+    // 图标字体探测使用静态缓存；运行期间安装字体不会刷新。
     static bool hasFluentIcons = []() {
       auto fonts = juce::Font::findAllTypefaceNames();
       for (auto &f : fonts)
@@ -189,23 +169,22 @@ public:
       return false;
     }();
 
-    juce::String fontName = "Segoe Fluent Icons"; // Preferred for Win11
+    juce::String fontName = "Segoe Fluent Icons";
     if (!hasFluentIcons) {
       if (hasMDL2)
-        fontName = "Segoe MDL2 Assets"; // Fallback to Win10
+        fontName = "Segoe MDL2 Assets";
       else
-        fontName = "Segoe UI Symbol"; // Final fallback
+        fontName = "Segoe UI Symbol";
     }
 
-    // Use a fixed size for icons to prevent font-internal scaling issues
+    // 图标使用固定字号，避免不同 Segoe 图标字体的内部度量差异。
     return juce::Font(
         juce::FontOptions(fontName, scaled(size), juce::Font::plain));
   }
 
   juce::Font getLabelFont(juce::Label &label) override {
     auto f = label.getFont();
-    // Prevent double-scaling: if the font is already using our custom UI font,
-    // or if it has a custom size, just return it with its exact physical height.
+    // Label 已有自定义字号时保持物理高度，避免二次缩放。
     if (f.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
       juce::FontOptions options(uiFontName, f.getHeight(),
                                 f.isBold() ? juce::Font::bold : juce::Font::plain);
@@ -214,14 +193,13 @@ public:
     return f;
   }
 
-  // === Buttons ===
+  // === 按钮 ===
   void drawButtonBackground(juce::Graphics &g, juce::Button &button,
                             const juce::Colour &backgroundColor,
                             bool isMouseOver, bool isButtonDown) override {
     auto bounds = button.getLocalBounds().toFloat();
     float radius = scaled(8.0f);
-    // Only draw background if interactive (hover/down) or toggled
-    // OR if it's a standard button (background colour is NOT transparentBlack)
+    // 透明按钮由组件自己绘制状态；标准按钮和切换态在 LookAndFeel 中绘制背景。
     bool isStandardButton =
         (backgroundColor != juce::Colours::transparentBlack);
 
@@ -234,18 +212,15 @@ public:
                : isMouseOver ? colors.accentPrimary.brighter(0.1f)
                              : colors.accentPrimary;
       } else if (isStandardButton) {
-        // Standard button logic
         if (!button.isEnabled())
           fill = backgroundColor.withAlpha(0.2f);
         else if (backgroundColor != colors.controlBackground &&
                  backgroundColor != juce::Colours::transparentBlack) {
-          // Custom colored button (e.g. Danger Red) - vary the custom color
           if (isButtonDown)
             fill = backgroundColor.darker(0.15f);
           else if (isMouseOver)
             fill = backgroundColor.brighter(0.15f);
         } else {
-          // Default control colors
           if (isButtonDown)
             fill = colors.controlPressed;
           else if (isMouseOver)
@@ -254,10 +229,6 @@ public:
             fill = colors.controlBackground;
         }
       } else {
-        // Transparent button logic (minimalist)
-        // Draw NOTHING. The component (TransparentButton/AnimatedIconButton)
-        // handles its own visual state (opacity/scaling).
-        // Drawing here creates a redundant "mask".
       }
 
       if (fill != juce::Colours::transparentBlack) {
@@ -265,9 +236,7 @@ public:
         g.fillRoundedRectangle(bounds, radius);
       }
 
-      // Draw border for standard buttons or toggled states for clarity
       if (isStandardButton || button.getToggleState()) {
-        // Destructive buttons usually have a darker border
         if (backgroundColor == juce::Colours::red ||
             backgroundColor.getHue() < 0.05f) {
           g.setColour(fill.darker(0.2f).withAlpha(0.5f));
@@ -279,12 +248,11 @@ public:
     }
   }
 
-  // Standard L-string literal approach (industry standard for Windows/JUCE)
   void drawButtonText(juce::Graphics &g, juce::TextButton &button, bool,
                       bool) override {
     auto text = button.getButtonText();
 
-    // Standard L-string literal approach (industry standard for Windows/JUCE)
+    // PUA 字符按图标字体绘制，其余文本使用界面字体。
     if (text.length() > 0 &&
         (uint32_t)text.getCharPointer().getAndAdvance() >= 0xE000) {
       g.setFont(getIconFont(juce::jmin(16.0f, button.getHeight() * 0.5f)));
@@ -300,13 +268,10 @@ public:
                false);
   }
 
-  // === Circular Play Button (like Windows Media Player) ===
+  // === 圆形播放按钮 ===
   void drawCircularButton(juce::Graphics &g, juce::Rectangle<float> bounds,
                           const juce::String &icon, bool isPlaying, bool,
                           bool) {
-    // Background fill removed as per user request (redundant highlight)
-
-    // Icon
     g.setFont(getIconFont(20.0f));
     g.setColour(colors.textPrimary);
     g.drawText(icon, bounds.toNearestInt(), juce::Justification::centred,
@@ -316,7 +281,7 @@ public:
   int getSliderThumbRadius(juce::Slider &slider) override {
     if (slider.getSliderStyle() == juce::Slider::LinearHorizontal ||
         slider.getSliderStyle() == juce::Slider::LinearVertical)
-      return scaledInt(7); // Fixed 14px diameter interaction
+      return scaledInt(7);
     return juce::LookAndFeel_V4::getSliderThumbRadius(slider);
   }
 
@@ -324,7 +289,6 @@ public:
     juce::Slider::SliderLayout layout;
     auto bounds = slider.getLocalBounds();
 
-    // 1. Calculate Text Box Layout
     if (slider.getTextBoxPosition() != juce::Slider::NoTextBox) {
       int w = slider.getTextBoxWidth();
       int h = slider.getTextBoxHeight();
@@ -343,18 +307,16 @@ public:
         layout.textBoxBounds = bounds.removeFromBottom(h);
         bounds.removeFromBottom(gap);
       } else {
-        // Centered or other modes: overlay? simplified for now
+        // 居中和其他文本框模式直接覆盖滑块区域。
         layout.textBoxBounds = bounds;
       }
     } else {
       layout.textBoxBounds = {};
     }
 
-    // 2. Calculate Slider Track Layout
     if (slider.getSliderStyle() == juce::Slider::LinearHorizontal) {
       int radius = getSliderThumbRadius(slider);
-      // Inset the slider bounds by the thumb radius so the thumb stays fully
-      // inside
+      // 轨道内缩一个 thumb 半径，确保圆点不会越出组件边界。
       layout.sliderBounds = bounds.reduced(radius, 0);
     } else {
       layout.sliderBounds = bounds;
@@ -363,7 +325,7 @@ public:
     return layout;
   }
 
-  // === Sliders ===
+  // === 滑块 ===
   void drawLinearSlider(juce::Graphics &g, int x, int y, int width, int height,
                         float sliderPos, float, float,
                         juce::Slider::SliderStyle style,
@@ -375,20 +337,17 @@ public:
     auto bounds =
         juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height);
     float trackHeight = scaled(4.0f);
-    float thumbSize = scaled(14.0f); // Outer ring size (reduced from 16px)
+    float thumbSize = scaled(14.0f);
     float thumbRadius = thumbSize / 2.0f;
 
-    // Track spans full width
     auto trackArea =
         bounds.withSizeKeepingCentre(bounds.getWidth(), trackHeight);
 
-    // Background track
     auto trackColor =
         isEnabled ? colors.sliderTrack : colors.sliderTrack.withAlpha(0.3f);
     g.setColour(trackColor);
 
-    // Draw background track slightly inset to keep rounded caps inside visual
-    // component
+    // 背景轨道略微内缩，圆角端点保持在可视边界内。
     float visualPadding = trackHeight / 2.0f;
     juce::Path trackPath;
     trackPath.startNewSubPath(trackArea.getX() + visualPadding,
@@ -399,8 +358,6 @@ public:
                  juce::PathStrokeType(trackHeight, juce::PathStrokeType::curved,
                                       juce::PathStrokeType::rounded));
 
-    // Value track (progress fill)
-    // Only draw if we've moved past the start of the track
     if (sliderPos > (trackArea.getX() + visualPadding)) {
       auto progressColor = isEnabled ? colors.sliderProgress
                                      : colors.sliderProgress.withAlpha(0.3f);
@@ -415,12 +372,9 @@ public:
                                      juce::PathStrokeType::rounded));
     }
 
-    // Windows 11 Fluent Thumb: Outer ring + animated inner circle
-    // Always draw even when disabled, but use grey for inner circle
     float thumbX = sliderPos - thumbRadius;
     float thumbY = bounds.getCentreY() - thumbRadius;
 
-    // Calculate inner circle size based on state
     float innerRatio = 0.45f;
     if (isEnabled) {
       if (slider.isMouseButtonDown())
@@ -434,20 +388,16 @@ public:
     float innerX = sliderPos - innerRadius;
     float innerY = bounds.getCentreY() - innerRadius;
 
-    // 1. Drop shadow for depth
     g.setColour(juce::Colours::black.withAlpha(0.3f));
     g.fillEllipse(thumbX + 1.0f, thumbY + 2.0f, thumbSize, thumbSize);
 
-    // 2. Outer Ring (dark background for Win11 dark theme)
     g.setColour(juce::Colour(0xFF3B3B3B));
     g.fillEllipse(thumbX, thumbY, thumbSize, thumbSize);
 
-    // 3. Outer Ring Border
     g.setColour(juce::Colour(0xFF5A5A5A));
     g.drawEllipse(thumbX + 0.5f, thumbY + 0.5f, thumbSize - 1.0f,
                   thumbSize - 1.0f, 1.0f);
 
-    // 4. Inner Circle (colored if enabled, grey if disabled)
     auto innerColor =
         isEnabled ? colors.sliderProgress : juce::Colours::darkgrey;
     g.setColour(innerColor);
@@ -460,34 +410,26 @@ public:
     auto bounds = juce::Rectangle<float>(0, 0, (float)width, (float)height);
     float radius = scaled(6.0f);
 
-    // Always draw background for ComboBox so boundaries are clear
-    // Use DARK background with subtle changes (avoid "stuck" look)
-    // Fix: If popup is active (menu open), treat as 'Hover' or 'Idle', NOT
-    // pressed
+    // 弹出菜单打开时仍绘制为激活态，避免下拉框停留在按下态。
     juce::Colour bg;
     bool isMenuOpen = box.isPopupActive();
 
     if (!box.isEnabled()) {
       bg = juce::Colours::black.withAlpha(0.1f);
     } else if (isButtonDown || isMenuOpen) {
-      // Active State -> Clearly Darkest (0.6f)
       bg = juce::Colours::black.withAlpha(0.6f);
     } else if (box.isMouseOver()) {
-      // Hover -> Slightly Darker (0.45f)
       bg = juce::Colours::black.withAlpha(0.45f);
     } else {
-      // Idle -> Dark by default (0.35f) as requested
       bg = juce::Colours::black.withAlpha(0.35f);
     }
 
     g.setColour(bg);
     g.fillRoundedRectangle(bounds, radius);
 
-    // Explicit border
     g.setColour(colors.controlBorder);
     g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
 
-    // Smaller Chevron
     auto arrowZone = bounds.removeFromRight(scaled(24.0f));
     g.setFont(getIconFont(8.0f));
     g.setColour(colors.textSecondary);
@@ -496,31 +438,27 @@ public:
   }
 
   juce::Font getComboBoxFont(juce::ComboBox &) override {
-    return getDefaultFont(12.0f); // Smaller font to avoid truncation
+    return getDefaultFont(12.0f);
   }
 
   int getMenuWindowFlags() override {
-    return juce::ComponentPeer::windowIsSemiTransparent; // No drop shadow to
-                                                         // avoid corner
-                                                         // artifacts
+    // 半透明弹窗禁用系统阴影，避免圆角区域残影。
+    return juce::ComponentPeer::windowIsSemiTransparent;
   }
 
   juce::Font getPopupMenuFont() override {
-    return getDefaultFont(13.0f); // Standard size for menus
+    return getDefaultFont(13.0f);
   }
 
-  // === Popup Menu ===
+  // === 弹出菜单 ===
   void drawPopupMenuBackground(juce::Graphics &g, int width,
                                int height) override {
-    // Clear corner artifacts
     g.fillAll(juce::Colours::transparentBlack);
 
     float radius = scaled(8.0f);
-    // Menu background: 80% opacity black for a nice glass feel
     g.setColour(juce::Colours::black.withAlpha(0.8f));
     g.fillRoundedRectangle(0.0f, 0.0f, (float)width, (float)height, radius);
 
-    // Subtle border
     g.setColour(juce::Colour(0x30FFFFFF));
     g.drawRoundedRectangle(0.5f, 0.5f, (float)width - 1.0f,
                            (float)height - 1.0f, radius, 1.0f);
@@ -545,7 +483,6 @@ public:
       g.fillRoundedRectangle(r.toFloat(), scaled(4.0f));
     }
 
-    // Reserve less space for checkmark or none if not needed
     auto checkArea = r.removeFromLeft(scaledInt(20));
 
     if (isTicked) {
@@ -554,7 +491,6 @@ public:
       g.drawText(L"\uE73E", checkArea, juce::Justification::centred, false);
     }
 
-    // Draw text with less padding
     g.setColour(isActive ? colors.textPrimary : colors.textDisabled);
     g.setFont(getDefaultFont(13.0f));
     g.drawText(text, r.reduced(scaledInt(2), 0),
@@ -582,28 +518,22 @@ public:
     const int edgeGap = 12;
     juce::Rectangle<int> bounds(screenPos.x, screenPos.y - h - 10, w, h);
 
-    // Keep within parent bounds
     return bounds.constrainedWithin(parentArea.reduced(edgeGap));
   }
 
   void drawTooltip(juce::Graphics &g, const juce::String &text, int width,
                    int height) override {
-    // CRITICAL for transparency
+    // 先清空透明背景，避免圆角区域残留。
     g.fillAll(juce::Colours::transparentBlack);
 
     juce::Rectangle<float> bounds(0, 0, (float)width, (float)height);
 
-    // Clean, rounded rectangle background
-    // Because we setOpaque(false) in MainContentComponent, this will be the
-    // ONLY background.
-    g.setColour(juce::Colour(0xE6202020)); // High opacity dark background (90%)
+    g.setColour(juce::Colour(0xE6202020));
     g.fillRoundedRectangle(bounds, 6.0f);
 
-    // Subtle border for definition
     g.setColour(juce::Colours::white.withAlpha(0.1f));
     g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
 
-    // Text
     g.setColour(juce::Colours::white);
     g.setFont(getDefaultFont(14.0f));
     g.drawText(text, bounds, juce::Justification::centred, false);
@@ -616,15 +546,12 @@ public:
     auto bounds = alert.getLocalBounds().toFloat();
     float radius = scaled(12.0f);
 
-    // Background (Solid dark for alert content)
     g.setColour(colors.background);
     g.fillRoundedRectangle(bounds, radius);
 
-    // Border
     g.setColour(colors.cardBorder);
     g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
 
-    // Text drawing (standard layout)
     g.setColour(alert.findColour(juce::AlertWindow::textColourId));
     layout.draw(g, textArea.toFloat());
   }
@@ -657,7 +584,7 @@ public:
     g.fillRoundedRectangle(thumb, barWidth / 2.0f);
   }
 
-  // === DocumentWindow (Custom Frames for Windows 8/10/11) ===
+  // === DocumentWindow ===
   void drawDocumentWindowTitleBar(juce::DocumentWindow &window,
                                   juce::Graphics &g, int w, int h,
                                   int titleSpaceX, int titleSpaceW,
@@ -665,11 +592,10 @@ public:
                                   bool drawTitleTextOnLeft) override {
     auto bounds = juce::Rectangle<int>(0, 0, w, h).toFloat();
 
-    // Background (Match dark theme, slightly translucent overlay)
+    // 标题栏背景与卡片背景保持一致。
     g.setColour(colors.cardBackground);
     g.fillAll();
 
-    // Title text
     g.setColour(colors.textPrimary);
     g.setFont(getDefaultFont(14.0f, true));
 
