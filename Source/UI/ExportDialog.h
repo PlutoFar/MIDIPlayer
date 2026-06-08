@@ -331,6 +331,13 @@ public:
         }
 
         if (formatName == "Ogg Vorbis") {
+            bitCombo.setSelectedId(1, juce::dontSendNotification);
+            bitCombo.setEnabled(false);
+        } else {
+            bitCombo.setEnabled(true);
+        }
+
+        if (formatName == "Ogg Vorbis") {
             srCombo.setItemEnabled(3, false); // 88.2k
             srCombo.setItemEnabled(4, false); // 96k
             srCombo.setItemEnabled(5, false); // 192k
@@ -357,8 +364,10 @@ public:
             
             s.qualityIndex = qualityCombo.getSelectedId() - 1;
             
-            juce::String trackTitle = trackCombo.getText().upToLastOccurrenceOf(".", false, false);
-            s.title = trackTitle.isEmpty() ? trackCombo.getText() : trackTitle;
+            juce::String trackTitle = trackCombo.getText();
+            if (trackTitle.contains(". "))
+                trackTitle = trackTitle.fromFirstOccurrenceOf(". ", false, false);
+            s.title = trackTitle.trim();
             
             int selectedIdx = trackCombo.getSelectedId() - 1;
 
@@ -401,7 +410,7 @@ public:
                     break;
                 }
                 if (c == &qualityCombo || c->getParentComponent() == &qualityCombo) {
-                    hintText = L"控制无损压缩算法的计算深度或有损格式的目标比特率";
+                    hintText = L"FLAC 为压缩等级，Ogg 为编码质量；WAV 不需要质量参数";
                     break;
                 }
                 if (c == &tailCombo || c->getParentComponent() == &tailCombo) {
@@ -453,13 +462,13 @@ private:
         } else if (formatName == "FLAC") {
             qualityCombo.setEnabled(true);
             for (int i = 0; i <= 8; ++i) {
-                qualityCombo.addItem(L"级别 " + juce::String(i) + (i == 0 ? L" (文件大, 速度快)" : (i == 8 ? L" (文件小, 速度慢)" : L"")), i + 1);
+                qualityCombo.addItem(L"FLAC 压缩等级 " + juce::String(i) + (i == 0 ? L" (速度快)" : (i == 8 ? L" (文件小)" : L"")), i + 1);
             }
             qualityCombo.setSelectedId(6, juce::dontSendNotification); // Default FLAC level 5
         } else if (formatName == "Ogg Vorbis") {
             qualityCombo.setEnabled(true);
             for (int i = 1; i <= 10; ++i) {
-                qualityCombo.addItem(L"质量 " + juce::String(i) + (i == 1 ? L" (最低音质)" : (i == 10 ? L" (最高音质)" : L"")), i);
+                qualityCombo.addItem(L"Ogg 质量 " + juce::String(i) + (i == 1 ? L" (较小文件)" : (i == 10 ? L" (较高音质)" : L"")), i);
             }
             qualityCombo.setSelectedId(6, juce::dontSendNotification); // Default Ogg level 6
         }

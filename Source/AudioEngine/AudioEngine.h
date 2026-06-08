@@ -124,10 +124,19 @@ public:
   bool runOfflineExport(const juce::File &outputFile, const ExportSettings &settings,
                         std::function<void(float)> progressCallback,
                         std::function<bool()> shouldCancel) {
-    if (mainGraph == nullptr || vst3Node == nullptr)
+    lastExportError.clear();
+
+    auto fail = [this](const juce::String &message) {
+      lastExportError = message;
       return false;
+    };
+
+    if (mainGraph == nullptr || vst3Node == nullptr)
+      return fail(L"音频引擎或插件未准备好。");
 
     const int offlineBlockSize = 16384;
+    const double exportSampleRate =
+        settings.sampleRate > 0.0 ? settings.sampleRate : 44100.0;
 
     // Start playing for offline render
     midiPlayer.setPlaying(true);
@@ -138,18 +147,48 @@ public:
     juce::AudioFormat *format = nullptr;
     for (int i = 0; i < localFormatManager.getNumKnownFormats(); ++i) {
         auto* f = localFormatManager.getKnownFormat(i);
-        if (f->getFormatName().equalsIgnoreCase(settings.formatName) || 
-            (f->getFormatName().containsIgnoreCase("Ogg") && settings.formatName.containsIgnoreCase("Ogg"))) {
+        const auto availableName = f->getFormatName();
+        const bool wantsWav = settings.formatName.equalsIgnoreCase("WAV");
+        const bool wantsFlac = settings.formatName.equalsIgnoreCase("FLAC");
+        const bool wantsOgg = settings.formatName.containsIgnoreCase("Ogg");
+        if ((wantsWav && availableName.containsIgnoreCase("WAV")) ||
+            (wantsFlac && availableName.containsIgnoreCase("FLAC")) ||
+            (wantsOgg && (availableName.containsIgnoreCase("Ogg") ||
+                          availableName.containsIgnoreCase("Vorbis")))) {
             format = f;
             break;
         }
     }
-    if (format == nullptr) format = localFormatManager.getDefaultFormat();
+    if (format == nullptr)
+        return fail(L"当前 JUCE 构建不支持导出格式: " + settings.formatName);
 
-    std::unique_ptr<juce::OutputStream> outStream(new juce::FileOutputStream(outputFile));
+    auto possibleBitDepths = format->getPossibleBitDepths();
+    if (!possibleBitDepths.isEmpty() &&
+        !possibleBitDepths.contains(settings.bitDepth)) {
+        return fail(settings.formatName + L" 不支持 " +
+                    juce::String(settings.bitDepth) + L"-bit 导出。");
+    }
+
+    auto qualityOptions = format->getQualityOptions();
+    if (!qualityOptions.isEmpty() &&
+        !juce::isPositiveAndBelow(settings.qualityIndex,
+                                  qualityOptions.size())) {
+        return fail(settings.formatName + L" 的质量/压缩等级无效。");
+    }
+
+    auto parentDir = outputFile.getParentDirectory();
+    if (!parentDir.exists() && !parentDir.createDirectory())
+        return fail(L"无法创建导出目录: " + parentDir.getFullPathName());
+
+    juce::TemporaryFile tempFile(outputFile);
+    auto *rawStream = new juce::FileOutputStream(tempFile.getFile());
+    std::unique_ptr<juce::OutputStream> outStream(rawStream);
+    if (!rawStream->openedOk())
+        return fail(L"无法打开临时导出文件: " +
+                    rawStream->getStatus().getErrorMessage());
     
     juce::AudioFormatWriterOptions options;
-    options = options.withSampleRate(settings.sampleRate)
+    options = options.withSampleRate(exportSampleRate)
                      .withNumChannels(2)
                      .withBitsPerSample(settings.bitDepth)
                      .withMetadata("software", "MIDI Player");
@@ -165,29 +204,38 @@ public:
     std::unique_ptr<juce::AudioFormatWriter> writer = format->createWriterFor(outStream, options);
 
     if (writer == nullptr) {
-        return false;
+        return fail(L"无法创建 " + settings.formatName + L" 编码器。");
     }
 
     juce::AudioBuffer<float> buffer(2, offlineBlockSize);
     juce::MidiBuffer midi;
     
     double totalSamples = midiPlayer.getDurationInSamples();
-    if (totalSamples <= 0) totalSamples = settings.sampleRate * 60.0;
+    if (totalSamples <= 0) totalSamples = exportSampleRate * 60.0;
 
     int tailSamplesRendered = 0;
-    int maxFixedTail = (int)(settings.sampleRate * settings.fixedTailSeconds);
-    int maxAutoTail = (int)(settings.sampleRate * 60.0);
+    int maxFixedTail = (int)(exportSampleRate * juce::jmax(0.0, settings.fixedTailSeconds));
+    int maxAutoTail = (int)(exportSampleRate * 60.0);
     int silentSamples = 0;
     bool finishedSeq = false;
     double currentSample = 0;
     bool result = true;
     uint32_t lastCallbackTime = juce::Time::getMillisecondCounter();
 
+    auto reportProgress = [&](float progress) {
+        if (progressCallback)
+            progressCallback(juce::jlimit(0.0f, 1.0f, progress));
+    };
+
     while (true) {
         if (shouldCancel && shouldCancel()) {
             result = false;
+            lastExportError = L"导出已取消。";
             break;
         }
+
+        if (finishedSeq && !settings.autoTail && maxFixedTail <= 0)
+            break;
 
         buffer.clear();
         midi.clear();
@@ -199,17 +247,19 @@ public:
             juce::FloatVectorOperations::clip(buffer.getWritePointer(ch), buffer.getReadPointer(ch), -1.0f, 1.0f, buffer.getNumSamples());
         }
 
-        writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples())) {
+            result = false;
+            lastExportError = L"写入音频数据失败，可能是磁盘空间不足或文件不可写。";
+            break;
+        }
         currentSample += buffer.getNumSamples();
 
         if (!finishedSeq) {
             if (currentSample <= totalSamples) {
-                if (progressCallback) {
-                    uint32_t now = juce::Time::getMillisecondCounter();
-                    if (now - lastCallbackTime > 30) {
-                        progressCallback((float)(currentSample / totalSamples) * 0.9f);
-                        lastCallbackTime = now;
-                    }
+                uint32_t now = juce::Time::getMillisecondCounter();
+                if (now - lastCallbackTime > 30) {
+                    reportProgress((float)(currentSample / totalSamples) * 0.9f);
+                    lastCallbackTime = now;
                 }
             }
             if (midiPlayer.hasFinished() || currentSample >= totalSamples) {
@@ -217,30 +267,28 @@ public:
             }
         } else {
             if (settings.autoTail) {
-                float maxLevel = buffer.getMagnitude(0, buffer.getNumSamples());
+                float maxLevel = 0.0f;
+                for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                    maxLevel = juce::jmax(maxLevel, buffer.getMagnitude(ch, 0, buffer.getNumSamples()));
                 if (maxLevel < 0.00001f) {
                     silentSamples += buffer.getNumSamples();
-                    if (silentSamples > settings.sampleRate * 0.5) break;
+                    if (silentSamples > exportSampleRate * 0.5) break;
                 } else {
                     silentSamples = 0;
                 }
                 tailSamplesRendered += buffer.getNumSamples();
                 if (tailSamplesRendered >= maxAutoTail) break;
-                if (progressCallback) {
-                    uint32_t now = juce::Time::getMillisecondCounter();
-                    if (now - lastCallbackTime > 30) {
-                        progressCallback(0.9f + 0.1f * ((float)tailSamplesRendered / maxAutoTail));
-                        lastCallbackTime = now;
-                    }
+                uint32_t now = juce::Time::getMillisecondCounter();
+                if (now - lastCallbackTime > 30) {
+                    reportProgress(0.9f + 0.1f * ((float)tailSamplesRendered / (float)maxAutoTail));
+                    lastCallbackTime = now;
                 }
             } else {
                 tailSamplesRendered += buffer.getNumSamples();
-                if (progressCallback) {
-                    uint32_t now = juce::Time::getMillisecondCounter();
-                    if (now - lastCallbackTime > 30) {
-                        progressCallback(0.9f + 0.1f * ((float)tailSamplesRendered / maxFixedTail));
-                        lastCallbackTime = now;
-                    }
+                uint32_t now = juce::Time::getMillisecondCounter();
+                if (now - lastCallbackTime > 30 && maxFixedTail > 0) {
+                    reportProgress(0.9f + 0.1f * ((float)tailSamplesRendered / (float)maxFixedTail));
+                    lastCallbackTime = now;
                 }
                 if (tailSamplesRendered >= maxFixedTail) break;
             }
@@ -248,6 +296,17 @@ public:
     }
 
     writer.reset();
+    outStream.reset();
+
+    if (result) {
+        if (!tempFile.overwriteTargetFileWithTemporary()) {
+            tempFile.deleteTemporaryFile();
+            return fail(L"无法替换目标文件，请检查权限或文件是否被占用。");
+        }
+        reportProgress(1.0f);
+    } else {
+        tempFile.deleteTemporaryFile();
+    }
 
     // Real-time state restoration has been moved to restoreFromOfflineExport()
     return result;
@@ -270,6 +329,8 @@ public:
       Get the last plugin loading error message
   */
   juce::String getLastPluginError() const { return lastPluginError; }
+
+  juce::String getLastExportError() const { return lastExportError; }
 
   /**
       Check if this is the very first run (no AudioDevice.xml config exists)
@@ -964,6 +1025,7 @@ private:
   // Error messages for UI guidance
   juce::String lastInitError;
   juce::String lastPluginError;
+  juce::String lastExportError;
   bool isRecoveringDevice = false;
   bool hadDeviceFallback = false; // Startup-only: saved device was missing
 

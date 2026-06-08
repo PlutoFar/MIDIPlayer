@@ -1190,19 +1190,33 @@ private:
       int initialIndex = currentTrackIndex;
 
       auto* dlg = new ExportDialog(trackNames, initialIndex, [this](int selectedTrackIdx, const ExportSettings& s) {
+          auto exportDir = UserSettings::getSettingsDirectory().getChildFile("ExportedAudio");
+          exportDir.createDirectory();
+          const auto extension = getExportExtension(s);
           fileChooser = std::make_unique<juce::FileChooser>(
               L"保存音频文件",
-              UserSettings::getSettingsDirectory().getChildFile("ExportedAudio"),
-              "*" + (s.formatName == "FLAC" ? juce::String(".flac") : (s.formatName.containsIgnoreCase("Ogg") ? juce::String(".ogg") : juce::String(".wav"))));
+              exportDir.getChildFile(s.title.isNotEmpty() ? s.title + extension
+                                                           : "export" + extension),
+              "*" + extension);
 
           fileChooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
               [this, selectedTrackIdx, s](const juce::FileChooser& chooser) {
                   auto result = chooser.getResult();
                   if (result != juce::File{}) {
+                      result = ensureExportExtension(result, s);
                       bool needsTrackSwap = (selectedTrackIdx != currentTrackIndex);
                       juce::File originalFile;
                       double originalPosition = 0.0;
                       bool originalPlaying = false;
+
+                      auto restoreOriginalTrack = [&]() {
+                          if (needsTrackSwap && originalFile.existsAsFile()) {
+                              loadMidiFile(originalFile);
+                              engine.getMidiPlayer().seekTo(originalPosition);
+                              if (originalPlaying)
+                                  engine.getMidiPlayer().setPlaying(true);
+                          }
+                      };
 
                       if (needsTrackSwap) {
                           if (currentTrackIndex >= 0) {
@@ -1215,7 +1229,21 @@ private:
 
                           engine.getMidiPlayer().setPlaying(false);
                           if (auto* targetTrack = playlist.getTrack(selectedTrackIdx)) {
-                              loadMidiFile(targetTrack->file);
+                              if (!loadMidiFile(targetTrack->file)) {
+                                  juce::AlertWindow::showMessageBoxAsync(
+                                      juce::AlertWindow::WarningIcon,
+                                      L"导出失败",
+                                      L"无法加载待导出的 MIDI 文件。");
+                                  restoreOriginalTrack();
+                                  return;
+                              }
+                          } else {
+                              juce::AlertWindow::showMessageBoxAsync(
+                                  juce::AlertWindow::WarningIcon,
+                                  L"导出失败",
+                                  L"未找到待导出的曲目。");
+                              restoreOriginalTrack();
+                              return;
                           }
                       }
 
@@ -1225,15 +1253,14 @@ private:
                       engine.restoreFromOfflineExport();
 
                       if (needsTrackSwap && originalFile.existsAsFile()) {
-                          loadMidiFile(originalFile);
-                          engine.getMidiPlayer().seekTo(originalPosition);
-                          if (originalPlaying) {
-                              engine.getMidiPlayer().setPlaying(true);
-                          }
+                          restoreOriginalTrack();
                       }
 
                       if (thread->exportFailed) {
-                          juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, L"导出失败", L"无法创建文件或渲染引擎出现错误。");
+                          auto error = engine.getLastExportError();
+                          if (error.isEmpty())
+                              error = L"无法创建文件或渲染引擎出现错误。";
+                          juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, L"导出失败", error);
                       }
                   }
               });
@@ -1247,6 +1274,22 @@ private:
       options.useNativeTitleBar = false;
       options.resizable = false;
       options.launchAsync();
+  }
+
+  static juce::String getExportExtension(const ExportSettings& settings) {
+      if (settings.formatName == "FLAC")
+          return ".flac";
+      if (settings.formatName.containsIgnoreCase("Ogg"))
+          return ".ogg";
+      return ".wav";
+  }
+
+  static juce::File ensureExportExtension(const juce::File& file,
+                                          const ExportSettings& settings) {
+      const auto extension = getExportExtension(settings);
+      if (file.getFileExtension().equalsIgnoreCase(extension))
+          return file;
+      return file.withFileExtension(extension);
   }
 
   void runLater(int delayMs, std::function<void(MainContentComponent &)> fn) {
