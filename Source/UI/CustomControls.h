@@ -146,9 +146,15 @@ public:
             dynamic_cast<class FluentLookAndFeel *>(&getLookAndFeel())) {
       laf->drawButtonBackground(g, *this, juce::Colours::transparentBlack,
                                 isMouseOver, isButtonDown);
-      laf->drawButtonText(
-          g, static_cast<juce::TextButton &>(*(juce::TextButton *)this),
-          isMouseOver, isButtonDown);
+      const auto text = getButtonText();
+      if (text.isNotEmpty()) {
+        const auto firstChar = (uint32_t)text.getCharPointer().getAndAdvance();
+        g.setFont(firstChar >= 0xE000 ? laf->getIconFont(16.0f)
+                                      : laf->getDefaultFont(14.0f));
+        g.setColour(laf->getColors().textPrimary);
+        g.drawText(text, getLocalBounds(), juce::Justification::centred,
+                   false);
+      }
     }
   }
 
@@ -162,7 +168,10 @@ public:
 
   void setTooltip(const juce::String &tip) { tooltip = tip; }
   juce::String getTooltip() override { return tooltip; }
-  void setButtonText(const juce::String &newText) { customText = newText; }
+  void setButtonText(const juce::String &newText) {
+    customText = newText;
+    repaint();
+  }
   juce::String getButtonText() const { return customText; }
 
 private:

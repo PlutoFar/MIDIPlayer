@@ -104,11 +104,12 @@ public:
       if (settings.getRememberWindowBounds()) {
         auto bounds = settings.getWindowBounds();
         if (!bounds.isEmpty()) {
-          // 验证坐标是否在屏幕范围内（防止多显示器断开导致的窗口消失）
           auto displayArea =
               juce::Desktop::getInstance().getDisplays().getTotalBounds(true);
           if (displayArea.intersects(bounds)) {
-            setBounds(bounds);
+            bounds.setSize(juce::jlimit(800, 1920, bounds.getWidth()),
+                           juce::jlimit(600, 1200, bounds.getHeight()));
+            setBounds(bounds.constrainedWithin(displayArea));
           } else {
             centreWithSize(1100, 750);
           }
@@ -122,6 +123,9 @@ public:
 
       setVisible(true);
 
+      if (settings.getRememberWindowBounds() && settings.getWindowMaximized())
+        setFullScreen(true);
+
       // 恢复窗口置顶状态
       if (settings.getAlwaysOnTop())
         setAlwaysOnTop(true);
@@ -133,7 +137,9 @@ public:
 
       // 如果启用了记忆功能，在关闭前保存窗口位置。
       if (getAppSettings().getRememberWindowBounds()) {
-        getAppSettings().setWindowBounds(getBounds());
+        getAppSettings().setWindowMaximized(isFullScreen());
+        if (!isFullScreen())
+          getAppSettings().setWindowBounds(getBounds());
         getAppSettings().save();
       }
 

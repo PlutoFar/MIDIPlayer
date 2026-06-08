@@ -106,27 +106,10 @@ public:
               juce::Colours::transparentBlack);
   }
 
-  // === DPI Scaling ===
-  // Cached for performance - refresh when display settings change
-  float getScaleFactor() const {
-    auto now = juce::Time::currentTimeMillis();
-    // Refresh cache every 1 second (display changes are rare)
-    if (now - lastScaleUpdate > 1000) {
-      lastScaleUpdate = now;
-      if (auto *display =
-              juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) {
-        cachedScaleFactor = (float)display->scale;
-      } else {
-        cachedScaleFactor = 1.0f;
-      }
-    }
-    return cachedScaleFactor;
-  }
-
-  float scaled(float value) const { return value * getScaleFactor(); }
-  int scaledInt(int value) const {
-    return juce::roundToInt(scaled((float)value));
-  }
+  // JUCE gives components logical pixels on HiDPI displays. Keep LookAndFeel
+  // metrics in that same coordinate space to avoid double-scaling fonts/icons.
+  float scaled(float value) const { return value; }
+  int scaledInt(int value) const { return value; }
 
 
   // === Typography ===
@@ -708,10 +691,6 @@ public:
 private:
   FluentColors colors;
   bool isDarkMode;
-
-  // DPI scale factor cache
-  mutable juce::int64 lastScaleUpdate = 0;
-  mutable float cachedScaleFactor = 1.0f;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FluentLookAndFeel)
 };
