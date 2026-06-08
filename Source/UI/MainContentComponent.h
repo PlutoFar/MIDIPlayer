@@ -457,7 +457,8 @@ public:
     auto &player = engine.getMidiPlayer();
     const double currentSampleRate =
         engine.getSampleRate() > 0.0 ? engine.getSampleRate() : 44100.0;
-    if (player.hasSequence() &&
+    const bool isExporting = engine.isOfflineExportActive();
+    if (!isExporting && player.hasSequence() &&
         std::abs(player.getSequenceSampleRate() - currentSampleRate) >= 0.01)
       player.setSampleRate(currentSampleRate);
 
@@ -497,7 +498,7 @@ public:
 
     // 检查播放结束标志（仅在用户未拖动进度条时）。
     // 延迟检查防止在用户快速跳转时触发“下一曲”，避免状态冲突和播放中断。
-    if (!isUserDraggingProgress && player.hasFinished()) {
+    if (!isExporting && !isUserDraggingProgress && player.hasFinished()) {
       LOG_DEBUG("[FREEZE_DIAG] TC: calling handleTrackEnd");
       handleTrackEnd();
       LOG_DEBUG("[FREEZE_DIAG] TC: handleTrackEnd returned");
@@ -533,7 +534,7 @@ public:
     }
 
     // Handle playback resumption with debouncing
-    if (pendingResumePlayback) {
+    if (!isExporting && pendingResumePlayback) {
       // We don't need a heavy debounce here anymore because seekTo is now async
       // and doesn't block. We can resume pretty much immediately or keep a
       // small buffer. Keeping a small delay is still good for UI
@@ -1204,57 +1205,36 @@ private:
                   auto result = chooser.getResult();
                   if (result != juce::File{}) {
                       result = ensureExportExtension(result, s);
-                      bool needsTrackSwap = (selectedTrackIdx != currentTrackIndex);
-                      juce::File originalFile;
-                      double originalPosition = 0.0;
-                      bool originalPlaying = false;
-
-                      auto restoreOriginalTrack = [&]() {
-                          if (needsTrackSwap && originalFile.existsAsFile()) {
-                              loadMidiFile(originalFile);
-                              engine.getMidiPlayer().seekTo(originalPosition);
-                              if (originalPlaying)
-                                  engine.getMidiPlayer().setPlaying(true);
-                          }
-                      };
+                      const bool needsTrackSwap = (selectedTrackIdx != currentTrackIndex);
+                      auto originalState = captureExportPlaybackState();
 
                       if (needsTrackSwap) {
-                          if (currentTrackIndex >= 0) {
-                              if (auto* currTrack = playlist.getTrack(currentTrackIndex)) {
-                                  originalFile = currTrack->file;
-                              }
-                          }
-                          originalPosition = engine.getMidiPlayer().getPositionInSamples();
-                          originalPlaying = engine.getMidiPlayer().getPlaying();
-
-                          engine.getMidiPlayer().setPlaying(false);
                           if (auto* targetTrack = playlist.getTrack(selectedTrackIdx)) {
                               if (!loadMidiFile(targetTrack->file)) {
+                                  restoreExportPlaybackState(originalState);
                                   juce::AlertWindow::showMessageBoxAsync(
                                       juce::AlertWindow::WarningIcon,
                                       L"导出失败",
                                       L"无法加载待导出的 MIDI 文件。");
-                                  restoreOriginalTrack();
                                   return;
                               }
                           } else {
+                              restoreExportPlaybackState(originalState);
                               juce::AlertWindow::showMessageBoxAsync(
                                   juce::AlertWindow::WarningIcon,
                                   L"导出失败",
                                   L"未找到待导出的曲目。");
-                              restoreOriginalTrack();
                               return;
                           }
                       }
 
-                      engine.prepareForOfflineExport(s);
-                      auto thread = std::make_unique<OfflineExportThread>(engine, result, s);
-                      thread->runThread(); // blocks modal
-                      engine.restoreFromOfflineExport();
-
-                      if (needsTrackSwap && originalFile.existsAsFile()) {
-                          restoreOriginalTrack();
+                      std::unique_ptr<OfflineExportThread> thread;
+                      {
+                          AudioEngine::OfflineExportSession exportSession(engine, s);
+                          thread = std::make_unique<OfflineExportThread>(engine, result, s);
+                          thread->runThread(); // blocks modal
                       }
+                      restoreExportPlaybackState(originalState);
 
                       if (thread->exportFailed) {
                           auto error = engine.getLastExportError();
@@ -1292,6 +1272,49 @@ private:
       return file.withFileExtension(extension);
   }
 
+  struct ExportPlaybackState {
+      int trackIndex = -1;
+      juce::File file;
+      double position = 0.0;
+      bool wasPlaying = false;
+      bool hadPendingResume = false;
+      bool wasHandlingTrackEnd = false;
+  };
+
+  ExportPlaybackState captureExportPlaybackState() {
+      ExportPlaybackState state;
+      state.trackIndex = currentTrackIndex;
+      if (currentTrackIndex >= 0) {
+          if (auto* track = playlist.getTrack(currentTrackIndex))
+              state.file = track->file;
+      }
+      state.position = engine.getMidiPlayer().getPositionInSamples();
+      state.wasPlaying = engine.getMidiPlayer().getPlaying();
+      state.hadPendingResume = pendingResumePlayback;
+      state.wasHandlingTrackEnd = isHandlingTrackEnd;
+      ++trackSwitchGeneration;
+
+      pendingResumePlayback = false;
+      isHandlingTrackEnd = false;
+      engine.getMidiPlayer().setPlaying(false);
+      return state;
+  }
+
+  void restoreExportPlaybackState(const ExportPlaybackState& state) {
+      ++trackSwitchGeneration;
+      currentTrackIndex = state.trackIndex;
+      pendingResumePlayback = state.hadPendingResume;
+      isHandlingTrackEnd = state.wasHandlingTrackEnd;
+
+      if (state.file.existsAsFile())
+          loadMidiFile(state.file);
+
+      engine.getMidiPlayer().seekTo(state.position);
+      engine.getMidiPlayer().setPlaying(state.wasPlaying);
+
+      if (currentTrackIndex >= 0)
+          playlistPanel.setCurrentTrackIndex(currentTrackIndex);
+  }
   void runLater(int delayMs, std::function<void(MainContentComponent &)> fn) {
     auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
     juce::Timer::callAfterDelay(

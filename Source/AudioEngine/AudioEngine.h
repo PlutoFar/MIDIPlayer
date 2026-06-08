@@ -7,6 +7,7 @@
 
 #include "../Utils/UserSettings.h"
 #include "MidiPlayerProcessor.h"
+#include <atomic>
 
 struct ExportSettings {
   juce::String formatName = "WAV"; // "WAV", "FLAC", "Ogg Vorbis"
@@ -98,27 +99,69 @@ public:
 
   void prepareForOfflineExport(const ExportSettings &settings) {
     if (mainGraph == nullptr || vst3Node == nullptr) return;
+    offlineExportActive.store(true, std::memory_order_release);
     suspendProcessing(true);
-    midiPlayer.setSampleRate(settings.sampleRate);
+    const double exportSampleRate =
+        settings.sampleRate > 0.0 ? settings.sampleRate : 44100.0;
     midiPlayer.setPlaying(false);
+    midiPlayer.setSampleRate(exportSampleRate);
     midiPlayer.seekTo(0.0);
     auto *processor = vst3Node->getProcessor();
+    if (processor == nullptr) {
+      offlineExportActive.store(false, std::memory_order_release);
+      suspendProcessing(false);
+      return;
+    }
     processor->setNonRealtime(true);
     const int offlineBlockSize = 16384;
-    mainGraph->setPlayConfigDetails(0, 2, settings.sampleRate, offlineBlockSize);
-    mainGraph->prepareToPlay(settings.sampleRate, offlineBlockSize);
+    mainGraph->setPlayConfigDetails(0, 2, exportSampleRate, offlineBlockSize);
+    mainGraph->prepareToPlay(exportSampleRate, offlineBlockSize);
   }
 
   void restoreFromOfflineExport() {
-    if (mainGraph == nullptr || vst3Node == nullptr) return;
+    if (mainGraph == nullptr || vst3Node == nullptr) {
+      offlineExportActive.store(false, std::memory_order_release);
+      suspendProcessing(false);
+      return;
+    }
     auto *processor = vst3Node->getProcessor();
     processor->setNonRealtime(false);
     auto currentSetup = deviceManager.getAudioDeviceSetup();
-    mainGraph->prepareToPlay(currentSetup.sampleRate, currentSetup.bufferSize);
-    midiPlayer.setSampleRate(currentSetup.sampleRate);
+    const double liveSampleRate =
+        currentSetup.sampleRate > 0.0 ? currentSetup.sampleRate : 44100.0;
+    const int liveBlockSize =
+        currentSetup.bufferSize > 0 ? currentSetup.bufferSize : 512;
+    mainGraph->prepareToPlay(liveSampleRate, liveBlockSize);
+    midiPlayer.setSampleRate(liveSampleRate);
     midiPlayer.setPlaying(false);
     midiPlayer.seekTo(0.0);
+    offlineExportActive.store(false, std::memory_order_release);
     suspendProcessing(false);
+  }
+
+  class OfflineExportSession {
+  public:
+    OfflineExportSession(AudioEngine &owner, const ExportSettings &settings)
+        : engine(owner) {
+      engine.prepareForOfflineExport(settings);
+      active = true;
+    }
+
+    ~OfflineExportSession() {
+      if (active)
+        engine.restoreFromOfflineExport();
+    }
+
+    OfflineExportSession(const OfflineExportSession &) = delete;
+    OfflineExportSession &operator=(const OfflineExportSession &) = delete;
+
+  private:
+    AudioEngine &engine;
+    bool active = false;
+  };
+
+  bool isOfflineExportActive() const {
+    return offlineExportActive.load(std::memory_order_acquire);
   }
 
   bool runOfflineExport(const juce::File &outputFile, const ExportSettings &settings,
@@ -433,6 +476,12 @@ public:
   void processBlock(juce::AudioBuffer<float> &buffer,
                     juce::MidiBuffer &midiMessages) override {
     juce::ScopedNoDenormals noDenormals;
+
+    if (isOfflineExportActive()) {
+      buffer.clear();
+      midiMessages.clear();
+      return;
+    }
 
     // Clear any input (we're output only)
     for (auto i = getTotalNumInputChannels(); i < getTotalNumOutputChannels();
@@ -1007,6 +1056,7 @@ private:
   MidiPlayer midiPlayer;
 
   std::atomic<float> masterVolume{0.8f};
+  std::atomic<bool> offlineExportActive{false};
   juce::StringArray customVst3Paths;
 
   // Audio fade-out to prevent pops when stopping (about 50ms at 44.1kHz)
