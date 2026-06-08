@@ -2256,8 +2256,10 @@ public:
           if (safeThis == nullptr)
             return;
 
+          safeThis->applyConfiguredFonts();
           safeThis->playlistPanel.refresh();
           safeThis->playlistPanel.repaint();
+          safeThis->repaint();
     };
 
     juce::DialogWindow::LaunchOptions options;
@@ -2268,6 +2270,13 @@ public:
     options.useNativeTitleBar = false;
     options.resizable = false;
     fontSettingsWindow = options.launchAsync();
+  }
+
+  void applyConfiguredFonts() {
+    pageTitle.setFont(fluentLookAndFeel.getDefaultFont(26.0f, true));
+    contentLabel.setFont(fluentLookAndFeel.getDefaultFont(16.0f));
+    trackLabel.setFont(fluentLookAndFeel.getDefaultFont(14.0f, true));
+    timeLabel.setFont(fluentLookAndFeel.getDefaultFont(12.0f));
   }
 
   void closeSettingsWindows() {
