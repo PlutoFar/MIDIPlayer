@@ -13,6 +13,8 @@ Source/WinUI/packages/
 # Local IDE and tool state
 .vs/
 .vscode/
+.claude/
+.superpowers/
 *.suo
 *.user
 *.VC.db
@@ -29,8 +31,9 @@ node_modules/
 packages/
 vendor/
 
-# Local build helpers are intentionally not distributed as source
+# Local build helpers and non-distributed project notes
 build*.bat
+docs/
 
 # Portable-mode and user data
 Settings/
