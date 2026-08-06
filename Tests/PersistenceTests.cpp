@@ -77,6 +77,25 @@ int runPersistenceTests() {
   expect(failures, settingsFile.existsAsFile(),
          "settings destructor should save fresh defaults after quarantine");
 
+  {
+    UserSettings settings(settingsFile);
+    expect(failures, settings.getUIFontSize() == 14.0f,
+           "UI font size should default to 14");
+    settings.setUIFontSize(30.0f);
+    expect(failures, settings.getUIFontSize() == 20.0f,
+           "UI font size should clamp to the supported maximum");
+    settings.setUIFontSize(18.0f);
+    expect(failures, settings.save(), "UI font size should save");
+  }
+  {
+    UserSettings settings(settingsFile);
+    expect(failures, settings.getUIFontSize() == 18.0f,
+           "UI font size should persist");
+    settings.setUIFontSize(8.0f);
+    expect(failures, settings.getUIFontSize() == 12.0f,
+           "UI font size should clamp to the supported minimum");
+  }
+
   tempDir.deleteRecursively();
   return failures;
 }

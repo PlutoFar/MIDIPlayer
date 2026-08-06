@@ -1807,6 +1807,7 @@ public:
     core.setPlayMode(savedMode);
 
     fluentLookAndFeel.setUIFont(settings.getUIFontName());
+    fluentLookAndFeel.setUIFontSize(settings.getUIFontSize());
     fluentLookAndFeel.setPlaylistFont(settings.getPlaylistFontName());
 
     playlistPanel.refresh();
@@ -2293,7 +2294,7 @@ public:
 
     FontSettingsContent(FluentLookAndFeel &laf) : fluentLookAndFeel(laf) {
       setLookAndFeel(&fluentLookAndFeel);
-      setSize(500, 320);
+      setSize(500, 400);
       setOpaque(false);
 
       availableFonts = juce::Font::findAllTypefaceNames();
@@ -2337,9 +2338,29 @@ public:
           juce::String fontName = fontRealNames_UI[id - 1];
           getAppSettings().setUIFontName(fontName);
           fluentLookAndFeel.setUIFont(fontName);
+          refreshTypography();
           if (onSettingsChanged)
             onSettingsChanged();
         }
+      };
+
+      addAndMakeVisible(uiFontSizeLabel);
+      uiFontSizeLabel.setText(L"字号", juce::dontSendNotification);
+      FluentSettingsStyle::configureLabel(uiFontSizeLabel, fluentLookAndFeel);
+
+      addAndMakeVisible(uiFontSizeSlider);
+      uiFontSizeSlider.setRange(12.0, 20.0, 1.0);
+      uiFontSizeSlider.setValue(getAppSettings().getUIFontSize());
+      uiFontSizeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+      uiFontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50,
+                                       20);
+      uiFontSizeSlider.onValueChange = [this]() {
+        const float size = (float)uiFontSizeSlider.getValue();
+        getAppSettings().setUIFontSize(size);
+        fluentLookAndFeel.setUIFontSize(size);
+        refreshTypography();
+        if (onSettingsChanged)
+          onSettingsChanged();
       };
 
       addAndMakeVisible(playlistSectionLabel);
@@ -2369,17 +2390,19 @@ public:
         }
       };
 
-      addAndMakeVisible(fontSizeLabel);
-      fontSizeLabel.setText(L"字号", juce::dontSendNotification);
-      FluentSettingsStyle::configureLabel(fontSizeLabel, fluentLookAndFeel);
+      addAndMakeVisible(playlistFontSizeLabel);
+      playlistFontSizeLabel.setText(L"字号", juce::dontSendNotification);
+      FluentSettingsStyle::configureLabel(playlistFontSizeLabel,
+                                          fluentLookAndFeel);
 
-      addAndMakeVisible(fontSizeSlider);
-      fontSizeSlider.setRange(12.0, 36.0, 1.0);
-      fontSizeSlider.setValue(getAppSettings().getPlaylistFontSize());
-      fontSizeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-      fontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-      fontSizeSlider.onValueChange = [this]() {
-        float size = (float)fontSizeSlider.getValue();
+      addAndMakeVisible(playlistFontSizeSlider);
+      playlistFontSizeSlider.setRange(12.0, 36.0, 1.0);
+      playlistFontSizeSlider.setValue(getAppSettings().getPlaylistFontSize());
+      playlistFontSizeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+      playlistFontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false,
+                                             50, 20);
+      playlistFontSizeSlider.onValueChange = [this]() {
+        float size = (float)playlistFontSizeSlider.getValue();
         getAppSettings().setPlaylistFontSize(size);
         if (onSettingsChanged)
           onSettingsChanged();
@@ -2462,10 +2485,26 @@ public:
 
     juce::String getDisplayName(const juce::String &name) { return name; }
 
+    void refreshTypography() {
+      FluentSettingsStyle::configureLabel(interfaceSectionLabel,
+                                          fluentLookAndFeel, true);
+      FluentSettingsStyle::configureLabel(uiFontLabel, fluentLookAndFeel);
+      FluentSettingsStyle::configureLabel(uiFontSizeLabel, fluentLookAndFeel);
+      FluentSettingsStyle::configureLabel(playlistSectionLabel,
+                                          fluentLookAndFeel, true);
+      FluentSettingsStyle::configureLabel(playlistFontLabel,
+                                          fluentLookAndFeel);
+      FluentSettingsStyle::configureLabel(playlistFontSizeLabel,
+                                          fluentLookAndFeel);
+      repaint();
+      if (auto *window = getTopLevelComponent())
+        window->repaint();
+    }
+
     void resized() override {
       auto area =
           getLocalBounds().reduced(FluentSettingsStyle::panelMargin);
-      interfaceCardBounds = area.removeFromTop(104);
+      interfaceCardBounds = area.removeFromTop(172);
       area.removeFromTop(12);
       playlistCardBounds = area.removeFromTop(172);
 
@@ -2478,6 +2517,11 @@ public:
           FluentSettingsStyle::controlHeight);
       uiFontLabel.setBounds(uiRow.removeFromLeft(labelWidth));
       uiFontCombo.setBounds(uiRow);
+      interfaceContent.removeFromTop(FluentSettingsStyle::rowGap);
+      auto uiSizeRow = interfaceContent.removeFromTop(
+          FluentSettingsStyle::controlHeight);
+      uiFontSizeLabel.setBounds(uiSizeRow.removeFromLeft(labelWidth));
+      uiFontSizeSlider.setBounds(uiSizeRow);
 
       auto playlistContent =
           playlistCardBounds.reduced(FluentSettingsStyle::cardPadding);
@@ -2490,8 +2534,8 @@ public:
       playlistContent.removeFromTop(FluentSettingsStyle::rowGap);
       auto sizeRow = playlistContent.removeFromTop(
           FluentSettingsStyle::controlHeight);
-      fontSizeLabel.setBounds(sizeRow.removeFromLeft(labelWidth));
-      fontSizeSlider.setBounds(sizeRow);
+      playlistFontSizeLabel.setBounds(sizeRow.removeFromLeft(labelWidth));
+      playlistFontSizeSlider.setBounds(sizeRow);
     }
 
     FluentLookAndFeel &fluentLookAndFeel;
@@ -2500,9 +2544,9 @@ public:
     juce::StringArray fontRealNames_Playlist;
 
     juce::Label interfaceSectionLabel, playlistSectionLabel, uiFontLabel,
-        playlistFontLabel, fontSizeLabel;
+        uiFontSizeLabel, playlistFontLabel, playlistFontSizeLabel;
     juce::ComboBox uiFontCombo, playlistFontCombo;
-    juce::Slider fontSizeSlider;
+    juce::Slider uiFontSizeSlider, playlistFontSizeSlider;
     juce::Rectangle<int> interfaceCardBounds, playlistCardBounds;
   };
 

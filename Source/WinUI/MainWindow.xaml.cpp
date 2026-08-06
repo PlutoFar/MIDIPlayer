@@ -780,6 +780,7 @@ namespace winrt::MidiPlayer::implementation
         }
         if (uiSel >= 0) UiFontCombo().SelectedIndex(uiSel);
         if (plSel >= 0) PlaylistFontCombo().SelectedIndex(plSel);
+        UiFontSizeSlider().Value(m_settings->uiFontSize());
         PlaylistFontSizeSlider().Value(m_settings->playlistFontSize());
         m_settingsInit = false;
     }
@@ -789,6 +790,13 @@ namespace winrt::MidiPlayer::implementation
         if (m_settingsInit || !m_settings) return;
         auto item = UiFontCombo().SelectedItem();
         if (item) { m_settings->setUiFontName(winrt::unbox_value<hstring>(item).c_str()); ApplyFonts(); }
+    }
+
+    void MainWindow::OnUiFontSizeChanged(IInspectable const&, RangeBaseValueChangedEventArgs const& e)
+    {
+        if (m_settingsInit || !m_settings) return;
+        m_settings->setUiFontSize((float)e.NewValue());
+        ApplyFonts();
     }
 
     void MainWindow::OnPlaylistFontChanged(IInspectable const&, SelectionChangedEventArgs const&)
@@ -810,6 +818,7 @@ namespace winrt::MidiPlayer::implementation
         if (!m_settings) return;
         auto ui = m_settings->uiFontName();
         if (!ui.empty()) Nav().FontFamily(Media::FontFamily(hstring(ui)));
+        Nav().FontSize(m_settings->uiFontSize());
         auto pl = m_settings->playlistFontName();
         if (!pl.empty()) PlaylistView().FontFamily(Media::FontFamily(hstring(pl)));
         PlaylistView().FontSize(m_settings->playlistFontSize());

@@ -63,6 +63,8 @@ public:
   std::vector<std::wstring> systemFonts();
   std::wstring uiFontName();
   void setUiFontName(const std::wstring &name);
+  float uiFontSize();
+  void setUiFontSize(float size);
   std::wstring playlistFontName();
   void setPlaylistFontName(const std::wstring &name);
   float playlistFontSize();

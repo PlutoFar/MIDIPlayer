@@ -97,30 +97,36 @@ public:
 
   juce::String uiFontName = "Source Han Sans SC";
   juce::String playlistFontName = "Microsoft YaHei UI";
+  float uiFontSize = 14.0f;
 
   void setUIFont(const juce::String &fontName) { uiFontName = fontName; }
+  void setUIFontSize(float size) {
+    uiFontSize = juce::jlimit(12.0f, 20.0f, size);
+  }
   void setPlaylistFont(const juce::String &fontName) {
     playlistFontName = fontName;
   }
 
   const juce::String &getUIFontName() const { return uiFontName; }
+  float getUIFontSize() const { return uiFontSize; }
   const juce::String &getPlaylistFontName() const { return playlistFontName; }
 
   juce::Font getDefaultFont(float size = 14.0f, bool semibold = false) const {
-    juce::FontOptions options(uiFontName, scaled(size),
+    const float adjustedSize = size * uiFontSize / 14.0f;
+    juce::FontOptions options(uiFontName, scaled(adjustedSize),
                               semibold ? juce::Font::bold : juce::Font::plain);
     juce::Font font(options);
 
     // 中文界面优先回退到微软雅黑，避免系统默认字体缺字。
     if (font.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
       font = juce::Font(
-          juce::FontOptions("Microsoft YaHei UI", scaled(size),
+          juce::FontOptions("Microsoft YaHei UI", scaled(adjustedSize),
                             semibold ? juce::Font::bold : juce::Font::plain));
     }
 
     if (font.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
       font = juce::Font(
-          juce::FontOptions("Segoe UI", scaled(size),
+          juce::FontOptions("Segoe UI", scaled(adjustedSize),
                             semibold ? juce::Font::bold : juce::Font::plain));
     }
 

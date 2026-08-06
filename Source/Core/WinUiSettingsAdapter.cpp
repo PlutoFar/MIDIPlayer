@@ -292,6 +292,15 @@ void WinUiSettingsAdapter::setUiFontName(const std::wstring &name) {
   getAppSettings().save();
 }
 
+float WinUiSettingsAdapter::uiFontSize() {
+  return getAppSettings().getUIFontSize();
+}
+
+void WinUiSettingsAdapter::setUiFontSize(float size) {
+  getAppSettings().setUIFontSize(size);
+  getAppSettings().save();
+}
+
 std::wstring WinUiSettingsAdapter::playlistFontName() {
   return std::wstring(getAppSettings().getPlaylistFontName().toWideCharPointer());
 }

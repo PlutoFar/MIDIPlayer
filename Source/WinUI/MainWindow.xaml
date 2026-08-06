@@ -280,6 +280,13 @@
                             <ComboBox x:Name="UiFontCombo" Width="320"
                                       AutomationProperties.Name="界面字体"
                                       SelectionChanged="OnUiFontChanged" />
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock Text="字号" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextSecondaryBrush}" />
+                                <Slider x:Name="UiFontSizeSlider" Width="240" Minimum="12" Maximum="20"
+                                        AutomationProperties.Name="界面字号"
+                                        StepFrequency="1" ValueChanged="OnUiFontSizeChanged" />
+                            </StackPanel>
                             <TextBlock Text="播放列表字体" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0"
                                        Foreground="{ThemeResource TextPrimaryBrush}" />
                             <ComboBox x:Name="PlaylistFontCombo" Width="320"
