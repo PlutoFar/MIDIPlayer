@@ -1,12 +1,39 @@
+# Build outputs
 build/
 build-*/
 dist/
-JUCE/
+
+# WinUI generated and local build outputs
+Source/WinUI/Generated Files/
+Source/WinUI/MidiPlayer/
+Source/WinUI/obj/
+Source/WinUI/x64/
+Source/WinUI/packages/
+
+# Local IDE and tool state
+.vs/
+.vscode/
 *.suo
 *.user
 *.VC.db
 *.VC.VC.opendb
+
+# Runtime logs and dumps
 *.log
-*.ilk
+*.dmp
 *.pdb
-*.tlog/
+
+# Dependency outputs
+JUCE/
+node_modules/
+packages/
+vendor/
+
+# Local build helpers are intentionally not distributed as source
+build*.bat
+
+# Portable-mode and user data
+Settings/
+VST3/
+playlist.json
+播放列表.json

@@ -1,0 +1,9 @@
+diff --git a/modules/juce_events/interprocess/juce_ConnectedChildProcess.cpp b/modules/juce_events/interprocess/juce_ConnectedChildProcess.cpp
+index 533a75e308..6ae305749f 100644
+--- a/modules/juce_events/interprocess/juce_ConnectedChildProcess.cpp
++++ b/modules/juce_events/interprocess/juce_ConnectedChildProcess.cpp
+@@ -216,1 +216,4 @@
++    if (childProcess != nullptr && childProcess->isRunning())
++        childProcess->kill();
++
+     childProcess.reset();

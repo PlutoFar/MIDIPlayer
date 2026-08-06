@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Application
+    x:Class="MidiPlayer.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- 与旧版 FluentColors (CustomLookAndFeel.h) 对齐的主题色板。 -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#D9F3F3F3" />
+                    <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="CardBorderBrush" Color="#E5E5E5" />
+                    <SolidColorBrush x:Key="AccentPrimaryBrush" Color="#0078D4" />
+                    <SolidColorBrush x:Key="AccentLightBrush" Color="#2B88D8" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#1A1A1A" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#606060" />
+                    <SolidColorBrush x:Key="ControlHoverBrush" Color="#F0F0F0" />
+                    <SolidColorBrush x:Key="ControlPressedBrush" Color="#E8E8E8" />
+                    <SolidColorBrush x:Key="SliderTrackBrush" Color="#E0E0E0" />
+                    <SolidColorBrush x:Key="SliderProgressBrush" Color="#0078D4" />
+                    <SolidColorBrush x:Key="TransportBackgroundBrush" Color="#FAFAFA" />
+                    <SolidColorBrush x:Key="ContentPanelBackgroundBrush" Color="#EFFFFFFF" />
+                    <SolidColorBrush x:Key="NavigationPanelBackgroundBrush" Color="#E8FFFFFF" />
+                    <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#E8FFFFFF" />
+                    <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#E8FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackground" Color="#73FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="#8CFFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="#A6FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackgroundUnfocused" Color="#73FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="Transparent" />
+                    <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="#33000000" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#D9121212" />
+                    <SolidColorBrush x:Key="CardBackgroundBrush" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="CardBorderBrush" Color="#30FFFFFF" />
+                    <SolidColorBrush x:Key="AccentPrimaryBrush" Color="#0078D4" />
+                    <SolidColorBrush x:Key="AccentLightBrush" Color="#2B88D8" />
+                    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#B0B0B0" />
+                    <SolidColorBrush x:Key="ControlHoverBrush" Color="#40FFFFFF" />
+                    <SolidColorBrush x:Key="ControlPressedBrush" Color="#50FFFFFF" />
+                    <SolidColorBrush x:Key="SliderTrackBrush" Color="#40FFFFFF" />
+                    <SolidColorBrush x:Key="SliderProgressBrush" Color="#2B88D8" />
+                    <SolidColorBrush x:Key="TransportBackgroundBrush" Color="#60000000" />
+                    <SolidColorBrush x:Key="ContentPanelBackgroundBrush" Color="#D91E1E1E" />
+                    <SolidColorBrush x:Key="NavigationPanelBackgroundBrush" Color="#CC1E1E1E" />
+                    <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#CC1E1E1E" />
+                    <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#CC1E1E1E" />
+                    <SolidColorBrush x:Key="ComboBoxBackground" Color="#40FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="#59FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="#73FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackgroundUnfocused" Color="#40FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="Transparent" />
+                    <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="#33FFFFFF" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
+            <!-- 运行时可变的强调色画刷（Monet 取色后更新 Color） -->
+            <SolidColorBrush x:Key="SliderTrackValueFill" Color="#0078D4" />
+            <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#0078D4" />
+            <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#0078D4" />
+            <SolidColorBrush x:Key="SliderTrackValueFillDisabled" Color="#0078D4" />
+            <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#0078D4" />
+            <SolidColorBrush x:Key="AppHoverOverlayBrush" Color="#22808080" />
+            <SolidColorBrush x:Key="AppPressedOverlayBrush" Color="#33808080" />
+
+            <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+            <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+
+            <!-- 扁平按钮：静止/禁用全透明，仅悬浮/按下显淡色，无边框。
+                 作为隐式样式应用到所有 Button，保证统一沉浸式外观。 -->
+            <Style x:Key="FlatButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{ThemeResource TextPrimaryBrush}" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="11,6" />
+                <Setter Property="CornerRadius" Value="6" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="UseSystemFocusVisuals" Value="True" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Root"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{TemplateBinding CornerRadius}">
+                                <Grid>
+                                    <Border x:Name="Overlay" Background="{ThemeResource AppHoverOverlayBrush}"
+                                            Opacity="0" CornerRadius="{TemplateBinding CornerRadius}" />
+                                    <ContentPresenter x:Name="CP"
+                                                      Padding="{TemplateBinding Padding}"
+                                                      Content="{TemplateBinding Content}"
+                                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                      Foreground="{TemplateBinding Foreground}"
+                                                      HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                    <VisualStateManager.VisualStateGroups>
+                                        <VisualStateGroup x:Name="CommonStates">
+                                            <VisualState x:Name="Normal" />
+                                            <VisualState x:Name="PointerOver">
+                                                <VisualState.Setters>
+                                                    <Setter Target="Overlay.Opacity" Value="1" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="Pressed">
+                                                <VisualState.Setters>
+                                                    <Setter Target="Overlay.Opacity" Value="1" />
+                                                    <Setter Target="Overlay.Background" Value="{ThemeResource AppPressedOverlayBrush}" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="Disabled">
+                                                <VisualState.Setters>
+                                                    <Setter Target="CP.Opacity" Value="0.4" />
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                        </VisualStateGroup>
+                                    </VisualStateManager.VisualStateGroups>
+                                </Grid>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- 隐式：所有 Button 默认扁平 -->
+            <Style TargetType="Button" BasedOn="{StaticResource FlatButtonStyle}" />
+
+            <!-- 图标按钮：扁平 + 固定尺寸 + 图标字体 -->
+            <Style x:Key="IconButtonStyle" TargetType="Button" BasedOn="{StaticResource FlatButtonStyle}">
+                <Setter Property="Width" Value="36" />
+                <Setter Property="Height" Value="36" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets" />
+                <Setter Property="FontSize" Value="16" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

@@ -1,0 +1,5 @@
+* text=auto eol=lf
+
+*.vcxproj text eol=crlf
+*.manifest text eol=crlf
+*.rc text eol=crlf

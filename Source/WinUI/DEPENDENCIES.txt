@@ -1,0 +1,15 @@
+MIDI Player WinUI 运行依赖
+==========================
+
+运行本程序前必须安装以下 x64 依赖：
+
+1. Windows App Runtime 2.3.1 x64
+   安装 2.3.1 或兼容的更新 2.x 版本。
+   https://aka.ms/windowsappsdk/2.3/2.3.1/windowsappruntimeinstall-x64.exe
+   https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads
+
+2. Microsoft Visual C++ 2015-2022 Redistributable (x64)
+   https://aka.ms/vc14/vc_redist.x64.exe
+
+项目使用的 Windows App SDK NuGet 版本：2.3.1。
+依赖安装完成后直接运行 MidiPlayer.exe。
