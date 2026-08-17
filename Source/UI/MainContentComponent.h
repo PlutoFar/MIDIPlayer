@@ -1116,7 +1116,7 @@ private:
                      const juce::File& targetFile) {
     auto thread =
         std::make_unique<OfflineExportThread>(core, selectedTrackIndex,
-                                              targetFile, settings);
+                                              targetFile, settings, this);
     const bool completed = thread->runThread();
     if (!completed && !thread->exportFailed)
       thread->exportCancelled = true;
@@ -1281,8 +1281,9 @@ private:
     // 插件扫描目前不提供单插件进度，进度窗口以不确定状态显示。
     class ScanThread : public juce::ThreadWithProgressWindow {
     public:
-      ScanThread(midi::Core &c)
-          : juce::ThreadWithProgressWindow(L"扫描 VST3 插件...", true, true),
+      ScanThread(midi::Core &c, juce::Component *ownerComponent)
+          : juce::ThreadWithProgressWindow(L"扫描 VST3 插件...", true, true,
+                                           -1, L"取消", ownerComponent),
             core(c) {}
 
       void run() override {
@@ -1297,7 +1298,7 @@ private:
     isScanningPlugins = true;
     pluginSelector.setEnabled(false);
 
-    auto scanner = std::make_unique<ScanThread>(core);
+    auto scanner = std::make_unique<ScanThread>(core, this);
     const bool completed = scanner->runThread();
     if (completed && scanner->scanSucceeded) {
       updatePluginList();
@@ -1652,14 +1653,14 @@ public:
         getAppSettings().getDontShowFileAssocPrompt())
       return;
 
-    auto *alertWindow = new juce::AlertWindow(
+    auto *alertWindow = fluentLookAndFeel.createAlertWindow(
         L"\u6587\u4EF6\u5173\u8054",
         L"\u662F\u5426\u5C06 .mid \u548C .midi \u6587\u4EF6\u5173\u8054\u5230 "
         L"MIDI \u64AD\u653E\u5668\uFF1F\n\n"
         L"\u5173\u8054\u540E\uFF0C\u53CC\u51FB MIDI "
         L"\u6587\u4EF6\u5373\u53EF\u81EA\u52A8\u6253\u5F00\u672C\u5E94\u7528"
         L"\u8FDB\u884C\u64AD\u653E\u3002",
-        juce::MessageBoxIconType::QuestionIcon);
+        {}, {}, {}, juce::MessageBoxIconType::QuestionIcon, 0, this);
 
     alertWindow->addButton(L"\u5173\u8054", 1);
     alertWindow->addButton(L"\u4e0d\u5173\u8054", 0);

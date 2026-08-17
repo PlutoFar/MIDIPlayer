@@ -9,9 +9,10 @@ class OfflineExportThread final : public juce::ThreadWithProgressWindow {
 public:
   OfflineExportThread(midi::Core &coreRef, int trackIndexValue,
                       const juce::File &targetFile,
-                      const ExportSettings &exportSettings)
+                      const ExportSettings &exportSettings,
+                      juce::Component *ownerComponent)
       : ThreadWithProgressWindow(L"正在导出高保真音频...", true, true, -1,
-                                 L"安全取消"),
+                                 L"安全取消", ownerComponent),
         core(coreRef), trackIndex(trackIndexValue), file(targetFile),
         settings(exportSettings) {}
 

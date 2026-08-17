@@ -362,6 +362,38 @@ public:
   }
 
 private:
+  static bool isTooltipAvoidanceControl(const juce::Component &component) {
+    return dynamic_cast<const juce::Button *>(&component) != nullptr ||
+           dynamic_cast<const juce::ComboBox *>(&component) != nullptr ||
+           dynamic_cast<const juce::Slider *>(&component) != nullptr ||
+           dynamic_cast<const juce::TextEditor *>(&component) != nullptr;
+  }
+
+  void collectTooltipAvoidAreas(juce::Component &component,
+                                juce::Component &topLevel,
+                                juce::Component &target,
+                                juce::Array<juce::Rectangle<int>> &areas) {
+    for (int index = 0; index < component.getNumChildComponents(); ++index) {
+      auto *child = component.getChildComponent(index);
+      if (child == nullptr || child == this || !child->isShowing())
+        continue;
+
+      if (child == &target || target.isParentOf(child) ||
+          child->isParentOf(&target)) {
+        collectTooltipAvoidAreas(*child, topLevel, target, areas);
+        continue;
+      }
+
+      if (isTooltipAvoidanceControl(*child)) {
+        auto bounds = topLevel.getLocalArea(child, child->getLocalBounds());
+        if (!bounds.isEmpty())
+          areas.add(bounds.expanded(4));
+      }
+
+      collectTooltipAvoidAreas(*child, topLevel, target, areas);
+    }
+  }
+
   void showTooltipNow() {
     if (pendingText.isEmpty() || currentTarget == nullptr) {
       isWaitingToShow = false;
@@ -388,8 +420,12 @@ private:
     auto targetBounds = topLevel->getLocalArea(currentTarget.getComponent(),
                                                currentTarget->getLocalBounds());
 
+    juce::Array<juce::Rectangle<int>> avoidAreas;
+    collectTooltipAvoidAreas(*topLevel, *topLevel,
+                             *currentTarget.getComponent(), avoidAreas);
+
     const auto bounds = TooltipPlacement::place(
-        tooltipSize, targetBounds, topLevel->getLocalBounds());
+        tooltipSize, targetBounds, topLevel->getLocalBounds(), avoidAreas);
     if (bounds.isEmpty()) {
       setVisible(false);
       stopTimer();

@@ -738,6 +738,26 @@ int main(int argc, char *argv[]) {
       {WindowMaterial::Type::Acrylic, 0.98f, 24});
   expect(highAcrylicOpacity - lowAcrylicOpacity > 0.35f,
          "dialog opacity changes should produce a clearly visible range");
+
+  {
+    std::unique_ptr<juce::AlertWindow> alert(
+        interactionLookAndFeel.createAlertWindow(
+            L"确认卸载", L"确定要卸载当前插件吗？", L"卸载", L"取消", {},
+            juce::MessageBoxIconType::QuestionIcon, 2, nullptr));
+    expect(dynamic_cast<FluentAlertWindow *>(alert.get()) != nullptr &&
+               !alert->isOpaque() && !alert->isDropShadowEnabled(),
+           "all JUCE alert paths should use the transparent Fluent window");
+    expect(alert->getAlertType() == juce::MessageBoxIconType::NoIcon &&
+               alert->getNumButtons() == 2 &&
+               alert->getButton(0)->getCommandID() == 1 &&
+               alert->getButton(1)->getCommandID() == 0,
+           "Fluent alerts should preserve JUCE modal button result mappings");
+    const auto surfaceAlpha = static_cast<double>(
+        alert->getProperties().getWithDefault("fluentDialogSurfaceAlpha", 0.0));
+    expect(surfaceAlpha > 0.0 && surfaceAlpha <= 1.0,
+           "Fluent alerts should receive the configured material surface");
+  }
+
   expect(getVolumeIconGlyph(0.0f) == L"\uE992" &&
              getVolumeIconGlyph(0.2f) == L"\uE993" &&
              getVolumeIconGlyph(0.5f) == L"\uE994" &&
@@ -760,6 +780,18 @@ int main(int argc, char *argv[]) {
   expect(!avoidingPlacement.intersects(centreAnchor) &&
              !avoidingPlacement.intersects(tooltipAvoidAreas[0]),
          "tooltips should avoid the anchor and registered overlay regions");
+
+  juce::Array<juce::Rectangle<int>> toolbarControls;
+  toolbarControls.add({214, 8, 78, 36});
+  toolbarControls.add({348, 8, 48, 36});
+  const juce::Rectangle<int> toolbarAnchor(300, 8, 40, 36);
+  const auto toolbarPlacement = TooltipPlacement::place(
+      {220, 44}, toolbarAnchor, {0, 0, 420, 180}, toolbarControls);
+  expect(toolbarPlacement.getY() >= toolbarAnchor.getBottom() &&
+             !toolbarPlacement.intersects(toolbarAnchor) &&
+             !toolbarPlacement.intersects(toolbarControls[0]) &&
+             !toolbarPlacement.intersects(toolbarControls[1]),
+         "top toolbar tooltips should move below and avoid adjacent controls");
 
   ComboBoxAnimationState comboMotion;
   comboMotion.setTargets(true, true);

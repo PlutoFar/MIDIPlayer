@@ -138,18 +138,7 @@ inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {
 }
 
 inline float dialogSurfaceAlpha(WindowMaterial::Config config) {
-  config = WindowMaterial::normalise(config);
-  switch (config.type) {
-  case WindowMaterial::Type::Transparent:
-    return config.opacity;
-  case WindowMaterial::Type::GaussianBlur:
-    return juce::jlimit(0.18f, 0.88f, 0.08f + config.opacity * 0.72f);
-  case WindowMaterial::Type::FrostedGlass:
-    return juce::jlimit(0.16f, 0.82f, 0.06f + config.opacity * 0.66f);
-  case WindowMaterial::Type::Acrylic:
-    return juce::jlimit(0.12f, 0.72f, 0.03f + config.opacity * 0.58f);
-  }
-  return config.opacity;
+  return WindowMaterial::surfaceAlpha(config);
 }
 
 inline float dialogSurfaceAlpha() {
@@ -157,56 +146,14 @@ inline float dialogSurfaceAlpha() {
 }
 
 inline const juce::Image &acrylicNoiseTexture() {
-  static const juce::Image texture = [] {
-    juce::Image image(juce::Image::ARGB, 128, 128, true);
-    juce::Graphics graphics(image);
-    for (int y = 0; y < image.getHeight(); y += 4) {
-      for (int x = 0; x < image.getWidth(); x += 4) {
-        const auto hash = static_cast<unsigned int>(x * 73856093u) ^
-                          static_cast<unsigned int>(y * 19349663u);
-        graphics.setColour((hash & 1u) != 0u
-                               ? juce::Colours::white.withAlpha(0.9f)
-                               : juce::Colours::black.withAlpha(0.6f));
-        graphics.fillRect(x, y, 1, 1);
-      }
-    }
-    return image;
-  }();
-  return texture;
+  return WindowMaterial::acrylicNoiseTexture();
 }
 
 inline void paintMaterialTexture(juce::Graphics &g,
                                  FluentLookAndFeel &lookAndFeel) {
-  const auto config = getAppSettings().getDialogMaterialConfig();
-  const float effect = config.strength / 50.0f;
-  const auto clip = g.getClipBounds();
-
-  if (config.type == WindowMaterial::Type::GaussianBlur) {
-    g.setColour(juce::Colours::black.withAlpha(0.015f + effect * 0.08f));
-    g.fillRect(clip);
-    return;
-  }
-
-  if (config.type == WindowMaterial::Type::FrostedGlass) {
-    g.setColour(juce::Colours::white.withAlpha(0.02f + effect * 0.16f));
-    g.fillRect(clip);
-    return;
-  }
-
-  if (config.type != WindowMaterial::Type::Acrylic)
-    return;
-
-  g.setColour(lookAndFeel.getColors().accentPrimary.withAlpha(
-      0.01f + effect * 0.07f));
-  g.fillRect(clip);
-
-  const float noiseAlpha = 0.012f + effect * 0.065f;
-  g.setOpacity(noiseAlpha);
-  const auto &texture = acrylicNoiseTexture();
-  for (int y = clip.getY(); y < clip.getBottom(); y += texture.getHeight())
-    for (int x = clip.getX(); x < clip.getRight(); x += texture.getWidth())
-      g.drawImageAt(texture, x, y);
-  g.setOpacity(1.0f);
+  WindowMaterial::paintTexture(
+      g, getAppSettings().getDialogMaterialConfig(),
+      lookAndFeel.getColors().accentPrimary);
 }
 
 inline void configureLabel(juce::Label &label, FluentLookAndFeel &lookAndFeel,
@@ -269,7 +216,7 @@ public:
     graphics.setFont(fluentLookAndFeel.getBodyLargeFont());
     graphics.drawFittedText(
         message, getLocalBounds().reduced(24).removeFromTop(hasPrimaryButton ? 90 : 70),
-        juce::Justification::topLeft, 4, 1.0f);
+        juce::Justification::centred, 4, 1.0f);
   }
 
   void resized() override {

@@ -2,10 +2,106 @@
 
 #include "ComboBoxAnimationSupport.h"
 #include "LegacyDesignTokens.h"
+#include "../Utils/UserSettings.h"
+#include "../Utils/Win11Helpers.h"
+#include "FluentDialogSupport.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <vector>
 
 class TransparentButton;
+
+inline juce::Component *
+findFluentAlertConstraintTarget(juce::Component *associatedComponent) {
+  if (associatedComponent != nullptr)
+    return associatedComponent;
+
+  if (auto *active = juce::TopLevelWindow::getActiveTopLevelWindow()) {
+    if (dynamic_cast<juce::AlertWindow *>(active) == nullptr &&
+        active->isShowing())
+      return active;
+  }
+
+  for (int index = 0; index < juce::TopLevelWindow::getNumTopLevelWindows();
+       ++index) {
+    auto *window = juce::TopLevelWindow::getTopLevelWindow(index);
+    if (window != nullptr && window->isShowing() &&
+        dynamic_cast<juce::AlertWindow *>(window) == nullptr)
+      return window;
+  }
+  return nullptr;
+}
+
+class FluentAlertWindow final : public juce::AlertWindow {
+public:
+  FluentAlertWindow(const juce::String &title, const juce::String &message,
+                    juce::Component *associatedComponent)
+      : juce::AlertWindow(title, message, juce::MessageBoxIconType::NoIcon,
+                          associatedComponent),
+        constraintTarget(associatedComponent),
+        nativeOwner(associatedComponent != nullptr
+                        ? associatedComponent->getTopLevelComponent()
+                        : nullptr) {
+    setOpaque(false);
+    setDropShadowEnabled(false);
+    setBroughtToFrontOnMouseClick(true);
+    setColour(juce::AlertWindow::backgroundColourId,
+              juce::Colours::transparentBlack);
+    setColour(juce::AlertWindow::outlineColourId,
+              juce::Colour(0x45FFFFFF));
+    setColour(juce::AlertWindow::textColourId, juce::Colours::white);
+    applyNativeSurface();
+  }
+
+  ~FluentAlertWindow() override {
+    Win11Helpers::hideNativeWindowAndFlush(this);
+  }
+
+  void visibilityChanged() override {
+    juce::AlertWindow::visibilityChanged();
+    if (!isShowing())
+      return;
+
+    centreOnOwner();
+    applyNativeSurface();
+    auto safeThis = juce::Component::SafePointer<FluentAlertWindow>(this);
+    juce::Timer::callAfterDelay(0, [safeThis]() {
+      if (safeThis != nullptr) {
+        safeThis->centreOnOwner();
+        safeThis->applyNativeSurface();
+      }
+    });
+  }
+
+  void mouseDown(const juce::MouseEvent &) override {}
+  void mouseDrag(const juce::MouseEvent &) override {}
+  void resized() override {
+    Win11Helpers::applyRoundedWindowRegion(this, true);
+  }
+
+private:
+  void centreOnOwner() {
+    if (nativeOwner != nullptr &&
+        Win11Helpers::centreWindowOnOwner(this, nativeOwner.getComponent()))
+      return;
+    if (constraintTarget != nullptr)
+      centreAroundComponent(constraintTarget.getComponent(), getWidth(),
+                            getHeight());
+  }
+
+  void applyNativeSurface() {
+    const auto config = getAppSettings().getDialogMaterialConfig();
+    getProperties().set("fluentDialogSurfaceAlpha",
+                        (double)WindowMaterial::surfaceAlpha(config));
+    Win11Helpers::applyFluentDialogStyle(this, true, false);
+    Win11Helpers::applyDialogMaterial(this, config);
+    Win11Helpers::applyRoundedWindowRegion(this, true);
+    if (nativeOwner != nullptr)
+      Win11Helpers::setOwnedWindow(this, nativeOwner.getComponent());
+  }
+
+  juce::Component::SafePointer<juce::Component> constraintTarget;
+  juce::Component::SafePointer<juce::Component> nativeOwner;
+};
 
 class FluentLookAndFeel : public juce::LookAndFeel_V4,
                           private juce::Timer {
@@ -164,6 +260,30 @@ public:
   juce::Font getTitleFont(bool semibold = true) const {
     return getDefaultFont(LegacyDesignTokens::Typography::title, semibold);
   }
+
+  juce::AlertWindow *createAlertWindow(
+      const juce::String &title, const juce::String &message,
+      const juce::String &button1, const juce::String &button2,
+      const juce::String &button3, juce::MessageBoxIconType iconType,
+      int numButtons, juce::Component *associatedComponent) override;
+
+  int getAlertBoxWindowFlags() override {
+    return juce::ComponentPeer::windowIsSemiTransparent;
+  }
+
+  int getAlertWindowButtonHeight() override {
+    return LegacyDesignTokens::Layout::controlHeight(uiFontSize);
+  }
+
+  juce::Font getAlertWindowTitleFont() override {
+    return getBodyLargeFont(true);
+  }
+
+  juce::Font getAlertWindowMessageFont() override {
+    return getBodyLargeFont();
+  }
+
+  juce::Font getAlertWindowFont() override { return getBodyFont(); }
 
   juce::Font getPlaylistFont(float size = 16.0f, bool bold = false) const {
     juce::FontOptions options(playlistFontName, scaled(size),
@@ -741,9 +861,18 @@ public:
                     juce::TextLayout &layout) override {
     auto bounds = alert.getLocalBounds().toFloat();
     float radius = scaled(12.0f);
+    const auto config = getAppSettings().getDialogMaterialConfig();
 
-    g.setColour(colors.background);
-    g.fillRoundedRectangle(bounds, radius);
+    {
+      juce::Graphics::ScopedSaveState saveState(g);
+      juce::Path surface;
+      surface.addRoundedRectangle(bounds, radius);
+      g.reduceClipRegion(surface);
+      g.setColour(
+          colors.cardBackground.withAlpha(WindowMaterial::surfaceAlpha(config)));
+      g.fillRect(alert.getLocalBounds());
+      WindowMaterial::paintTexture(g, config, colors.accentPrimary);
+    }
 
     g.setColour(colors.cardBorder);
     g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
@@ -851,3 +980,49 @@ private:
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FluentLookAndFeel)
 };
+
+inline juce::AlertWindow *FluentLookAndFeel::createAlertWindow(
+    const juce::String &title, const juce::String &message,
+    const juce::String &button1, const juce::String &button2,
+    const juce::String &button3, juce::MessageBoxIconType iconType,
+    int numButtons, juce::Component *associatedComponent) {
+  juce::ignoreUnused(iconType);
+  auto *alert = new FluentAlertWindow(
+      title, message, findFluentAlertConstraintTarget(associatedComponent));
+  alert->setColour(juce::AlertWindow::backgroundColourId,
+                   juce::Colours::transparentBlack);
+  alert->setColour(juce::AlertWindow::outlineColourId,
+                   colors.cardBorder.withAlpha(0.8f));
+  alert->setColour(juce::AlertWindow::textColourId, colors.textPrimary);
+
+  if (numButtons == 1) {
+    alert->addButton(button1, 0, juce::KeyPress(juce::KeyPress::escapeKey),
+                     juce::KeyPress(juce::KeyPress::returnKey));
+  } else {
+    auto button1Shortcut =
+        juce::KeyPress((int)juce::CharacterFunctions::toLowerCase(button1[0]),
+                       0, 0);
+    auto button2Shortcut =
+        juce::KeyPress((int)juce::CharacterFunctions::toLowerCase(button2[0]),
+                       0, 0);
+    if (button1Shortcut == button2Shortcut)
+      button2Shortcut = {};
+
+    if (numButtons == 2) {
+      alert->addButton(button1, 1, juce::KeyPress(juce::KeyPress::returnKey),
+                       button1Shortcut);
+      alert->addButton(button2, 0, juce::KeyPress(juce::KeyPress::escapeKey),
+                       button2Shortcut);
+    } else if (numButtons == 3) {
+      alert->addButton(button1, 1, button1Shortcut);
+      alert->addButton(button2, 2, button2Shortcut);
+      alert->addButton(button3, 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    }
+  }
+
+  for (int index = 0; index < alert->getNumButtons(); ++index)
+    if (auto *button = alert->getButton(index))
+      button->setLookAndFeel(this);
+
+  return alert;
+}
