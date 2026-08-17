@@ -8,10 +8,11 @@
 namespace PluginBridge {
 
 inline constexpr const char *workerCommandLineUid =
-    "modern-midi-player-plugin-worker-v1";
+    "modern-midi-player-plugin-worker-v2";
 inline constexpr int workerConnectionTimeoutMs = 15000;
 inline constexpr int workerCommandTimeoutMs = 30000;
 inline constexpr int workerShutdownTimeoutMs = 2000;
+inline constexpr int workerRenderHangTimeoutMs = 2000;
 
 inline int getWorkerRenderTimeoutMs(int blockSize, double sampleRate) {
   const double validSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;

@@ -414,7 +414,13 @@ public:
 
   juce::String getPluginWorkerError() const { return bridge.getLastError(); }
 
-  void terminateCrashedPluginWorker() { bridge.terminateCrashedWorker(); }
+  void terminateCrashedPluginWorker() {
+    suspendProcessing(true);
+    bridge.terminateCrashedWorker();
+    workerCrashNotified.store(false, std::memory_order_release);
+    suspendProcessing(false);
+    sendChangeMessage();
+  }
 
   void cancelPendingPluginOperation() { bridge.cancelPendingOperation(); }
 

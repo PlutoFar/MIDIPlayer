@@ -330,6 +330,10 @@ int findNoteSamplePosition(const juce::MidiBuffer &buffer, bool noteOn,
 
 class TestPluginBridgeWorker final : private juce::ChildProcessWorker {
 public:
+  TestPluginBridgeWorker() : renderThread(*this) {}
+
+  ~TestPluginBridgeWorker() override { stopRenderThread(); }
+
   bool run(const juce::String &commandLine) {
     if (!initialiseFromCommandLine(commandLine,
                                    PluginBridge::workerCommandLineUid,
@@ -341,6 +345,17 @@ public:
   }
 
 private:
+  class RenderThread final : public juce::Thread {
+  public:
+    explicit RenderThread(TestPluginBridgeWorker &owner)
+        : juce::Thread("Test plugin bridge renderer"), owner(owner) {}
+
+    void run() override { owner.runRenderLoop(); }
+
+  private:
+    TestPluginBridgeWorker &owner;
+  };
+
   void handleConnectionMade() override {
     sendMessageToCoordinator(PluginBridge::makeStatusReply(
         PluginBridge::StatusCode::ok, "test worker ready",
@@ -378,13 +393,33 @@ private:
     if (command == PluginBridge::Command::loadPlugin &&
         juce::SystemStats::getEnvironmentVariable(
             "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_LOAD_OK", "") == "1") {
+      const auto request = PluginBridge::loadRequestFromValueTree(tree);
+      const int renderDelayMs =
+          juce::SystemStats::getEnvironmentVariable(
+              "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_RENDER_DELAY_MS", "0")
+              .getIntValue();
+      if (renderDelayMs > 0) {
+        sharedBlock =
+            std::make_unique<PluginBridge::SharedBlockOwner>(request.sharedBlockName);
+        firstRenderDelayMs = renderDelayMs;
+        firstRenderPending = true;
+        renderThread.startThread(juce::Thread::Priority::highest);
+      }
       sendMessageToCoordinator(PluginBridge::makeStatusReply(
           PluginBridge::StatusCode::ok, "test plugin loaded",
           PluginBridge::Command::loadPlugin));
       return;
     }
 
+    if (command == PluginBridge::Command::prepare && sharedBlock != nullptr) {
+      sendMessageToCoordinator(PluginBridge::makeStatusReply(
+          PluginBridge::StatusCode::ok, "test plugin prepared",
+          PluginBridge::Command::prepare));
+      return;
+    }
+
     if (command == PluginBridge::Command::unloadPlugin) {
+      stopRenderThread();
       const int delayMs = juce::SystemStats::getEnvironmentVariable(
                               "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_UNLOAD_DELAY_MS",
                               "0")
@@ -408,7 +443,45 @@ private:
     }
   }
 
+  void runRenderLoop() {
+    while (!renderThread.threadShouldExit() && sharedBlock != nullptr) {
+      if (sharedBlock->waitForRequest(-1) != PluginBridge::WaitResult::signalled)
+        return;
+      if (renderThread.threadShouldExit())
+        return;
+
+      auto &block = sharedBlock->block();
+      if (firstRenderPending) {
+        firstRenderPending = false;
+        juce::Thread::sleep(firstRenderDelayMs);
+      }
+
+      for (auto &channel : block.audio)
+        juce::FloatVectorOperations::clear(channel, block.header.blockSize);
+      block.header.resultCode =
+          static_cast<int>(PluginBridge::StatusCode::ok);
+      block.header.responseSequence = block.header.requestSequence;
+      sharedBlock->signalResponse();
+    }
+  }
+
+  void stopRenderThread() {
+    if (!renderThread.isThreadRunning()) {
+      sharedBlock = nullptr;
+      return;
+    }
+    renderThread.signalThreadShouldExit();
+    if (sharedBlock != nullptr)
+      sharedBlock->signalRequest();
+    renderThread.stopThread(PluginBridge::workerShutdownTimeoutMs);
+    sharedBlock = nullptr;
+  }
+
   juce::WaitableEvent stopped;
+  std::unique_ptr<PluginBridge::SharedBlockOwner> sharedBlock;
+  RenderThread renderThread;
+  int firstRenderDelayMs = 0;
+  bool firstRenderPending = false;
 };
 
 juce::String makeCommandLine(int argc, char *argv[]) {
@@ -1140,8 +1213,11 @@ int main(int argc, char *argv[]) {
   }
 
   expect(PluginBridge::isPluginWorkerCommandLine(
-             "--worker modern-midi-player-plugin-worker-v1"),
+             juce::String("--worker ") + PluginBridge::workerCommandLineUid),
          "plugin worker command line should be recognised");
+  expect(!PluginBridge::isPluginWorkerCommandLine(
+             "--worker modern-midi-player-plugin-worker-v1"),
+         "stale v1 workers should be rejected by the v2 host protocol");
   expect(!PluginBridge::isPluginWorkerCommandLine("C:\\song.mid"),
          "regular MIDI file command line should not start worker mode");
 
@@ -1213,6 +1289,40 @@ int main(int argc, char *argv[]) {
     expect(bridgeClient.getState().status == PluginBridge::BridgeStatus::ready,
            "plugin bridge client should expose connected worker state");
     bridgeClient.stop();
+  }
+
+  {
+    setTestEnvironmentVariable(
+        L"MIDI_PLAYER_PLUGIN_BRIDGE_TEST_LOAD_OK", L"1");
+    setTestEnvironmentVariable(
+        L"MIDI_PLAYER_PLUGIN_BRIDGE_TEST_RENDER_DELAY_MS", L"75");
+    PluginBridge::PluginBridgeClient bridgeClient;
+    juce::PluginDescription desc;
+    desc.name = "Late render recovery test plugin";
+    desc.pluginFormatName = "VST3";
+    desc.fileOrIdentifier = "C:\\test\\LateRenderPlugin.vst3";
+    expect(bridgeClient.loadPlugin(desc),
+           "plugin bridge should load the delayed-render test worker");
+    expect(bridgeClient.prepare(48000.0, 64),
+           "plugin bridge should prepare the delayed-render test worker");
+
+    juce::AudioBuffer<float> buffer(2, 64);
+    juce::MidiBuffer midi;
+    expect(!bridgeClient.processBlock(midi, buffer, 48000.0),
+           "one late realtime render should produce silence for that block");
+    expect(bridgeClient.getStatus() == PluginBridge::BridgeStatus::ready,
+           "one late realtime render should keep the worker recoverable");
+    juce::Thread::sleep(100);
+    expect(bridgeClient.processBlock(midi, buffer, 48000.0),
+           "the next block should drain the late response and resume rendering");
+    expect(bridgeClient.getStatus() == PluginBridge::BridgeStatus::ready,
+           "late render recovery should keep the bridge ready");
+    bridgeClient.unloadPlugin();
+    bridgeClient.stop();
+    clearTestEnvironmentVariable(
+        L"MIDI_PLAYER_PLUGIN_BRIDGE_TEST_LOAD_OK");
+    clearTestEnvironmentVariable(
+        L"MIDI_PLAYER_PLUGIN_BRIDGE_TEST_RENDER_DELAY_MS");
   }
 
   {
@@ -1423,6 +1533,14 @@ int main(int argc, char *argv[]) {
          "small real-time blocks should retain a scheduler-safe timeout floor");
   expect(PluginBridge::getWorkerRenderTimeoutMs(1024, 48000.0) == 43,
          "render timeout should track two host buffer periods");
+  expect(PluginBridge::workerRenderHangTimeoutMs >
+             PluginBridge::getWorkerRenderTimeoutMs(1024, 48000.0),
+         "a missed realtime deadline should remain distinct from a worker hang");
+  PluginBridge::SharedBlockHeader sequencedHeader;
+  sequencedHeader.requestSequence = 41;
+  sequencedHeader.responseSequence = 41;
+  expect(sequencedHeader.requestSequence == sequencedHeader.responseSequence,
+         "bridge render replies should identify the request they completed");
 
   PluginWindowLifecycle pluginLifecycle;
   int pluginA = 1;

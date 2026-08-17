@@ -162,6 +162,14 @@ if(MSVC)
     target_compile_options(MidiWorker PRIVATE /wd4100 /wd4244 /wd4267)
 endif()
 
+add_dependencies(MidiLegacy MidiWorker)
+add_custom_command(TARGET MidiLegacy POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:MidiWorker>
+        $<TARGET_FILE_DIR:MidiLegacy>
+    COMMENT "Copying the matching plugin worker beside MidiLegacy"
+)
+
 # ============================================================================
 # MidiTests - non-UI test runner. Excluded from the default build.
 # ============================================================================
@@ -207,7 +215,7 @@ if(WIN32)
     )
 endif()
 
-install(TARGETS MidiLegacy
+install(TARGETS MidiLegacy MidiWorker
     RUNTIME DESTINATION bin
     RESOURCE DESTINATION bin
 )

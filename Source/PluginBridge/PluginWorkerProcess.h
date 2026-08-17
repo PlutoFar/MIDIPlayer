@@ -229,7 +229,7 @@ private:
       pluginWindowIcon = windowIcon;
     }
 
-    blockThread.startThread(juce::Thread::Priority::high);
+    blockThread.startThread(juce::Thread::Priority::highest);
     sendStatus(StatusCode::ok, "plugin loaded", Command::loadPlugin);
   }
 
@@ -327,7 +327,10 @@ private:
         return;
       }
 
-      processSharedBlock(blockOwner->block());
+      auto &block = blockOwner->block();
+      const auto requestSequence = block.header.requestSequence;
+      processSharedBlock(block);
+      block.header.responseSequence = requestSequence;
       blockOwner->signalResponse();
       if (terminateAfterFirstRender && ++renderBlocksProcessed == 1)
         std::_Exit(42);

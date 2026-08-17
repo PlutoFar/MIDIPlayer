@@ -87,6 +87,7 @@ public:
     nonRealtimeMode.store(false, std::memory_order_release);
     clearLoadedPluginName();
     sharedBlock = nullptr;
+    resetRenderState();
     shutdownWorkerProcess();
 
     const juce::ScopedLock lock(stateLock);
@@ -98,6 +99,7 @@ public:
     pluginReady.store(false, std::memory_order_release);
     nonRealtimeMode.store(false, std::memory_order_release);
     clearLoadedPluginName();
+    resetRenderState();
 
     sharedBlockName = makeSharedBlockName();
     sharedBlock = std::make_unique<SharedBlockOwner>(sharedBlockName);
@@ -136,6 +138,7 @@ public:
     pluginReady.store(false, std::memory_order_release);
     nonRealtimeMode.store(false, std::memory_order_release);
     clearLoadedPluginName();
+    resetRenderState();
 
     const bool workerWasReady = getStatus() == BridgeStatus::ready;
     if (workerWasReady) {
@@ -190,6 +193,30 @@ public:
     if (!isPluginLoaded() || sharedBlock == nullptr || !sharedBlock->isOpen())
       return false;
 
+    const bool nonRealtime =
+        nonRealtimeMode.load(std::memory_order_acquire);
+    if (renderRequestOutstanding) {
+      const auto lateResult = sharedBlock->waitForResponse(0);
+      if (lateResult == WaitResult::signalled) {
+        if (!completeOutstandingRender()) {
+          buffer.clear();
+          return false;
+        }
+      } else if (lateResult == WaitResult::failed) {
+        buffer.clear();
+        resetOutstandingRender();
+        markCrashed(sharedBlock->getLastErrorMessage());
+        return false;
+      } else {
+        const auto elapsed = juce::Time::getMillisecondCounter() -
+                             outstandingRenderStartTime;
+        buffer.clear();
+        if (elapsed >= static_cast<uint32_t>(workerRenderHangTimeoutMs))
+          markCrashed("plugin worker render unresponsive");
+        return false;
+      }
+    }
+
     const int numSamples = buffer.getNumSamples();
     if (numSamples > SharedBlockLayout::maxSamples) {
       rememberCommandFailure("audio block is larger than the plugin bridge buffer");
@@ -198,7 +225,10 @@ public:
     }
 
     auto &shared = sharedBlock->block();
+    const auto requestSequence = nextRenderSequence++;
     shared.header.sampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
+    shared.header.requestSequence = requestSequence;
+    shared.header.responseSequence = 0;
     shared.header.blockSize = numSamples;
     shared.header.resultCode = static_cast<int>(StatusCode::renderFailed);
 
@@ -221,21 +251,28 @@ public:
       return false;
     }
 
-    const int timeoutMs = nonRealtimeMode.load(std::memory_order_acquire)
+    renderRequestOutstanding = true;
+    outstandingRenderSequence = requestSequence;
+    outstandingRenderStartTime = juce::Time::getMillisecondCounter();
+
+    const int timeoutMs = nonRealtime
                               ? workerCommandTimeoutMs
                               : getWorkerRenderTimeoutMs(numSamples, sampleRate);
     const auto waitResult = sharedBlock->waitForResponse(timeoutMs);
     if (waitResult != WaitResult::signalled) {
       buffer.clear();
-      markCrashed(waitResult == WaitResult::timedOut
-                      ? "plugin worker render timeout"
-                      : sharedBlock->getLastErrorMessage());
+      if (waitResult == WaitResult::failed) {
+        resetRenderState();
+        markCrashed(sharedBlock->getLastErrorMessage());
+      } else if (nonRealtime) {
+        resetRenderState();
+        markCrashed("plugin worker offline render timeout");
+      }
       return false;
     }
 
-    if (shared.header.resultCode != static_cast<int>(StatusCode::ok)) {
+    if (!completeOutstandingRender()) {
       buffer.clear();
-      markCrashed("plugin worker render failed");
       return false;
     }
 
@@ -321,12 +358,17 @@ public:
     nonRealtimeMode.store(false, std::memory_order_release);
     clearLoadedPluginName();
     sharedBlock = nullptr;
+    resetRenderState();
     killWorkerProcess();
 
-    const juce::ScopedLock lock(stateLock);
-    state.status = BridgeStatus::stopped;
-    state.message = message;
-    storeStatus(BridgeStatus::stopped);
+    {
+      const juce::ScopedLock lock(stateLock);
+      state.status = BridgeStatus::stopped;
+      state.message = message;
+      storeStatus(BridgeStatus::stopped);
+    }
+    clearPendingReplies();
+    clearOperation();
   }
 
   void cancelPendingOperation() {
@@ -340,6 +382,38 @@ public:
   }
 
 private:
+  bool completeOutstandingRender() {
+    if (!renderRequestOutstanding || sharedBlock == nullptr)
+      return false;
+
+    const auto &header = sharedBlock->block().header;
+    const auto expectedSequence = outstandingRenderSequence;
+    resetOutstandingRender();
+
+    if (header.responseSequence != expectedSequence) {
+      markCrashed("plugin worker render sequence mismatch");
+      return false;
+    }
+
+    if (header.resultCode != static_cast<int>(StatusCode::ok)) {
+      markCrashed("plugin worker render failed");
+      return false;
+    }
+
+    return true;
+  }
+
+  void resetOutstandingRender() {
+    renderRequestOutstanding = false;
+    outstandingRenderSequence = 0;
+    outstandingRenderStartTime = 0;
+  }
+
+  void resetRenderState() {
+    resetOutstandingRender();
+    nextRenderSequence = 1;
+  }
+
   void setLoadedPluginName(const juce::String &name) {
     const juce::ScopedLock lock(stateLock);
     loadedPluginName = name;
@@ -527,6 +601,10 @@ private:
   std::unique_ptr<SharedBlockOwner> sharedBlock;
   juce::String sharedBlockName;
   juce::String loadedPluginName;
+  std::uint64_t nextRenderSequence = 1;
+  std::uint64_t outstandingRenderSequence = 0;
+  uint32_t outstandingRenderStartTime = 0;
+  bool renderRequestOutstanding = false;
   Command activeCommand = Command::none;
   juce::String activePluginName;
 };

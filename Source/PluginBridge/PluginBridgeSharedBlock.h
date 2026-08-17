@@ -77,6 +77,8 @@ inline int getSharedBlockChunkSize(int totalSamples, int startSample) {
 
 struct SharedBlockHeader {
   double sampleRate = 44100.0;
+  std::uint64_t requestSequence = 0;
+  std::uint64_t responseSequence = 0;
   int blockSize = 512;
   int midiBytes = 0;
   int resultCode = 0;

@@ -311,7 +311,7 @@ public:
 
     const bool hasPlugin = state.plugin.loaded && !state.plugin.workerCrashed;
     if (state.plugin.workerCrashed) {
-      handlePluginWorkerCrash(true);
+      handlePluginWorkerCrash();
     } else if (hasPlugin) {
       pluginWorkerCrashAlertShown = false;
     }
@@ -1371,14 +1371,14 @@ public:
                           const std::wstring &message) {
     const auto text = message.empty() ? juce::String(L"操作失败。")
                                       : juce::String(message.c_str());
-    juce::AlertWindow::showMessageBoxAsync(
-        juce::AlertWindow::WarningIcon, title, text, L"确定", this);
+    showPluginMessage(title, text);
   }
 
   void unloadPlugin() {
     beginPluginSwitch();
     playbackPausedByPluginSwitch = false;
     pluginWorkerCrashAlertShown = false;
+    pluginWorkerRecoveryHandled = false;
     core.unload();
     pluginSelector.setSelectedId(0, juce::dontSendNotification);
     openPluginBtn.setEnabled(false);
@@ -1403,6 +1403,7 @@ public:
   void finishPluginLoadUi(const midi::PluginInfo &plugin) {
     const juce::String pluginName(plugin.name.c_str());
     pluginWorkerCrashAlertShown = false;
+    pluginWorkerRecoveryHandled = false;
     openPluginBtn.setEnabled(true);
     unloadBtn.setEnabled(true);
     contentLabel.setText(
@@ -1429,12 +1430,11 @@ public:
     const int switchGeneration = beginPluginSwitch();
 
     const juce::String pluginName(plugin.name.c_str());
-    auto *loadingWindow = new juce::AlertWindow(
+    auto *loadingWindow = FluentSettingsStyle::showMessageDialogAsync(
         L"正在加载乐器", L"正在加载插件: " + pluginName + L"\n请稍候...",
-        juce::MessageBoxIconType::InfoIcon);
+        this, fluentLookAndFeel, {});
     auto safeLoadingWindow =
-        juce::Component::SafePointer<juce::AlertWindow>(loadingWindow);
-    loadingWindow->enterModalState(false, nullptr, true);
+        juce::Component::SafePointer<juce::DialogWindow>(loadingWindow);
 
     auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
     juce::Timer::callAfterDelay(
@@ -1442,7 +1442,7 @@ public:
                   safeLoadingWindow]() {
       if (safeThis == nullptr) {
         if (safeLoadingWindow != nullptr)
-          safeLoadingWindow->exitModalState(0);
+          safeLoadingWindow->setVisible(false);
         return;
       }
 
@@ -1450,11 +1450,12 @@ public:
         safeThis->pluginLoadInProgress = false;
         safeThis->pluginSelector.setEnabled(!safeThis->isScanningPlugins);
         if (safeLoadingWindow != nullptr)
-          safeLoadingWindow->exitModalState(0);
+          safeLoadingWindow->setVisible(false);
         return;
       }
 
       bool showLoadFailure = false;
+      bool workerCrashed = false;
       bool showLoadSuccessToast = false;
       juce::String loadFailureMessage;
 
@@ -1476,13 +1477,11 @@ public:
           loadFailureMessage = L"插件加载失败。";
         showLoadFailure = true;
 
-        if (safeThis->core.workerCrashed()) {
-          safeThis->handlePluginWorkerCrash(false);
-        }
+        workerCrashed = safeThis->core.workerCrashed();
       }
 
       if (safeLoadingWindow != nullptr)
-        safeLoadingWindow->exitModalState(0);
+        safeLoadingWindow->setVisible(false);
 
       safeThis->pluginLoadInProgress = false;
       safeThis->pluginSelector.setEnabled(!safeThis->isScanningPlugins);
@@ -1490,11 +1489,10 @@ public:
       if (showLoadSuccessToast)
         safeThis->showPluginLoadSuccessToast(juce::String(plugin.name.c_str()));
 
-      if (showLoadFailure) {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon, L"插件加载失败",
-            loadFailureMessage);
-      }
+      if (workerCrashed)
+        safeThis->handlePluginWorkerCrash();
+      else if (showLoadFailure)
+        safeThis->showPluginMessage(L"插件加载失败", loadFailureMessage);
     });
   }
 
@@ -1534,12 +1532,12 @@ public:
 
       if (!safeThis->core.editor()) {
         if (safeThis->core.workerCrashed()) {
-          safeThis->handlePluginWorkerCrash(true);
+          safeThis->handlePluginWorkerCrash();
           return;
         }
 
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon, L"插件窗口打开失败",
+        safeThis->showPluginMessage(
+            L"插件窗口打开失败",
             juce::String(safeThis->core.lastPluginError().c_str()));
       }
     });
@@ -1550,38 +1548,36 @@ public:
     pluginLifecycle.closeWindow();
   }
 
-  void handlePluginWorkerCrash(bool showAlert) {
+  void handlePluginWorkerCrash() {
+    const auto error = juce::String(core.pluginError().c_str());
     core.pause();
-    openPluginBtn.setEnabled(false);
-    unloadBtn.setEnabled(false);
-    contentLabel.setText(L"插件进程已崩溃，请重新加载插件",
-                         juce::dontSendNotification);
-    queueCrashedWorkerTermination();
+    if (!pluginWorkerRecoveryHandled) {
+      pluginWorkerRecoveryHandled = true;
+      pluginLifecycle.beginSwitch();
+      pluginLoadInProgress = false;
+      pluginSelector.setEnabled(!isScanningPlugins);
+      pluginSelector.setSelectedId(0, juce::dontSendNotification);
+      openPluginBtn.setEnabled(false);
+      unloadBtn.setEnabled(false);
+      contentLabel.setText(L"插件进程已停止，请重新选择插件",
+                           juce::dontSendNotification);
+      core.terminateCrashedWorker();
+    }
 
-    if (!showAlert || pluginWorkerCrashAlertShown)
+    if (pluginWorkerCrashAlertShown)
       return;
 
     pluginWorkerCrashAlertShown = true;
-    juce::AlertWindow::showMessageBoxAsync(
-        juce::AlertWindow::WarningIcon, L"插件进程已崩溃",
-        juce::String(core.pluginError().c_str()));
+    showPluginMessage(L"插件进程已停止",
+                      error.isNotEmpty() ? error : L"插件工作进程无响应。");
   }
 
-  void queueCrashedWorkerTermination() {
-    if (crashedWorkerTerminationQueued)
+  void showPluginMessage(const juce::String &title,
+                         const juce::String &message) {
+    if (pluginMessageWindow != nullptr)
       return;
-
-    crashedWorkerTerminationQueued = true;
-    auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
-    juce::Timer::callAfterDelay(250, [safeThis]() {
-      if (safeThis == nullptr)
-        return;
-
-      if (safeThis->core.workerCrashed())
-        safeThis->core.terminateCrashedWorker();
-
-      safeThis->crashedWorkerTerminationQueued = false;
-    });
+    pluginMessageWindow = FluentSettingsStyle::showMessageDialogAsync(
+        title, message, this, fluentLookAndFeel);
   }
 
   void togglePlayPause() {
@@ -2706,6 +2702,7 @@ public:
   juce::Component::SafePointer<juce::DialogWindow> audioSettingsWindow;
   juce::Component::SafePointer<juce::DialogWindow> backgroundSettingsWindow;
   juce::Component::SafePointer<juce::DialogWindow> fontSettingsWindow;
+  juce::Component::SafePointer<juce::DialogWindow> pluginMessageWindow;
   bool isUserDraggingProgress = false;
   bool isScanningPlugins = false;
   bool pluginLoadInProgress = false;
@@ -2720,7 +2717,7 @@ public:
   std::atomic<uint32_t> lastSeekRequestTime{0};
   bool playbackPausedByPluginSwitch = false;
   bool pluginWorkerCrashAlertShown = false;
-  bool crashedWorkerTerminationQueued = false;
+  bool pluginWorkerRecoveryHandled = false;
   bool pendingShellOpen = false;
   PluginWindowLifecycle pluginLifecycle;
 

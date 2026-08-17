@@ -241,6 +241,54 @@ inline void paintCard(juce::Graphics &g, FluentLookAndFeel &lookAndFeel,
   g.drawRoundedRectangle(card.reduced(0.5f), 8.0f, 1.0f);
 }
 
+class FluentMessageDialogContent final : public juce::Component {
+public:
+  FluentMessageDialogContent(FluentLookAndFeel &lookAndFeel,
+                             juce::String message,
+                             juce::String buttonText)
+      : fluentLookAndFeel(lookAndFeel), message(std::move(message)) {
+    setLookAndFeel(&fluentLookAndFeel);
+    setOpaque(false);
+    hasPrimaryButton = buttonText.isNotEmpty();
+    if (hasPrimaryButton) {
+      addAndMakeVisible(primaryButton);
+      primaryButton.setButtonText(std::move(buttonText));
+      primaryButton.onClick = [this]() {
+        if (auto *window = findParentComponentOfClass<FluentDialogWindow>())
+          window->closeButtonPressed();
+      };
+    }
+    setSize(460, hasPrimaryButton ? 180 : 130);
+  }
+
+  ~FluentMessageDialogContent() override { setLookAndFeel(nullptr); }
+
+  void paint(juce::Graphics &graphics) override {
+    paintPanel(graphics, fluentLookAndFeel);
+    graphics.setColour(fluentLookAndFeel.getColors().textPrimary);
+    graphics.setFont(fluentLookAndFeel.getBodyLargeFont());
+    graphics.drawFittedText(
+        message, getLocalBounds().reduced(24).removeFromTop(hasPrimaryButton ? 90 : 70),
+        juce::Justification::topLeft, 4, 1.0f);
+  }
+
+  void resized() override {
+    if (!hasPrimaryButton)
+      return;
+    constexpr int buttonWidth = 96;
+    constexpr int buttonHeight = 40;
+    primaryButton.setBounds((getWidth() - buttonWidth) / 2,
+                            getHeight() - buttonHeight - 20, buttonWidth,
+                            buttonHeight);
+  }
+
+private:
+  FluentLookAndFeel &fluentLookAndFeel;
+  juce::String message;
+  juce::TextButton primaryButton;
+  bool hasPrimaryButton = false;
+};
+
 inline void applyTypography(juce::Component &component,
                             FluentLookAndFeel &lookAndFeel) {
   for (int index = 0; index < component.getNumChildComponents(); ++index) {
@@ -352,5 +400,23 @@ launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
   window->startOpenAnimation();
   refreshDialogNativeStyleLater(window);
   return window;
+}
+
+inline juce::DialogWindow *
+showMessageDialogAsync(const juce::String &title, const juce::String &message,
+                       juce::Component *anchor,
+                       FluentLookAndFeel &lookAndFeel,
+                       const juce::String &buttonText = L"确定") {
+  auto *content =
+      new FluentMessageDialogContent(lookAndFeel, message, buttonText);
+  juce::DialogWindow::LaunchOptions options;
+  options.content.setOwned(content);
+  options.dialogTitle = title;
+  options.dialogBackgroundColour = juce::Colours::transparentBlack;
+  options.escapeKeyTriggersCloseButton = true;
+  options.useNativeTitleBar = false;
+  options.resizable = false;
+  options.componentToCentreAround = anchor;
+  return launchDialogAsync(options);
 }
 } // namespace FluentSettingsStyle
