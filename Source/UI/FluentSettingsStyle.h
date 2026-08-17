@@ -46,12 +46,25 @@ public:
   }
 
   ~FluentDialogWindow() override {
+    if (!nativeWindowHidden)
+      Win11Helpers::hideNativeWindowAndFlush(this);
     if (restoreOwnerAlwaysOnTop && nativeOwner != nullptr)
       nativeOwner->setAlwaysOnTop(true);
     restoreOwnerInteractionIfNeeded();
   }
 
-  void closeButtonPressed() override { setVisible(false); }
+  void closeButtonPressed() override {
+    if (closing)
+      return;
+    closing = true;
+    nativeWindowHidden = Win11Helpers::hideNativeWindowAndFlush(this);
+    setVisible(false);
+  }
+
+  bool escapeKeyPressed() override {
+    closeButtonPressed();
+    return true;
+  }
 
   juce::Component *getConstraintOwner() const {
     return constraintOwner.getComponent();
@@ -90,6 +103,8 @@ private:
   juce::Component::SafePointer<juce::Component> nativeOwner;
   bool restoreOwnerAlwaysOnTop = false;
   bool restoreOwnerInteraction = false;
+  bool closing = false;
+  bool nativeWindowHidden = false;
 };
 
 inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {

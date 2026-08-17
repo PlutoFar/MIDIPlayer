@@ -17,11 +17,13 @@ typedef int BOOL;
 __declspec(dllimport) HRESULT __stdcall
 DwmSetWindowAttribute(HWND hwnd, DWORD dwAttribute, const void *pvAttribute,
                       DWORD cbAttribute);
+__declspec(dllimport) HRESULT __stdcall DwmFlush();
 __declspec(dllimport) HRGN __stdcall
 CreateRoundRectRgn(int left, int top, int right, int bottom, int width,
                    int height);
 __declspec(dllimport) BOOL __stdcall SetWindowRgn(HWND hwnd, HRGN region,
                                                   BOOL redraw);
+__declspec(dllimport) BOOL __stdcall ShowWindow(HWND hwnd, int command);
 __declspec(dllimport) BOOL __stdcall DeleteObject(void *object);
 }
 
@@ -197,6 +199,19 @@ inline void activateNativeWindow(juce::Component *component) {
     function(hwnd);
 }
 
+inline bool hideNativeWindowAndFlush(juce::Component *component) {
+  if (component == nullptr || component->getPeer() == nullptr)
+    return false;
+  auto hwnd = static_cast<HWND>(component->getPeer()->getNativeHandle());
+  if (hwnd == nullptr)
+    return false;
+
+  constexpr int hideWindow = 0; // SW_HIDE
+  ShowWindow(hwnd, hideWindow);
+  DwmFlush();
+  return true;
+}
+
 inline bool isWindows11OrLater() {
   auto osType = juce::SystemStats::getOperatingSystemType();
   if (osType >= juce::SystemStats::Windows10) {
@@ -370,13 +385,23 @@ inline int applyRoundedWindowRegion(juce::Component *component,
   if (!useRoundedRegion)
     return SetWindowRgn(hwnd, nullptr, 1) != 0 ? 1 : 0;
 
+  using GetWindowRectFunction = BOOL(__stdcall *)(HWND, NativeWindowRect *);
+  static juce::DynamicLibrary user32("user32.dll");
+  static auto getWindowRect = reinterpret_cast<GetWindowRectFunction>(
+      user32.getFunction("GetWindowRect"));
+  NativeWindowRect nativeBounds;
+  if (getWindowRect == nullptr || getWindowRect(hwnd, &nativeBounds) == 0)
+    return 0;
+
+  const int width = static_cast<int>(nativeBounds.right - nativeBounds.left);
+  const int height = static_cast<int>(nativeBounds.bottom - nativeBounds.top);
+  if (width <= 0 || height <= 0)
+    return 0;
+
   const auto scale = peer->getPlatformScaleFactor();
-  const int width = juce::roundToInt(component->getWidth() * scale);
-  const int height = juce::roundToInt(component->getHeight() * scale);
   const int diameter =
       juce::jmax(2, juce::roundToInt(cornerRadius * 2.0 * scale));
-  auto region =
-      CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
+  auto region = CreateRoundRectRgn(0, 0, width, height, diameter, diameter);
   if (region == nullptr)
     return 0;
 
@@ -459,6 +484,7 @@ inline void activateNativeWindow(juce::Component *component) {
   if (component != nullptr)
     component->toFront(true);
 }
+inline bool hideNativeWindowAndFlush(juce::Component *) { return false; }
 inline int applyWin11Style(juce::Component *, bool = true) { return 0; }
 inline int applyFluentDialogStyle(juce::Component *, bool = true,
                                   bool = false) {

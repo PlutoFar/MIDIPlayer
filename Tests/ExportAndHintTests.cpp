@@ -591,8 +591,9 @@ int main(int argc, char *argv[]) {
   testProductionIconVisualBounds();
 
   const auto customDialogPolicy = getFluentDialogWindowPolicy(false);
-  expect(customDialogPolicy.useSystemDropShadow,
-         "material dialogs should retain the DWM window shadow");
+  expect(!customDialogPolicy.useSystemDropShadow,
+         "transparent dialogs must avoid JUCE's external rectangular shadow "
+         "windows");
   expect(customDialogPolicy.configureBeforeEnteringModal,
          "dialog peer styles must be configured before modal ownership starts");
   expect(!customDialogPolicy.useDwmRoundedCorners,
@@ -614,8 +615,8 @@ int main(int argc, char *argv[]) {
                  WindowControlKind::close,
          "modal dialog hit testing should block native caption movement");
   const auto nativeDialogPolicy = getFluentDialogWindowPolicy(true);
-  expect(nativeDialogPolicy.useSystemDropShadow,
-         "native-titlebar dialogs may use the matching system shadow");
+  expect(!nativeDialogPolicy.useSystemDropShadow,
+         "all material dialogs should use one clipped native window");
   expect(!nativeDialogPolicy.useDwmRoundedCorners,
          "all custom dialogs should use the same corner implementation");
   expect(nativeDialogPolicy.useWindowRegion,

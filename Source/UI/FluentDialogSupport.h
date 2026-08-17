@@ -15,7 +15,7 @@ struct FluentDialogWindowPolicy {
 
 constexpr FluentDialogWindowPolicy
 getFluentDialogWindowPolicy(bool) {
-  return {true, false, true, true, true, true, false, false};
+  return {false, false, true, true, true, true, false, false};
 }
 
 inline juce::Component::WindowControlKind getNonDraggableDialogControlKind(
