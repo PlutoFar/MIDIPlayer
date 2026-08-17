@@ -7,7 +7,7 @@
 class SvgButton : public juce::Button, public juce::Timer {
 public:
   explicit SvgButton(const juce::String& svgString,
-                     float visualSize = 16.0f)
+                     float visualSize = LegacyDesignTokens::Icon::toolbar)
       : juce::Button(""), iconVisualSize(visualSize) {
     setMouseClickGrabsKeyboardFocus(false);
     auto xml = juce::XmlDocument::parse(svgString);
@@ -157,8 +157,9 @@ public:
       if (buttonText.isNotEmpty()) {
         const auto firstChar =
             (uint32_t)buttonText.getCharPointer().getAndAdvance();
-        g.setFont(firstChar >= 0xE000 ? laf->getIconFont(16.0f)
-                                       : laf->getDefaultFont(14.0f));
+        g.setFont(firstChar >= 0xE000
+                      ? laf->getIconFont(LegacyDesignTokens::Icon::toolbar)
+                      : laf->getBodyFont());
         g.setColour(showDestructiveState ? juce::Colours::white
                                          : laf->getColors().textPrimary);
         g.drawText(buttonText, getLocalBounds(), juce::Justification::centred,

@@ -159,6 +159,18 @@ public:
     settings.setValue("uiFontSize", juce::jlimit(12.0f, 20.0f, size));
   }
 
+  float getLegacyUIFontSize() const {
+    const float migratedSize = juce::jmax(16.0f, getUIFontSize());
+    return juce::jlimit(
+        14.0f, 22.0f,
+        (float)settings.getDoubleValue("legacyUiFontSize", migratedSize));
+  }
+
+  void setLegacyUIFontSize(float size) {
+    settings.setValue("legacyUiFontSize",
+                      juce::jlimit(14.0f, 22.0f, size));
+  }
+
   juce::String getPlaylistFontName() const {
     return settings.getValue("playlistFontName", "Microsoft YaHei UI");
   }

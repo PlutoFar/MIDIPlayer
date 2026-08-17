@@ -140,7 +140,7 @@ public:
           onExportConfirmed(std::move(onConfirm)) {
         setLookAndFeel(&fluentLookAndFeel);
 
-        const auto fieldFont = fluentLookAndFeel.getDefaultFont(14.0f);
+        const auto fieldFont = fluentLookAndFeel.getBodyFont();
         addAndMakeVisible(trackLabel);
         trackLabel.setText(L"待导出曲目", juce::dontSendNotification);
         trackLabel.setFont(fieldFont);
@@ -155,7 +155,7 @@ public:
 
         // 覆盖层只绘制文本，鼠标事件继续交给下拉框处理。
         addAndMakeVisible(trackMarquee);
-        trackMarquee.setFont(fluentLookAndFeel.getDefaultFont(14.0f));
+        trackMarquee.setFont(fluentLookAndFeel.getBodyFont());
         trackMarquee.setColour(fluentLookAndFeel.getColors().textPrimary);
         trackMarquee.setInterceptsMouseClicks(false, false);
 
@@ -229,7 +229,7 @@ public:
         cancelBtn.setButtonText(L"取消");
         cancelBtn.addListener(this);
 
-        const auto hintFont = fluentLookAndFeel.getDefaultFont(14.0f);
+        const auto hintFont = fluentLookAndFeel.getBodyFont();
         addAndMakeVisible(hintAccent);
         hintAccent.setAccentColour(fluentLookAndFeel.getColors().accentPrimary);
 

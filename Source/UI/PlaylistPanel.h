@@ -405,7 +405,7 @@ public:
     if (playlistManager.isEmpty()) {
       g.setColour(colors.textSecondary);
       if (laf != nullptr)
-        g.setFont(laf->getDefaultFont(15.0f));
+        g.setFont(laf->getBodyLargeFont());
       g.drawFittedText(L"拖入 MIDI 文件，或点击“添加”建立播放列表",
                        listBox.getBounds().reduced(24),
                        juce::Justification::centred, 2);

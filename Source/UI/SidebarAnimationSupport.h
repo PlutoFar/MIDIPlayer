@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LegacyDesignTokens.h"
 #include <algorithm>
 #include <cmath>
 
@@ -14,8 +15,10 @@ public:
     showingLabels
   };
 
-  static constexpr float expandedWidth = 152.0f;
-  static constexpr float collapsedWidth = 56.0f;
+  static constexpr float expandedWidth =
+      static_cast<float>(LegacyDesignTokens::Layout::sidebarExpandedWidth);
+  static constexpr float collapsedWidth =
+      static_cast<float>(LegacyDesignTokens::Layout::sidebarCollapsedWidth);
 
   void reset(bool collapsed) {
     targetCollapsed = collapsed;

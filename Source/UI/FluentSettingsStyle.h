@@ -5,16 +5,19 @@
 #include "FluentDialogSupport.h"
 
 namespace FluentSettingsStyle {
-constexpr float textSize = 14.0f;
 constexpr int panelMargin = 16;
 constexpr int cardPadding = 16;
-constexpr int controlHeight = 32;
 constexpr int rowGap = 10;
+
+inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {
+  return LegacyDesignTokens::Layout::controlHeight(
+      lookAndFeel.getUIFontSize());
+}
 
 inline void configureLabel(juce::Label &label, FluentLookAndFeel &lookAndFeel,
                            bool semibold = false,
                            bool secondary = false) {
-  label.setFont(lookAndFeel.getDefaultFont(textSize, semibold));
+  label.setFont(lookAndFeel.getBodyFont(semibold));
   label.setColour(
       juce::Label::textColourId,
       secondary ? lookAndFeel.getColors().textSecondary
@@ -43,7 +46,7 @@ inline void applyTypography(juce::Component &component,
   for (int index = 0; index < component.getNumChildComponents(); ++index) {
     auto *child = component.getChildComponent(index);
     if (auto *label = dynamic_cast<juce::Label *>(child))
-      label->setFont(lookAndFeel.getDefaultFont(textSize));
+      label->setFont(lookAndFeel.getBodyFont());
     applyTypography(*child, lookAndFeel);
   }
 }

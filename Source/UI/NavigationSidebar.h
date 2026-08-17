@@ -104,9 +104,9 @@ public:
       for (auto &ni : navItems) {
         float target = 1.0f;
         if (ni.id == pressedItemId)
-          target = 0.85f;
+          target = LegacyDesignTokens::Motion::navigationPressedScale;
         else if (ni.id == hoveredItemId)
-          target = 1.15f;
+          target = LegacyDesignTokens::Motion::navigationHoverScale;
 
         auto it = iconScales.find(ni.id);
         float current = (it != iconScales.end()) ? it->second : 1.0f;
@@ -144,10 +144,14 @@ public:
 
   void resized() override {
     auto area = getLocalBounds();
-    int itemHeight = 44;
-    int collapseHeight = 40;
-    int topPadding = 8;
-    int sidePadding = 6;
+    const int itemHeight = LegacyDesignTokens::Layout::navigationItemHeight(
+        fluentLookAndFeel.getUIFontSize());
+    constexpr int collapseHeight =
+        LegacyDesignTokens::Layout::navigationCollapseHeight;
+    constexpr int topPadding =
+        LegacyDesignTokens::Layout::navigationTopPadding;
+    constexpr int sidePadding =
+        LegacyDesignTokens::Layout::navigationSidePadding;
 
     auto collapseArea =
         area.removeFromTop(collapseHeight).reduced(sidePadding, 4);
@@ -174,7 +178,8 @@ public:
   void paintOverChildren(juce::Graphics &g) override {
     auto &colors = fluentLookAndFeel.getColors();
 
-    g.setFont(fluentLookAndFeel.getIconFont(14.0f));
+    g.setFont(fluentLookAndFeel.getIconFont(
+        LegacyDesignTokens::Icon::navigation));
     g.setColour(colors.textPrimary);
     juce::String collapseIcon =
         isCollapsed ? L"\uE76C" : L"\uE76B";
@@ -265,7 +270,8 @@ private:
       g.fillRoundedRectangle(indicator, 1.5f);
     }
 
-    constexpr int iconAreaWidth = 40;
+    constexpr int iconAreaWidth =
+        LegacyDesignTokens::Layout::navigationIconSlot;
     auto iconArea = getAnimatedIconArea(
         bounds, indicatorPadding + indicatorWidth + 4);
 
@@ -281,7 +287,8 @@ private:
                          .scaled(scale)
                          .translated(center.x, center.y));
     }
-    g.setFont(fluentLookAndFeel.getIconFont(16.0f));
+    g.setFont(fluentLookAndFeel.getIconFont(
+        LegacyDesignTokens::Icon::navigation));
     g.setColour(isSelected ? colors.accentPrimary : colors.textPrimary);
     g.drawText(item.icon, iconArea, juce::Justification::centred, false);
     g.restoreState();
@@ -289,7 +296,7 @@ private:
     drawAnimatedLabel(
         g, item.label, bounds,
         indicatorPadding + indicatorWidth + 4 + iconAreaWidth,
-        fluentLookAndFeel.getDefaultFont(15.0f, isSelected));
+        fluentLookAndFeel.getNavigationFont(isSelected));
   }
 
   void drawFooterItem(juce::Graphics &g, const NavItem &item,
@@ -302,7 +309,8 @@ private:
     }
     drawKeyboardFocus(g, bounds, item.id);
 
-    int iconAreaWidth = 40;
+    constexpr int iconAreaWidth =
+        LegacyDesignTokens::Layout::navigationIconSlot;
     auto iconArea = getAnimatedIconArea(bounds, 8);
 
     float scale = 1.0f;
@@ -317,7 +325,8 @@ private:
                          .scaled(scale)
                          .translated(center.x, center.y));
     }
-    g.setFont(fluentLookAndFeel.getIconFont(16.0f));
+    g.setFont(fluentLookAndFeel.getIconFont(
+        LegacyDesignTokens::Icon::navigation));
     if (item.id == "pin") {
       g.setColour(isPinned ? colors.accentPrimary : colors.textPrimary);
       g.drawText(isPinned ? L"\uE840" : L"\uE718", iconArea,
@@ -332,7 +341,7 @@ private:
         g, item.id == "pin" ? (isPinned ? L"取消置顶" : L"置顶")
                             : item.label,
         bounds, 8 + iconAreaWidth,
-        fluentLookAndFeel.getDefaultFont(15.0f, false));
+        fluentLookAndFeel.getNavigationFont());
   }
 
   bool keyPressed(const juce::KeyPress &key) override {
@@ -379,7 +388,8 @@ private:
   juce::Rectangle<int>
   getAnimatedIconArea(juce::Rectangle<int> bounds,
                       int expandedLeftInset) const {
-    constexpr int iconAreaWidth = 40;
+    constexpr int iconAreaWidth =
+        LegacyDesignTokens::Layout::navigationIconSlot;
     const int expandedX = bounds.getX() + expandedLeftInset;
     const int collapsedX =
         bounds.getX() + (bounds.getWidth() - iconAreaWidth) / 2;

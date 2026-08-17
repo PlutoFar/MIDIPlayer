@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ComboBoxAnimationSupport.h"
+#include "LegacyDesignTokens.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <vector>
 
@@ -97,11 +98,13 @@ public:
 
   juce::String uiFontName = "Source Han Sans SC";
   juce::String playlistFontName = "Microsoft YaHei UI";
-  float uiFontSize = 14.0f;
+  float uiFontSize = LegacyDesignTokens::Typography::defaultLegacyBody;
 
   void setUIFont(const juce::String &fontName) { uiFontName = fontName; }
   void setUIFontSize(float size) {
-    uiFontSize = juce::jlimit(12.0f, 20.0f, size);
+    uiFontSize = juce::jlimit(LegacyDesignTokens::Typography::minimumBody,
+                              LegacyDesignTokens::Typography::maximumBody,
+                              size);
   }
   void setPlaylistFont(const juce::String &fontName) {
     playlistFontName = fontName;
@@ -111,8 +114,11 @@ public:
   float getUIFontSize() const { return uiFontSize; }
   const juce::String &getPlaylistFontName() const { return playlistFontName; }
 
-  juce::Font getDefaultFont(float size = 14.0f, bool semibold = false) const {
-    const float adjustedSize = size * uiFontSize / 14.0f;
+  juce::Font getDefaultFont(
+      float size = LegacyDesignTokens::Typography::body,
+      bool semibold = false) const {
+    const float adjustedSize =
+        LegacyDesignTokens::Typography::resolve(size, uiFontSize);
     juce::FontOptions options(uiFontName, scaled(adjustedSize),
                               semibold ? juce::Font::bold : juce::Font::plain);
     juce::Font font(options);
@@ -131,6 +137,32 @@ public:
     }
 
     return font;
+  }
+
+  juce::Font getBodyFont(bool semibold = false) const {
+    return getDefaultFont(LegacyDesignTokens::Typography::body, semibold);
+  }
+
+  juce::Font getBodyLargeFont(bool semibold = false) const {
+    return getDefaultFont(LegacyDesignTokens::Typography::bodyLarge,
+                          semibold);
+  }
+
+  juce::Font getCaptionFont(bool semibold = false) const {
+    return getDefaultFont(LegacyDesignTokens::Typography::caption, semibold);
+  }
+
+  juce::Font getNavigationFont(bool semibold = false) const {
+    return getDefaultFont(LegacyDesignTokens::Typography::navigation,
+                          semibold);
+  }
+
+  juce::Font getSubtitleFont(bool semibold = false) const {
+    return getDefaultFont(LegacyDesignTokens::Typography::subtitle, semibold);
+  }
+
+  juce::Font getTitleFont(bool semibold = true) const {
+    return getDefaultFont(LegacyDesignTokens::Typography::title, semibold);
   }
 
   juce::Font getPlaylistFont(float size = 16.0f, bool bold = false) const {
@@ -153,7 +185,8 @@ public:
     return font;
   }
 
-  juce::Font getIconFont(float size = 16.0f) const {
+  juce::Font getIconFont(
+      float size = LegacyDesignTokens::Icon::toolbar) const {
     // 图标字体探测使用静态缓存；运行期间安装字体不会刷新。
     static bool hasFluentIcons = []() {
       auto fonts = juce::Font::findAllTypefaceNames();
@@ -255,11 +288,12 @@ public:
     // PUA 字符按图标字体绘制，其余文本使用界面字体。
     if (text.length() > 0 &&
         (uint32_t)text.getCharPointer().getAndAdvance() >= 0xE000) {
-      g.setFont(getIconFont(juce::jmin(16.0f, button.getHeight() * 0.5f)));
+      g.setFont(getIconFont(juce::jmin(
+          LegacyDesignTokens::Icon::toolbar, button.getHeight() * 0.5f)));
       g.setColour(button.getToggleState() ? juce::Colours::white
                                           : colors.textPrimary);
     } else {
-      g.setFont(getDefaultFont(14.0f, false));
+      g.setFont(getBodyFont());
       g.setColour(button.getToggleState() ? juce::Colours::white
                                           : colors.textPrimary);
     }
@@ -271,7 +305,7 @@ public:
   void drawCircularButton(juce::Graphics &g, juce::Rectangle<float> bounds,
                           const juce::String &icon, bool isPlaying, bool,
                           bool) {
-    g.setFont(getIconFont(20.0f));
+    g.setFont(getIconFont(LegacyDesignTokens::Icon::primary));
     g.setColour(colors.textPrimary);
     g.drawText(icon, bounds.toNearestInt(), juce::Justification::centred,
                false);
@@ -453,7 +487,7 @@ public:
   }
 
   juce::Font getComboBoxFont(juce::ComboBox &) override {
-    return getDefaultFont(14.0f);
+    return getBodyFont();
   }
 
   juce::PopupMenu::Options
@@ -468,7 +502,9 @@ public:
     if (display == nullptr)
       return options;
 
-    const int itemHeight = juce::jmax(label.getHeight(), scaledInt(30));
+    const int itemHeight = juce::jmax(
+        label.getHeight(),
+        LegacyDesignTokens::Layout::controlHeight(uiFontSize));
     const int visibleItems = juce::jlimit(1, 9, box.getNumItems());
     const int estimatedHeight = visibleItems * itemHeight + scaledInt(12);
     const int roomAbove = screenBounds.getY() - display->userArea.getY();
@@ -519,7 +555,7 @@ public:
                                               juce::PathStrokeType::rounded));
     }
 
-    g.setFont(getDefaultFont(14.0f));
+    g.setFont(getBodyFont());
     g.setColour(button.isEnabled() ? colors.textPrimary
                                    : colors.textDisabled);
     g.drawText(button.getButtonText(), bounds.toNearestInt(),
@@ -532,7 +568,7 @@ public:
   }
 
   juce::Font getPopupMenuFont() override {
-    return getDefaultFont(14.0f);
+    return getBodyFont();
   }
 
   void drawPopupMenuBackground(juce::Graphics &g, int width,
@@ -593,7 +629,7 @@ public:
     }
 
     g.setColour(isActive ? colors.textPrimary : colors.textDisabled);
-    g.setFont(getDefaultFont(14.0f));
+    g.setFont(getBodyFont());
     g.drawText(text, r.reduced(scaledInt(2), 0),
                juce::Justification::centredLeft, true);
   }
@@ -601,7 +637,7 @@ public:
   juce::Rectangle<int>
   getTooltipBounds(const juce::String &tipText, juce::Point<int> screenPos,
                    juce::Rectangle<int> parentArea) override {
-    juce::Font font = getDefaultFont(14.0f);
+    juce::Font font = getBodyFont();
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4996)
@@ -610,7 +646,7 @@ public:
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
-    int h = 32;
+    int h = LegacyDesignTokens::Layout::controlHeight(uiFontSize);
 
     const int edgeGap = 12;
     juce::Rectangle<int> bounds(screenPos.x, screenPos.y - h - 10, w, h);
@@ -632,7 +668,7 @@ public:
     g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
 
     g.setColour(juce::Colours::white);
-    g.setFont(getDefaultFont(14.0f));
+    g.setFont(getBodyFont());
     g.drawText(text, bounds, juce::Justification::centred, false);
   }
 
@@ -691,7 +727,7 @@ public:
     g.fillAll();
 
     g.setColour(colors.textPrimary);
-    g.setFont(getDefaultFont(14.0f, true));
+    g.setFont(getBodyFont(true));
 
     auto title = window.getName();
     g.drawText(title, titleSpaceX, 0, titleSpaceW, h,

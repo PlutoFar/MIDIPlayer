@@ -48,11 +48,9 @@ public:
     loadSettings();
 
     auto xml = juce::XmlDocument::parse (
-        R"(<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <line x1="2.5" y1="4.5" x2="13.5" y2="4.5" stroke="#000000" stroke-width="1.3" stroke-linecap="round"/>
-  <line x1="2.5" y1="8" x2="13.5" y2="8" stroke="#000000" stroke-width="1.3" stroke-linecap="round"/>
-  <line x1="2.5" y1="11.5" x2="13.5" y2="11.5" stroke="#000000" stroke-width="1.3" stroke-linecap="round"/>
-  <path d="M11 9L13.5 11.5L11 14" stroke="#000000" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+        R"(<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M3.5 5.25H16.5M3.5 9.75H14M3.5 14.25H11.5" stroke="#000000" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M13.25 12L16.5 14.5L13.25 17" stroke="#000000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>)");
     if (xml != nullptr) {
       sequentialIconDrawable = juce::Drawable::createFromSVG (*xml);
@@ -72,7 +70,7 @@ public:
 
     addAndMakeVisible(pageTitle);
     pageTitle.setText(L"乐器库", juce::dontSendNotification);
-    pageTitle.setFont(fluentLookAndFeel.getDefaultFont(26.0f, true));
+    pageTitle.setFont(fluentLookAndFeel.getTitleFont());
     pageTitle.setColour(juce::Label::textColourId,
                         fluentLookAndFeel.getColors().textPrimary);
 
@@ -97,7 +95,7 @@ public:
     unloadBtn.setEnabled(false);
 
     addAndMakeVisible(contentLabel);
-    contentLabel.setFont(fluentLookAndFeel.getDefaultFont(16.0f));
+    contentLabel.setFont(fluentLookAndFeel.getBodyLargeFont());
     contentLabel.setColour(juce::Label::textColourId,
                            fluentLookAndFeel.getColors().textSecondary);
     contentLabel.setInterceptsMouseClicks(false, false);
@@ -112,14 +110,14 @@ public:
     transportBar.setInterceptsMouseClicks(false, true);
 
     addAndMakeVisible(trackLabel);
-    trackLabel.setFont(fluentLookAndFeel.getDefaultFont(15.0f, true));
+    trackLabel.setFont(fluentLookAndFeel.getBodyFont(true));
     trackLabel.setColour(juce::Label::textColourId,
                          fluentLookAndFeel.getColors().textPrimary);
     trackLabel.setInterceptsMouseClicks(true, false);
 
     addAndMakeVisible(timeLabel);
     timeLabel.setText("0:00 / 0:00", juce::dontSendNotification);
-    timeLabel.setFont(fluentLookAndFeel.getDefaultFont(13.0f));
+    timeLabel.setFont(fluentLookAndFeel.getCaptionFont());
     timeLabel.setColour(juce::Label::textColourId,
                         fluentLookAndFeel.getColors().textSecondary);
 
@@ -368,15 +366,19 @@ public:
     drawIconButton(g, unloadBtn, L"\uE74D");
     drawIconButton(g, openPluginBtn, L"\uE8A7");
 
-    drawIconButton(g, prevBtn, L"\uE892");
+    drawIconButton(g, prevBtn, L"\uE892",
+                   LegacyDesignTokens::Icon::transport);
     drawPlayButton(g, playBtn, isPlaying);
-    drawIconButton(g, nextBtn, L"\uE893");
-    drawIconButton(g, stopBtn, L"\uE71A");
+    drawIconButton(g, nextBtn, L"\uE893",
+                   LegacyDesignTokens::Icon::transport);
+    drawIconButton(g, stopBtn, L"\uE71A",
+                   LegacyDesignTokens::Icon::transport);
 
     float vol = (float)volumeSlider.getValue();
     juce::String volIcon =
         vol > 0.5f ? L"\uE995" : (vol > 0 ? L"\uE994" : L"\uE992");
-    drawIconButton(g, volumeBtn, volIcon);
+    drawIconButton(g, volumeBtn, volIcon,
+                   LegacyDesignTokens::Icon::transport);
 
     juce::String loopIcon;
     bool isSequential = false;
@@ -410,7 +412,8 @@ public:
       g.addTransform(juce::AffineTransform::scale(
           playbackModeAnimationScale, playbackModeAnimationScale,
           b.getCentreX(), b.getCentreY()));
-      drawIconButton(g, loopModeBtn, loopIcon);
+      drawIconButton(g, loopModeBtn, loopIcon,
+                     LegacyDesignTokens::Icon::transport);
       g.restoreState();
     }
 
@@ -431,25 +434,46 @@ public:
     int navWidth = navigation.getPreferredWidth();
     navigation.setBounds(area.removeFromLeft(navWidth));
 
-    int transportHeight = 80;
+    const int transportHeight = LegacyDesignTokens::Layout::transportHeight(
+        fluentLookAndFeel.getUIFontSize());
     auto transportArea = area.removeFromBottom(transportHeight);
     transportBar.setBounds(transportArea);
     layoutTransportBar(transportArea);
 
-    int padding = 24;
-    auto content = area.reduced(padding, 16);
+    constexpr int padding =
+        LegacyDesignTokens::Layout::contentHorizontalPadding;
+    auto content = area.reduced(
+        padding, LegacyDesignTokens::Layout::contentVerticalPadding);
 
-    auto header = content.removeFromTop(48);
-    pageTitle.setBounds(header.removeFromLeft(180));
+    auto header = content.removeFromTop(
+        LegacyDesignTokens::Layout::pageHeaderHeight(
+            fluentLookAndFeel.getUIFontSize()));
 
-    int btnSize = 36;
-    int comboWidth = 200;
+    constexpr int btnSize = LegacyDesignTokens::Layout::toolbarButtonSize;
+    constexpr int comboWidth =
+        LegacyDesignTokens::Layout::pluginSelectorWidth;
+    const int availableComboWidth =
+        header.getWidth() - btnSize * 4 -
+        LegacyDesignTokens::Layout::pageTitleMinimumWidth;
+    const int actualComboWidth = juce::jlimit(
+        LegacyDesignTokens::Layout::pluginSelectorMinimumWidth, comboWidth,
+        availableComboWidth);
 
-    openPluginBtn.setBounds(header.removeFromRight(btnSize).reduced(2));
-    exportBtn.setBounds(header.removeFromRight(btnSize).reduced(2));
-    unloadBtn.setBounds(header.removeFromRight(btnSize).reduced(2));
-    scanBtn.setBounds(header.removeFromRight(btnSize).reduced(2));
-    pluginSelector.setBounds(header.removeFromRight(comboWidth).reduced(2, 6));
+    openPluginBtn.setBounds(
+        header.removeFromRight(btnSize).withSizeKeepingCentre(btnSize, btnSize));
+    exportBtn.setBounds(
+        header.removeFromRight(btnSize).withSizeKeepingCentre(btnSize, btnSize));
+    unloadBtn.setBounds(
+        header.removeFromRight(btnSize).withSizeKeepingCentre(btnSize, btnSize));
+    scanBtn.setBounds(
+        header.removeFromRight(btnSize).withSizeKeepingCentre(btnSize, btnSize));
+    const int controlHeight = LegacyDesignTokens::Layout::controlHeight(
+        fluentLookAndFeel.getUIFontSize());
+    pluginSelector.setBounds(header.removeFromRight(actualComboWidth)
+                                 .withSizeKeepingCentre(actualComboWidth,
+                                                       controlHeight));
+    pageTitle.setBounds(header.removeFromLeft(juce::jmin(
+        LegacyDesignTokens::Layout::pageTitleWidth, header.getWidth())));
 
     content.removeFromTop(12);
 
@@ -465,34 +489,51 @@ public:
   }
 
   void layoutTransportBar(juce::Rectangle<int> area) {
-    area = area.reduced(20, 8);
+    area = area.reduced(
+        LegacyDesignTokens::Layout::transportHorizontalPadding,
+        LegacyDesignTokens::Layout::transportVerticalPadding);
 
-    progressSlider.setBounds(area.removeFromTop(24));
-    area.removeFromTop(4);
+    progressSlider.setBounds(area.removeFromTop(
+        LegacyDesignTokens::Layout::transportProgressHeight));
+    area.removeFromTop(LegacyDesignTokens::Layout::transportProgressGap);
 
     auto controlRow = area;
-    int btnSize = 36;
-    int playBtnSize = 44; // 保持播放按钮为正方形。
+    constexpr int btnSize =
+        LegacyDesignTokens::Layout::transportButtonSize;
+    constexpr int playBtnSize =
+        LegacyDesignTokens::Layout::transportPrimaryButtonSize;
 
-    auto volumeArea = controlRow.removeFromRight(180);
+    auto volumeArea = controlRow.removeFromRight(
+        LegacyDesignTokens::Layout::transportVolumeAreaWidth);
     loopModeBtn.setBounds(volumeArea.removeFromLeft(btnSize).reduced(2));
     volumeBtn.setBounds(volumeArea.removeFromLeft(btnSize).reduced(2));
 
     volumeSlider.setBounds(volumeArea.reduced(4, 4));
 
-    int gap = 8;
+    constexpr int gap = LegacyDesignTokens::Layout::controlGap;
     int controlsWidth = btnSize * 3 + playBtnSize + gap * 3;
 
     // 为居中的播放控制预留空间后，动态分配左侧曲目信息宽度。
-    int minTrackWidth = 200;
-    int centerPadding = 40;
+    constexpr int minTrackWidth =
+        LegacyDesignTokens::Layout::transportMinimumTrackWidth;
+    constexpr int centerPadding =
+        LegacyDesignTokens::Layout::transportCentrePadding;
     int availableForTrack =
         (controlRow.getWidth() - controlsWidth) / 2 - centerPadding;
-    int trackInfoWidth = juce::jmax(minTrackWidth, availableForTrack);
+    const int maximumTrackWidth =
+        juce::jmax(0, controlRow.getWidth() - controlsWidth - gap);
+    int trackInfoWidth = juce::jmin(
+        maximumTrackWidth, juce::jmax(minTrackWidth, availableForTrack));
 
     auto leftInfo = controlRow.removeFromLeft(trackInfoWidth);
-    trackLabel.setBounds(leftInfo.removeFromTop(22));
-    timeLabel.setBounds(leftInfo);
+    trackLabel.setBounds(leftInfo.removeFromTop(
+        LegacyDesignTokens::Typography::lineHeight(
+            LegacyDesignTokens::Typography::body,
+            fluentLookAndFeel.getUIFontSize())));
+    timeLabel.setBounds(leftInfo.removeFromTop(
+        LegacyDesignTokens::Typography::lineHeight(
+            LegacyDesignTokens::Typography::caption,
+            fluentLookAndFeel.getUIFontSize())));
 
     int controlsHeight = playBtnSize;
     auto centerArea =
@@ -588,7 +629,8 @@ public:
     // 切换模式时隐藏悬浮提示，避免与 ToastComponent 重叠。
 
     modeToast.show(toastText, loopModeBtn.getBounds());
-    playbackModeAnimationScale = 0.8f;
+    playbackModeAnimationScale =
+        LegacyDesignTokens::Motion::playbackModeInitialScale;
 
     repaint();
   }
@@ -1062,7 +1104,8 @@ private:
   }
 
   void drawIconButton(juce::Graphics &g, juce::Button &btn,
-                      const juce::String &icon) {
+                      const juce::String &icon,
+                      float iconSize = LegacyDesignTokens::Icon::toolbar) {
     if (!btn.isVisible())
       return;
 
@@ -1075,7 +1118,7 @@ private:
       g.fillRoundedRectangle(bounds.reduced(2.0f), 6.0f);
     }
 
-    g.setFont(fluentLookAndFeel.getIconFont(16.0f));
+    g.setFont(fluentLookAndFeel.getIconFont(iconSize));
     g.setColour(btn.isEnabled() ? colors.textPrimary
                                 : colors.textSecondary.withAlpha(0.5f));
     g.drawText(icon, btn.getBounds(), juce::Justification::centred, false);
@@ -1100,11 +1143,13 @@ private:
                                      : colors.textSecondary.withAlpha(0.5f);
     g.setColour(iconColor);
 
-    g.setFont(fluentLookAndFeel.getIconFont(16.0f));
+    g.setFont(fluentLookAndFeel.getIconFont(
+        LegacyDesignTokens::Icon::toolbar));
     auto mainArea = btn.getBounds().translated(-2, -1);
     g.drawText(mainIcon, mainArea, juce::Justification::centred, false);
 
-    g.setFont(fluentLookAndFeel.getIconFont(10.0f));
+    g.setFont(fluentLookAndFeel.getIconFont(
+        LegacyDesignTokens::Icon::overlay));
     auto subArea = btn.getBounds().translated(6, 6);
     g.drawText(subIcon, subArea, juce::Justification::centred, false);
   }
@@ -1127,7 +1172,8 @@ private:
     g.setColour(iconColor);
 
     if (getAppSettings().getSequentialIconListStyle()) {
-      g.setFont(fluentLookAndFeel.getIconFont(16.0f));
+      g.setFont(fluentLookAndFeel.getIconFont(
+          LegacyDesignTokens::Icon::transport));
       g.drawText(L"\uEA42", btn.getBounds(), juce::Justification::centred,
                  false);
     } else {
@@ -1137,7 +1183,9 @@ private:
           lastSequentialIconColor = iconColor;
         }
         auto r = btn.getBounds().toFloat();
-        auto iconBounds = r.withSizeKeepingCentre(14.0f, 14.0f);
+        auto iconBounds = r.withSizeKeepingCentre(
+            LegacyDesignTokens::Icon::transport,
+            LegacyDesignTokens::Icon::transport);
         sequentialIconDrawable->drawWithin(g, iconBounds, juce::RectanglePlacement::centred, 1.0f);
       }
     }
@@ -1160,7 +1208,8 @@ private:
       g.fillEllipse(bounds.reduced(3.0f));
     }
 
-    g.setFont(fluentLookAndFeel.getIconFont(18.0f));
+    g.setFont(fluentLookAndFeel.getIconFont(
+        LegacyDesignTokens::Icon::primary));
     g.setColour(isEnabled ? colors.textPrimary
                           : colors.textSecondary.withAlpha(0.4f));
     g.drawText(isPlaying ? L"\uE769" : L"\uE768", btn.getBounds(),
@@ -1718,6 +1767,9 @@ public:
           safeThis->applyConfiguredFonts();
           safeThis->playlistPanel.refresh();
           safeThis->playlistPanel.repaint();
+          safeThis->navigation.resized();
+          safeThis->navigation.repaint();
+          safeThis->resized();
           safeThis->repaint();
     };
 
@@ -1733,10 +1785,10 @@ public:
   }
 
   void applyConfiguredFonts() {
-    pageTitle.setFont(fluentLookAndFeel.getDefaultFont(26.0f, true));
-    contentLabel.setFont(fluentLookAndFeel.getDefaultFont(16.0f));
-    trackLabel.setFont(fluentLookAndFeel.getDefaultFont(15.0f, true));
-    timeLabel.setFont(fluentLookAndFeel.getDefaultFont(13.0f));
+    pageTitle.setFont(fluentLookAndFeel.getTitleFont());
+    contentLabel.setFont(fluentLookAndFeel.getBodyLargeFont());
+    trackLabel.setFont(fluentLookAndFeel.getBodyFont(true));
+    timeLabel.setFont(fluentLookAndFeel.getCaptionFont());
   }
 
   void closeSettingsWindows() {
@@ -1807,7 +1859,7 @@ public:
     core.setPlayMode(savedMode);
 
     fluentLookAndFeel.setUIFont(settings.getUIFontName());
-    fluentLookAndFeel.setUIFontSize(settings.getUIFontSize());
+    fluentLookAndFeel.setUIFontSize(settings.getLegacyUIFontSize());
     fluentLookAndFeel.setPlaylistFont(settings.getPlaylistFontName());
 
     playlistPanel.refresh();
@@ -2345,18 +2397,20 @@ public:
       };
 
       addAndMakeVisible(uiFontSizeLabel);
-      uiFontSizeLabel.setText(L"字号", juce::dontSendNotification);
+      uiFontSizeLabel.setText(L"基准字号", juce::dontSendNotification);
       FluentSettingsStyle::configureLabel(uiFontSizeLabel, fluentLookAndFeel);
 
       addAndMakeVisible(uiFontSizeSlider);
-      uiFontSizeSlider.setRange(12.0, 20.0, 1.0);
-      uiFontSizeSlider.setValue(getAppSettings().getUIFontSize());
+      uiFontSizeSlider.setRange(
+          LegacyDesignTokens::Typography::minimumBody,
+          LegacyDesignTokens::Typography::maximumBody, 1.0);
+      uiFontSizeSlider.setValue(getAppSettings().getLegacyUIFontSize());
       uiFontSizeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
       uiFontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50,
                                        20);
       uiFontSizeSlider.onValueChange = [this]() {
         const float size = (float)uiFontSizeSlider.getValue();
-        getAppSettings().setUIFontSize(size);
+        getAppSettings().setLegacyUIFontSize(size);
         fluentLookAndFeel.setUIFontSize(size);
         refreshTypography();
         if (onSettingsChanged)
@@ -2496,6 +2550,7 @@ public:
                                           fluentLookAndFeel);
       FluentSettingsStyle::configureLabel(playlistFontSizeLabel,
                                           fluentLookAndFeel);
+      resized();
       repaint();
       if (auto *window = getTopLevelComponent())
         window->repaint();
@@ -2508,18 +2563,18 @@ public:
       area.removeFromTop(12);
       playlistCardBounds = area.removeFromTop(172);
 
-      constexpr int labelWidth = 72;
+      constexpr int labelWidth = 88;
       auto interfaceContent =
           interfaceCardBounds.reduced(FluentSettingsStyle::cardPadding);
       interfaceSectionLabel.setBounds(interfaceContent.removeFromTop(22));
       interfaceContent.removeFromTop(8);
-      auto uiRow = interfaceContent.removeFromTop(
-          FluentSettingsStyle::controlHeight);
+      const int rowHeight =
+          FluentSettingsStyle::controlHeight(fluentLookAndFeel);
+      auto uiRow = interfaceContent.removeFromTop(rowHeight);
       uiFontLabel.setBounds(uiRow.removeFromLeft(labelWidth));
       uiFontCombo.setBounds(uiRow);
       interfaceContent.removeFromTop(FluentSettingsStyle::rowGap);
-      auto uiSizeRow = interfaceContent.removeFromTop(
-          FluentSettingsStyle::controlHeight);
+      auto uiSizeRow = interfaceContent.removeFromTop(rowHeight);
       uiFontSizeLabel.setBounds(uiSizeRow.removeFromLeft(labelWidth));
       uiFontSizeSlider.setBounds(uiSizeRow);
 
@@ -2527,13 +2582,11 @@ public:
           playlistCardBounds.reduced(FluentSettingsStyle::cardPadding);
       playlistSectionLabel.setBounds(playlistContent.removeFromTop(22));
       playlistContent.removeFromTop(8);
-      auto fontRow = playlistContent.removeFromTop(
-          FluentSettingsStyle::controlHeight);
+      auto fontRow = playlistContent.removeFromTop(rowHeight);
       playlistFontLabel.setBounds(fontRow.removeFromLeft(labelWidth));
       playlistFontCombo.setBounds(fontRow);
       playlistContent.removeFromTop(FluentSettingsStyle::rowGap);
-      auto sizeRow = playlistContent.removeFromTop(
-          FluentSettingsStyle::controlHeight);
+      auto sizeRow = playlistContent.removeFromTop(rowHeight);
       playlistFontSizeLabel.setBounds(sizeRow.removeFromLeft(labelWidth));
       playlistFontSizeSlider.setBounds(sizeRow);
     }

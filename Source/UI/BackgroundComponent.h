@@ -1514,7 +1514,7 @@ public:
         g.drawRoundedRectangle(r.reduced(0.5f), 4.0f, 3.5f);
 
         if (auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel())) {
-          g.setFont(laf->getIconFont(14.0f));
+          g.setFont(laf->getIconFont(LegacyDesignTokens::Icon::small));
           g.setColour(isBright ? juce::Colours::black.withAlpha(0.85f)
                                : juce::Colours::white.withAlpha(0.95f));
           g.drawText(L"\uE73E", r, juce::Justification::centred, false);
@@ -1692,7 +1692,7 @@ public:
       : background(bg), listener(l), fluentLookAndFeel(laf) {
     background.addChangeListener(this);
     setLookAndFeel(&fluentLookAndFeel);
-    setSize(640, 420);
+    setSize(640, getPreferredHeight());
     setOpaque(false);
 
     addAndMakeVisible(titleLabel);
@@ -1917,7 +1917,7 @@ public:
   void resized() override {
     auto area =
         getLocalBounds().reduced(FluentSettingsStyle::panelMargin);
-    auto topCards = area.removeFromTop(270);
+    auto topCards = area.removeFromTop(getTopCardsHeight());
     const int columnWidth = (topCards.getWidth() - 12) / 2;
     sourceCardBounds = topCards.removeFromLeft(columnWidth);
     topCards.removeFromLeft(12);
@@ -1930,7 +1930,8 @@ public:
     titleLabel.setBounds(source.removeFromTop(22));
     source.removeFromTop(8);
     auto imageRow =
-        source.removeFromTop(FluentSettingsStyle::controlHeight);
+        source.removeFromTop(
+            FluentSettingsStyle::controlHeight(fluentLookAndFeel));
     imageLabel.setBounds(imageRow.removeFromLeft(64));
     clearImageBtn.setBounds(imageRow.removeFromRight(64));
     imageRow.removeFromRight(8);
@@ -1954,22 +1955,26 @@ public:
     effects.removeFromTop(8);
     constexpr int effectLabelWidth = 64;
     auto blurRow =
-        effects.removeFromTop(FluentSettingsStyle::controlHeight);
+        effects.removeFromTop(
+            FluentSettingsStyle::controlHeight(fluentLookAndFeel));
     blurModeLabel.setBounds(blurRow.removeFromLeft(effectLabelWidth));
     blurModeCombo.setBounds(blurRow);
     effects.removeFromTop(FluentSettingsStyle::rowGap);
     auto radiusRow =
-        effects.removeFromTop(FluentSettingsStyle::controlHeight);
+        effects.removeFromTop(
+            FluentSettingsStyle::controlHeight(fluentLookAndFeel));
     blurRadiusLabel.setBounds(radiusRow.removeFromLeft(effectLabelWidth));
     blurRadiusSlider.setBounds(radiusRow);
     effects.removeFromTop(FluentSettingsStyle::rowGap);
     auto overlayRow =
-        effects.removeFromTop(FluentSettingsStyle::controlHeight);
+        effects.removeFromTop(
+            FluentSettingsStyle::controlHeight(fluentLookAndFeel));
     overlayLabel.setBounds(overlayRow.removeFromLeft(effectLabelWidth));
     overlaySlider.setBounds(overlayRow);
     effects.removeFromTop(12);
     monetToggle.setBounds(
-        effects.removeFromTop(FluentSettingsStyle::controlHeight));
+        effects.removeFromTop(
+            FluentSettingsStyle::controlHeight(fluentLookAndFeel)));
     effects.removeFromTop(8);
     paletteSelector.setBounds(effects.removeFromTop(40));
 
@@ -1978,7 +1983,8 @@ public:
     behaviorSectionLabel.setBounds(behavior.removeFromTop(22));
     behavior.removeFromTop(8);
     auto toggleRow =
-        behavior.removeFromTop(FluentSettingsStyle::controlHeight);
+        behavior.removeFromTop(
+            FluentSettingsStyle::controlHeight(fluentLookAndFeel));
     const int toggleWidth = (toggleRow.getWidth() - 16) / 2;
     sequentialIconToggle.setBounds(toggleRow.removeFromLeft(toggleWidth));
     toggleRow.removeFromLeft(16);
@@ -2008,6 +2014,23 @@ public:
 
     updateImageDependentControls();
     repaint();
+  }
+
+  int getTopCardsHeight() const {
+    const int rowHeight =
+        FluentSettingsStyle::controlHeight(fluentLookAndFeel);
+    return FluentSettingsStyle::cardPadding * 2 + 22 + 8 +
+           rowHeight * 4 + FluentSettingsStyle::rowGap * 2 + 12 + 8 + 40;
+  }
+
+  int getBehaviorCardHeight() const {
+    return FluentSettingsStyle::cardPadding * 2 + 22 + 8 +
+           FluentSettingsStyle::controlHeight(fluentLookAndFeel);
+  }
+
+  int getPreferredHeight() const {
+    return FluentSettingsStyle::panelMargin * 2 + getTopCardsHeight() + 12 +
+           getBehaviorCardHeight();
   }
 
 private:
