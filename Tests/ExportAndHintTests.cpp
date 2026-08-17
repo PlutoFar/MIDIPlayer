@@ -501,22 +501,19 @@ bool runBridgeWorkerChildIfRequested(int argc, char *argv[]) {
   if (!PluginBridge::isPluginWorkerCommandLine(commandLine))
     return false;
 
-  if (juce::SystemStats::getEnvironmentVariable(
-          "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_EXIT_AFTER_READY", "") == "1") {
-    TestPluginBridgeWorker worker;
-    worker.run(commandLine);
-    return true;
-  }
-
-  if (juce::SystemStats::getEnvironmentVariable(
-          "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_LOAD_FAIL", "") == "1") {
-    TestPluginBridgeWorker worker;
-    worker.run(commandLine);
-    return true;
-  }
-
-  if (juce::SystemStats::getEnvironmentVariable(
-          "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_LOAD_OK", "") == "1") {
+  constexpr const char *testModeVariables[] = {
+      "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_EXIT_AFTER_READY",
+      "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_LOAD_FAIL",
+      "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_LOAD_OK",
+      "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_EXIT_ON_LOAD",
+      "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_IGNORE_LOAD",
+      "MIDI_PLAYER_PLUGIN_BRIDGE_TEST_IGNORE_SHUTDOWN"};
+  const bool testModeRequested = std::any_of(
+      std::begin(testModeVariables), std::end(testModeVariables),
+      [](const char *name) {
+        return juce::SystemStats::getEnvironmentVariable(name, "") == "1";
+      });
+  if (testModeRequested) {
     TestPluginBridgeWorker worker;
     worker.run(commandLine);
     return true;
