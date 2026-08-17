@@ -61,8 +61,12 @@ public:
     setUsingNativeTitleBar(options.useNativeTitleBar);
     setAlwaysOnTop(false);
     setConstrainer(&ownerConstrainer);
-    if (this->nativeOwner != nullptr)
+    if (this->nativeOwner != nullptr) {
+      restoreOwnerAlwaysOnTop = this->nativeOwner->isAlwaysOnTop();
+      if (restoreOwnerAlwaysOnTop)
+        this->nativeOwner->setAlwaysOnTop(false);
       this->nativeOwner->addComponentListener(this);
+    }
     if (this->constraintOwner != nullptr &&
         this->constraintOwner != this->nativeOwner)
       this->constraintOwner->addComponentListener(this);
@@ -75,6 +79,8 @@ public:
     if (constraintOwner != nullptr && constraintOwner != nativeOwner)
       constraintOwner->removeComponentListener(this);
     setConstrainer(nullptr);
+    if (restoreOwnerAlwaysOnTop && nativeOwner != nullptr)
+      nativeOwner->setAlwaysOnTop(true);
   }
 
   void closeButtonPressed() override { setVisible(false); }
@@ -109,6 +115,7 @@ private:
   juce::Component::SafePointer<juce::Component> constraintOwner;
   juce::Component::SafePointer<juce::Component> nativeOwner;
   OwnerBoundsConstrainer ownerConstrainer;
+  bool restoreOwnerAlwaysOnTop = false;
 };
 
 inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {
