@@ -10,8 +10,7 @@ constexpr int panelMargin = 16;
 constexpr int cardPadding = 16;
 constexpr int rowGap = 10;
 
-class FluentDialogWindow final : public juce::DialogWindow,
-                                 private juce::ComponentListener {
+class FluentDialogWindow final : public juce::DialogWindow {
 public:
   FluentDialogWindow(juce::DialogWindow::LaunchOptions &options,
                      juce::Component *constraintOwner,
@@ -29,11 +28,7 @@ public:
     else
       setContentNonOwned(options.content.release(), true);
 
-    auto *centreComponent = options.componentToCentreAround != nullptr
-                                ? options.componentToCentreAround
-                                : constraintOwner;
-    centreAroundComponent(centreComponent, getWidth(), getHeight());
-    setResizable(options.resizable, options.useBottomRightCornerResizer);
+    setResizable(false, false);
     setUsingNativeTitleBar(options.useNativeTitleBar);
     setAlwaysOnTop(false);
     setDraggable(false);
@@ -47,20 +42,10 @@ public:
       if (restoreOwnerInteraction)
         Win11Helpers::setNativeWindowInteractionEnabled(
             this->nativeOwner.getComponent(), false);
-      this->nativeOwner->addComponentListener(this);
     }
-    if (this->constraintOwner != nullptr &&
-        this->constraintOwner != this->nativeOwner)
-      this->constraintOwner->addComponentListener(this);
-    centringEnabled = true;
-    centreOnOwner();
   }
 
   ~FluentDialogWindow() override {
-    if (nativeOwner != nullptr)
-      nativeOwner->removeComponentListener(this);
-    if (constraintOwner != nullptr && constraintOwner != nativeOwner)
-      constraintOwner->removeComponentListener(this);
     if (restoreOwnerAlwaysOnTop && nativeOwner != nullptr)
       nativeOwner->setAlwaysOnTop(true);
     restoreOwnerInteractionIfNeeded();
@@ -77,34 +62,16 @@ public:
   }
 
   void centreOnOwner() {
-    if (!centringEnabled || centringInProgress || constraintOwner == nullptr)
-      return;
-
-    juce::ScopedValueSetter<bool> guard(centringInProgress, true);
-    centreAroundComponent(constraintOwner.getComponent(), getWidth(),
-                          getHeight());
+    if (constraintOwner != nullptr)
+      centreAroundComponent(constraintOwner.getComponent(), getWidth(),
+                            getHeight());
   }
 
 private:
-  void moved() override {
-    juce::DialogWindow::moved();
-    centreOnOwner();
-  }
-
-  void resized() override {
-    juce::DialogWindow::resized();
-    centreOnOwner();
-  }
-
-  void componentMovedOrResized(juce::Component &, bool, bool) override {
-    centreOnOwner();
-  }
-
-  void componentBeingDeleted(juce::Component &component) override {
-    if (nativeOwner.getComponent() == &component)
-      nativeOwner = nullptr;
-    if (constraintOwner.getComponent() == &component)
-      constraintOwner = nullptr;
+  WindowControlKind
+  findControlAtPoint(juce::Point<float> point) const override {
+    return getNonDraggableDialogControlKind(
+        juce::DialogWindow::findControlAtPoint(point));
   }
 
   void restoreOwnerInteractionIfNeeded() {
@@ -120,8 +87,6 @@ private:
   juce::Component::SafePointer<juce::Component> nativeOwner;
   bool restoreOwnerAlwaysOnTop = false;
   bool restoreOwnerInteraction = false;
-  bool centringEnabled = false;
-  bool centringInProgress = false;
 };
 
 inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {
@@ -305,8 +270,7 @@ inline void applyDialogWindowStyle(juce::DialogWindow *window) {
   Win11Helpers::applyRoundedWindowRegion(window, policy.useWindowRegion);
 }
 
-inline void maintainDialogCentre(juce::DialogWindow *window) {
-  centreDialogNow(window);
+inline void refreshDialogNativeStyleLater(juce::DialogWindow *window) {
   auto safeWindow = juce::Component::SafePointer<juce::DialogWindow>(window);
   juce::Timer::callAfterDelay(100, [safeWindow]() {
     if (safeWindow != nullptr) {
@@ -321,7 +285,6 @@ inline void maintainDialogCentre(juce::DialogWindow *window) {
               dynamic_cast<FluentDialogWindow *>(safeWindow.getComponent()))
         Win11Helpers::setOwnedWindow(ownedWindow,
                                      ownedWindow->getNativeOwner());
-      centreDialogNow(safeWindow.getComponent());
     }
   });
 }
@@ -342,7 +305,7 @@ launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
   Win11Helpers::setOwnedWindow(window, nativeOwner);
   centreDialogNow(window);
   window->enterModalState(true, nullptr, true);
-  maintainDialogCentre(window);
+  refreshDialogNativeStyleLater(window);
   return window;
 }
 } // namespace FluentSettingsStyle

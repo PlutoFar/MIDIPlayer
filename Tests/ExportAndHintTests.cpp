@@ -595,22 +595,31 @@ int main(int argc, char *argv[]) {
          "material dialogs should retain the DWM window shadow");
   expect(customDialogPolicy.configureBeforeEnteringModal,
          "dialog peer styles must be configured before modal ownership starts");
-  expect(customDialogPolicy.useDwmRoundedCorners,
-         "material dialogs should use DWM rounded corners");
-  expect(!customDialogPolicy.useWindowRegion,
-         "material dialogs should avoid region clipping during window moves");
+  expect(!customDialogPolicy.useDwmRoundedCorners,
+         "material dialogs should avoid competing DWM corner rendering");
+  expect(customDialogPolicy.useWindowRegion,
+         "non-draggable dialogs should clip the native window to one rounded "
+         "region");
   expect(customDialogPolicy.centreOnOwner &&
              customDialogPolicy.useNativeOwner &&
              !customDialogPolicy.allowAlwaysOnTop &&
              !customDialogPolicy.allowDragging,
          "settings dialogs should remain centred, modal, and non-draggable");
+  using WindowControlKind = juce::Component::WindowControlKind;
+  expect(getNonDraggableDialogControlKind(WindowControlKind::caption) ==
+                 WindowControlKind::client &&
+             getNonDraggableDialogControlKind(WindowControlKind::sizeTop) ==
+                 WindowControlKind::client &&
+             getNonDraggableDialogControlKind(WindowControlKind::close) ==
+                 WindowControlKind::close,
+         "modal dialog hit testing should block native caption movement");
   const auto nativeDialogPolicy = getFluentDialogWindowPolicy(true);
   expect(nativeDialogPolicy.useSystemDropShadow,
          "native-titlebar dialogs may use the matching system shadow");
-  expect(nativeDialogPolicy.useDwmRoundedCorners,
-         "native-titlebar dialogs may use Windows 11 rounded corners");
-  expect(!nativeDialogPolicy.useWindowRegion,
-         "native-titlebar dialogs should not override the system window region");
+  expect(!nativeDialogPolicy.useDwmRoundedCorners,
+         "all custom dialogs should use the same corner implementation");
+  expect(nativeDialogPolicy.useWindowRegion,
+         "all custom dialogs should clip opaque corner pixels");
 
   FluentLookAndFeel interactionLookAndFeel(true);
   juce::ToggleButton interactionToggle(L"更换原生图标样式");
