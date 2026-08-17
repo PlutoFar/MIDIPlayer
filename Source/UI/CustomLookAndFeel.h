@@ -244,6 +244,14 @@ public:
     g.fillPath(path);
   }
 
+  void drawSystemIconGlyph(juce::Graphics &g, const juce::String &icon,
+                           juce::Rectangle<float> bounds,
+                           float fontSize) const {
+    g.setFont(getIconFont(fontSize));
+    g.drawText(icon, bounds.toNearestInt(), juce::Justification::centred,
+               false);
+  }
+
   juce::Rectangle<float>
   getIconOpticalBounds(juce::Rectangle<float> bounds, float visualSize) const {
     return bounds.withSizeKeepingCentre(

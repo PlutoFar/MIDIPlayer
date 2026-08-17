@@ -33,6 +33,7 @@ inline int lineHeight(float semanticSize, float configuredBodySize) {
 namespace Icon {
 constexpr float overlay = 12.0f;
 constexpr float small = 16.0f;
+constexpr float paneToggle = 20.0f;
 constexpr float primaryAction = 24.0f;
 constexpr float opticalHeightRatio = 11.0f / 12.0f;
 constexpr float toolbar = primaryAction;
@@ -52,6 +53,7 @@ namespace Layout {
 constexpr int sidebarExpandedWidth = 180;
 constexpr int sidebarCollapsedWidth = 64;
 constexpr int navigationIconSlot = 44;
+constexpr int navigationPaneToggleButtonSize = 40;
 constexpr int navigationMinimumItemHeight = 52;
 constexpr int navigationCollapseHeight = 48;
 constexpr int navigationTopPadding = 8;

@@ -42,11 +42,11 @@ public:
     };
 
     addAndMakeVisible(collapseBtn);
-    collapseBtn.setTooltip(L"折叠或展开导航");
     collapseBtn.onClick = [this]() { toggleCollapsed(); };
 
     isCollapsed = getAppSettings().getSidebarCollapsed();
     animation.reset(isCollapsed);
+    updateCollapseButtonTooltip();
 
     isPinned = getAppSettings().getAlwaysOnTop();
   }
@@ -73,6 +73,7 @@ public:
     isCollapsed = !isCollapsed;
     getAppSettings().setSidebarCollapsed(isCollapsed);
     animation.setCollapsed(isCollapsed);
+    updateCollapseButtonTooltip();
     ensureAnimating();
   }
 
@@ -153,9 +154,18 @@ public:
     constexpr int sidePadding =
         LegacyDesignTokens::Layout::navigationSidePadding;
 
-    auto collapseArea =
-        area.removeFromTop(collapseHeight).reduced(sidePadding, 4);
-    collapseBtn.setBounds(collapseArea.removeFromLeft(36));
+    auto collapseArea = area.removeFromTop(collapseHeight);
+    constexpr int toggleSize =
+        LegacyDesignTokens::Layout::navigationPaneToggleButtonSize;
+    const int expandedX = sidePadding;
+    const int collapsedX = (collapseArea.getWidth() - toggleSize) / 2;
+    const int toggleX = juce::roundToInt(
+        expandedX +
+        (collapsedX - expandedX) * animation.getCompactProgress());
+    collapseBtn.setBounds(toggleX,
+                          collapseArea.getY() +
+                              (collapseArea.getHeight() - toggleSize) / 2,
+                          toggleSize, toggleSize);
 
     area.removeFromTop(topPadding);
 
@@ -179,11 +189,9 @@ public:
     auto &colors = fluentLookAndFeel.getColors();
 
     g.setColour(colors.textPrimary);
-    juce::String collapseIcon =
-        isCollapsed ? L"\uE76C" : L"\uE76B";
-    fluentLookAndFeel.drawIconGlyph(
-        g, collapseIcon, collapseBtn.getBounds().toFloat(),
-        LegacyDesignTokens::Icon::navigation);
+    fluentLookAndFeel.drawSystemIconGlyph(
+        g, L"\uE700", collapseBtn.getBounds().toFloat(),
+        LegacyDesignTokens::Icon::paneToggle);
 
     for (size_t i = 0; i < items.size(); ++i) {
       if (i < itemBounds.size())
@@ -236,6 +244,10 @@ public:
   }
 
 private:
+  void updateCollapseButtonTooltip() {
+    collapseBtn.setTooltip(isCollapsed ? L"展开导航" : L"收起导航");
+  }
+
   void drawMainNavItem(juce::Graphics &g, const NavItem &item,
                        juce::Rectangle<int> bounds, bool isSelected,
                        bool isHovered) {

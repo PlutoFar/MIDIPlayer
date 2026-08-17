@@ -108,15 +108,32 @@ juce::Rectangle<int> renderGlyphIconBounds(FluentLookAndFeel &lookAndFeel,
   return getVisibleAlphaBounds(image);
 }
 
+juce::Rectangle<int>
+renderSystemGlyphBounds(FluentLookAndFeel &lookAndFeel,
+                        const juce::String &glyph, float fontSize,
+                        float buttonSize) {
+  juce::Image image(juce::Image::ARGB, 128, 128, true);
+  {
+    juce::Graphics graphics(image);
+    graphics.setColour(juce::Colours::white);
+    lookAndFeel.drawSystemIconGlyph(
+        graphics, glyph,
+        image.getBounds().toFloat().withSizeKeepingCentre(buttonSize,
+                                                          buttonSize),
+        fontSize);
+  }
+  return getVisibleAlphaBounds(image);
+}
+
 void testProductionIconVisualBounds() {
   FluentLookAndFeel lookAndFeel(true);
-  const std::array<const wchar_t *, 28> productionGlyphs = {
+  const std::array<const wchar_t *, 26> productionGlyphs = {
       L"\uE73E", L"\uE8BB", L"\uE921", L"\uE922", L"\uE71A",
       L"\uE74D", L"\uE768", L"\uE769", L"\uE892", L"\uE893",
       L"\uE8A7", L"\uE8B1", L"\uE8ED", L"\uE8EE", L"\uE992",
       L"\uE994", L"\uE995", L"\uE9A1", L"\uEA42", L"\uE713",
-      L"\uE718", L"\uE76B", L"\uE76C", L"\uE840", L"\uE8D2",
-      L"\uE8D6", L"\uE90B", L"\uE91B"};
+      L"\uE718", L"\uE840", L"\uE8D2", L"\uE8D6", L"\uE90B",
+      L"\uE91B"};
 
   for (const float visualSize : {16.0f, 24.0f, 36.0f, 48.0f}) {
     const auto reference =
@@ -143,6 +160,19 @@ void testProductionIconVisualBounds() {
              "all production glyph alpha boundaries must match exactly");
     }
   }
+
+  const auto paneToggle = renderSystemGlyphBounds(
+      lookAndFeel, L"\uE700", LegacyDesignTokens::Icon::paneToggle,
+      (float)LegacyDesignTokens::Layout::navigationPaneToggleButtonSize);
+  expect(!paneToggle.isEmpty(),
+         "NavigationView pane toggle glyph must render visibly");
+  expect(paneToggle.getWidth() <= LegacyDesignTokens::Icon::paneToggle + 1.0f &&
+             paneToggle.getHeight() <=
+                 LegacyDesignTokens::Icon::paneToggle + 1.0f,
+         "NavigationView pane toggle must preserve its official 20px metrics");
+  expect(std::abs(paneToggle.getCentreX() - 64) <= 1 &&
+             std::abs(paneToggle.getCentreY() - 64) <= 1,
+         "NavigationView pane toggle must remain centred in its button");
 }
 
 void setTestEnvironmentVariable(const wchar_t *name, const wchar_t *value) {
