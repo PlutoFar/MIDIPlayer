@@ -62,6 +62,9 @@ public:
   }
 
   void centreOnOwner() {
+    if (nativeOwner != nullptr &&
+        Win11Helpers::centreWindowOnOwner(this, nativeOwner.getComponent()))
+      return;
     if (constraintOwner != nullptr)
       centreAroundComponent(constraintOwner.getComponent(), getWidth(),
                             getHeight());

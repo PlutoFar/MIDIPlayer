@@ -27,6 +27,13 @@ __declspec(dllimport) BOOL __stdcall DeleteObject(void *object);
 
 namespace Win11Helpers {
 
+struct NativeWindowRect {
+  long left = 0;
+  long top = 0;
+  long right = 0;
+  long bottom = 0;
+};
+
 namespace DwmAttributes {
 constexpr DWORD DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 constexpr DWORD DWMWA_WINDOW_CORNER_PREFERENCE = 33;
@@ -95,6 +102,51 @@ inline bool setOwnedWindow(juce::Component *window, juce::Component *owner) {
   function(windowHandle, ownerWindowIndex,
            reinterpret_cast<std::intptr_t>(ownerHandle));
   return true;
+}
+
+inline bool centreWindowOnOwner(juce::Component *window,
+                                juce::Component *owner) {
+  if (window == nullptr || owner == nullptr || window->getPeer() == nullptr ||
+      owner->getPeer() == nullptr)
+    return false;
+
+  auto windowHandle = static_cast<HWND>(window->getPeer()->getNativeHandle());
+  auto ownerHandle = static_cast<HWND>(owner->getPeer()->getNativeHandle());
+  if (windowHandle == nullptr || ownerHandle == nullptr)
+    return false;
+
+  using GetWindowRectFunction = BOOL(__stdcall *)(HWND, NativeWindowRect *);
+  using SetWindowPosFunction =
+      BOOL(__stdcall *)(HWND, HWND, int, int, int, int, unsigned int);
+  static juce::DynamicLibrary user32("user32.dll");
+  static auto getWindowRect = reinterpret_cast<GetWindowRectFunction>(
+      user32.getFunction("GetWindowRect"));
+  static auto setWindowPos = reinterpret_cast<SetWindowPosFunction>(
+      user32.getFunction("SetWindowPos"));
+  if (getWindowRect == nullptr || setWindowPos == nullptr)
+    return false;
+
+  NativeWindowRect ownerRect;
+  NativeWindowRect windowRect;
+  if (getWindowRect(ownerHandle, &ownerRect) == 0 ||
+      getWindowRect(windowHandle, &windowRect) == 0)
+    return false;
+
+  const int windowWidth = static_cast<int>(windowRect.right - windowRect.left);
+  const int windowHeight = static_cast<int>(windowRect.bottom - windowRect.top);
+  const int ownerWidth = static_cast<int>(ownerRect.right - ownerRect.left);
+  const int ownerHeight = static_cast<int>(ownerRect.bottom - ownerRect.top);
+  const int x = static_cast<int>(ownerRect.left) +
+                (ownerWidth - windowWidth) / 2;
+  const int y = static_cast<int>(ownerRect.top) +
+                (ownerHeight - windowHeight) / 2;
+
+  constexpr unsigned int noSize = 0x0001;
+  constexpr unsigned int noZOrder = 0x0004;
+  constexpr unsigned int noActivate = 0x0010;
+  constexpr unsigned int noOwnerZOrder = 0x0200;
+  return setWindowPos(windowHandle, nullptr, x, y, 0, 0,
+                      noSize | noZOrder | noActivate | noOwnerZOrder) != 0;
 }
 
 inline bool isNativeWindowInteractionEnabled(juce::Component *component) {
@@ -384,6 +436,14 @@ namespace Win11Helpers {
 inline bool isWindows11OrLater() { return false; }
 inline bool setOwnedWindow(juce::Component *, juce::Component *) {
   return false;
+}
+inline bool centreWindowOnOwner(juce::Component *window,
+                                juce::Component *owner) {
+  if (window == nullptr || owner == nullptr)
+    return false;
+  window->centreAroundComponent(owner, window->getWidth(),
+                                window->getHeight());
+  return true;
 }
 inline bool isNativeWindowInteractionEnabled(juce::Component *component) {
   return component != nullptr && component->isEnabled();
