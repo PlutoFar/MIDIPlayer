@@ -77,8 +77,7 @@ public:
   void mouseDown(const juce::MouseEvent &) override {}
   void mouseDrag(const juce::MouseEvent &) override {}
   void resized() override {
-    Win11Helpers::applyRoundedWindowRegion(this, true,
-                                           fluentAlertCornerRadius);
+    applyNativeSurface();
   }
 
 private:
@@ -96,9 +95,13 @@ private:
     getProperties().set("fluentDialogSurfaceAlpha",
                         (double)WindowMaterial::surfaceAlpha(config));
     Win11Helpers::applyFluentDialogStyle(this, true, false);
-    Win11Helpers::applyDialogMaterial(this, config);
-    Win11Helpers::applyRoundedWindowRegion(this, true,
-                                           fluentAlertCornerRadius);
+    const auto regionApplied = Win11Helpers::applyRoundedWindowRegion(
+        this, true, fluentAlertCornerRadius);
+    getProperties().set("fluentRoundedRegionApplied", regionApplied > 0);
+    if (regionApplied > 0)
+      Win11Helpers::applyDialogMaterial(this, config);
+    else
+      Win11Helpers::clearDialogMaterial(this);
     if (nativeOwner != nullptr)
       Win11Helpers::setOwnedWindow(this, nativeOwner.getComponent());
   }

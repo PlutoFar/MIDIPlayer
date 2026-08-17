@@ -330,6 +330,29 @@ inline int applyDialogMaterial(juce::Component *component,
   return appliedCount;
 }
 
+inline int clearDialogMaterial(juce::Component *component) {
+  if (component == nullptr || component->getPeer() == nullptr)
+    return 0;
+  auto hwnd = static_cast<HWND>(component->getPeer()->getNativeHandle());
+  if (hwnd == nullptr)
+    return 0;
+
+  int appliedCount = 0;
+  int backdropType = DwmAttributes::DWMSBT_NONE;
+  if (DwmSetWindowAttribute(hwnd, DwmAttributes::DWMWA_SYSTEMBACKDROP_TYPE,
+                            &backdropType, sizeof(backdropType)) >= 0)
+    appliedCount++;
+
+  CompositionAttributes::AccentPolicy policy;
+  policy.state = CompositionAttributes::ACCENT_DISABLED;
+  CompositionAttributes::WindowCompositionAttributeData data;
+  data.data = &policy;
+  data.size = sizeof(policy);
+  if (setWindowCompositionAttribute(hwnd, &data) != 0)
+    appliedCount++;
+  return appliedCount;
+}
+
 /**
     用窗口区域裁剪自绘圆角，避免 DWM 因接管圆角而重新绘制系统阴影。
 */
@@ -445,6 +468,7 @@ inline int applyRoundedWindowRegion(juce::Component *, bool, float = 8.0f) {
 inline int applyDialogMaterial(juce::Component *, WindowMaterial::Config) {
   return 0;
 }
+inline int clearDialogMaterial(juce::Component *) { return 0; }
 inline void updateDarkMode(juce::Component *, bool) {}
 inline void removeWin11Style(juce::Component *) {}
 } // namespace Win11Helpers

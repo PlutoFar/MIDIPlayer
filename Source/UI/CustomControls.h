@@ -298,21 +298,26 @@ public:
   }
 
   void mouseExit(const juce::MouseEvent &event) override {
-    auto *comp = event.eventComponent;
-    if (auto *tooltipClient = dynamic_cast<juce::TooltipClient *>(comp)) {
-      if (tooltipClient->getTooltip().isNotEmpty()) {
-        hideTooltip();
-      }
-    }
+    juce::ignoreUnused(event);
+    hideTooltip();
   }
 
   void mouseDown(const juce::MouseEvent &) override {
     hideTooltip();
   }
 
+  void mouseUp(const juce::MouseEvent &) override {
+    hideTooltip();
+  }
+
   // 为特定组件显示 tooltip，需要转换到父组件坐标系。
   void showForComponent(juce::Component *target, const juce::String &text) {
     if (target == nullptr || text.isEmpty()) {
+      return;
+    }
+
+    if (shouldDismissTooltipForCurrentState(target)) {
+      hideTooltip();
       return;
     }
 
@@ -339,14 +344,22 @@ public:
       return;
     }
 
+    auto *parent = getParentComponent();
+    const auto previousBounds = getBounds();
+    const bool wasVisible = isVisible();
     isWaitingToShow = false;
     pendingText.clear();
     currentTarget = nullptr;
     setVisible(false);
     stopTimer();
 
-    // 重置为 0x0，避免隐藏后影响点击命中。
+    if (wasVisible && parent != nullptr && !previousBounds.isEmpty())
+      parent->repaint(previousBounds);
+
     setBounds(0, 0, 0, 0);
+
+    if (wasVisible && parent != nullptr && !previousBounds.isEmpty())
+      parent->repaint(previousBounds);
   }
 
   void paint(juce::Graphics &g) override {
@@ -356,6 +369,11 @@ public:
 
   void timerCallback() override {
     if (isWaitingToShow) {
+      if (shouldDismissTooltipForCurrentState()) {
+        hideTooltip();
+        return;
+      }
+
       delayCounter++;
       // 60 Hz 下 30 帧约等于 500 ms。
       if (delayCounter >= 30) {
@@ -363,9 +381,37 @@ public:
       }
       return;
     }
+
+    if (isVisible() && shouldDismissTooltipForCurrentState())
+      hideTooltip();
   }
 
 private:
+  bool shouldDismissTooltipForCurrentState(
+      juce::Component *targetOverride = nullptr) const {
+    auto *target = targetOverride != nullptr
+                       ? targetOverride
+                       : currentTarget.getComponent();
+    auto *parent = getParentComponent();
+    if (target == nullptr || parent == nullptr || !target->isShowing() ||
+        !parent->isShowing() || !target->isMouseOver(true))
+      return true;
+
+    if (auto *topLevel = dynamic_cast<juce::TopLevelWindow *>(
+            target->getTopLevelComponent())) {
+      if (!topLevel->isActiveWindow())
+        return true;
+    }
+
+    auto *tooltipClient = dynamic_cast<juce::TooltipClient *>(target);
+    if (tooltipClient == nullptr || tooltipClient->getTooltip().isEmpty() ||
+        target->isCurrentlyBlockedByAnotherModalComponent())
+      return true;
+
+    return juce::ModifierKeys::getCurrentModifiers()
+        .isAnyMouseButtonDown();
+  }
+
   static bool isTooltipAvoidanceControl(const juce::Component &component) {
     return dynamic_cast<const juce::Button *>(&component) != nullptr ||
            dynamic_cast<const juce::ComboBox *>(&component) != nullptr ||
@@ -399,10 +445,9 @@ private:
   }
 
   void showTooltipNow() {
-    if (pendingText.isEmpty() || currentTarget == nullptr) {
-      isWaitingToShow = false;
-      setVisible(false);
-      stopTimer();
+    if (pendingText.isEmpty() || currentTarget == nullptr ||
+        shouldDismissTooltipForCurrentState()) {
+      hideTooltip();
       return;
     }
 
@@ -412,12 +457,13 @@ private:
     const auto tooltipSize = lookAndFeel.getFluentTooltipSize(currentText);
 
     auto *topLevel = getParentComponent();
-    if (topLevel == nullptr)
+    if (topLevel == nullptr) {
+      hideTooltip();
       return;
+    }
 
     if (tooltipSize.x <= 0 || tooltipSize.y <= 0) {
-      setVisible(false);
-      stopTimer();
+      hideTooltip();
       return;
     }
 
@@ -431,15 +477,14 @@ private:
     const auto bounds = TooltipPlacement::place(
         tooltipSize, targetBounds, topLevel->getLocalBounds(), avoidAreas);
     if (bounds.isEmpty()) {
-      setVisible(false);
-      stopTimer();
+      hideTooltip();
       return;
     }
     setBounds(bounds);
     setVisible(true);
     toFront(false);
     repaint();
-    stopTimer();
+    startTimerHz(30);
   }
 
 private:

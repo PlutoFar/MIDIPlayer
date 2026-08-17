@@ -304,8 +304,14 @@ inline void applyDialogWindowStyle(juce::DialogWindow *window) {
 
   Win11Helpers::applyFluentDialogStyle(window, true,
                                        policy.useDwmRoundedCorners);
-  refreshDialogMaterial(window);
-  Win11Helpers::applyRoundedWindowRegion(window, policy.useWindowRegion);
+  const auto regionApplied =
+      Win11Helpers::applyRoundedWindowRegion(window, policy.useWindowRegion);
+  window->getProperties().set("fluentRoundedRegionApplied",
+                              regionApplied > 0);
+  if (regionApplied > 0)
+    refreshDialogMaterial(window);
+  else
+    Win11Helpers::clearDialogMaterial(window);
 }
 
 inline void refreshDialogNativeStyleLater(juce::DialogWindow *window) {
@@ -316,9 +322,14 @@ inline void refreshDialogNativeStyleLater(juce::DialogWindow *window) {
           safeWindow->isUsingNativeTitleBar());
       Win11Helpers::applyFluentDialogStyle(
           safeWindow.getComponent(), true, policy.useDwmRoundedCorners);
-      refreshDialogMaterial(safeWindow.getComponent());
-      Win11Helpers::applyRoundedWindowRegion(
+      const auto regionApplied = Win11Helpers::applyRoundedWindowRegion(
           safeWindow.getComponent(), policy.useWindowRegion);
+      safeWindow->getProperties().set("fluentRoundedRegionApplied",
+                                      regionApplied > 0);
+      if (regionApplied > 0)
+        refreshDialogMaterial(safeWindow.getComponent());
+      else
+        Win11Helpers::clearDialogMaterial(safeWindow.getComponent());
       if (auto *ownedWindow =
               dynamic_cast<FluentDialogWindow *>(safeWindow.getComponent()))
         Win11Helpers::setOwnedWindow(ownedWindow,

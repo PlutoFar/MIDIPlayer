@@ -756,6 +756,12 @@ int main(int argc, char *argv[]) {
         alert->getProperties().getWithDefault("fluentDialogSurfaceAlpha", 0.0));
     expect(surfaceAlpha > 0.0 && surfaceAlpha <= 1.0,
            "Fluent alerts should receive the configured material surface");
+#if JUCE_WINDOWS
+    expect(static_cast<bool>(alert->getProperties().getWithDefault(
+               "fluentRoundedRegionApplied", false)),
+           "Fluent alerts should establish the native rounded region before "
+           "enabling native material");
+#endif
   }
 
   expect(getVolumeIconGlyph(0.0f) == L"\uE992" &&
