@@ -1938,11 +1938,36 @@ public:
   struct AudioSettingsContent : public juce::Component,
                                 private juce::ChangeListener,
                                 private juce::Timer {
+    int rowHeight() const {
+      return FluentSettingsStyle::controlHeight(fluentLookAndFeel);
+    }
+
+    int sectionHeight() const {
+      return LegacyDesignTokens::Typography::lineHeight(
+          LegacyDesignTokens::Typography::body,
+          fluentLookAndFeel.getUIFontSize());
+    }
+
+    int deviceCardHeight() const {
+      return FluentSettingsStyle::cardPadding * 2 + sectionHeight() + 12 +
+             rowHeight() * 4 + FluentSettingsStyle::rowGap * 3;
+    }
+
+    int statusCardHeight() const {
+      return FluentSettingsStyle::cardPadding * 2 +
+             juce::jmax(sectionHeight() * 2, rowHeight());
+    }
+
+    int preferredHeight() const {
+      return FluentSettingsStyle::panelMargin * 2 + deviceCardHeight() + 12 +
+             statusCardHeight();
+    }
+
     AudioSettingsContent(AudioEngine &e, FluentLookAndFeel &laf)
         : engine(e), fluentLookAndFeel(laf),
           deviceManager(e.getDeviceManager()), tooltipOverlay(laf) {
       setLookAndFeel(&fluentLookAndFeel);
-      setSize(660, 350);
+      setSize(660, preferredHeight());
       setOpaque(false);
 
       addAndMakeVisible(sectionLabel);
@@ -2108,27 +2133,27 @@ public:
     void resized() override {
       auto area =
           getLocalBounds().reduced(FluentSettingsStyle::panelMargin);
-      deviceCardBounds = area.removeFromTop(234);
+      deviceCardBounds = area.removeFromTop(deviceCardHeight());
       area.removeFromTop(12);
       statusCardBounds = area;
 
       auto content =
           deviceCardBounds.reduced(FluentSettingsStyle::cardPadding);
-      sectionLabel.setBounds(content.removeFromTop(24));
+      sectionLabel.setBounds(content.removeFromTop(sectionHeight()));
       content.removeFromTop(12);
 
-      layoutField(content.removeFromTop(34), driverLabel, driverBox);
-      content.removeFromTop(10);
-      layoutField(content.removeFromTop(34), deviceLabel, deviceBox);
-      content.removeFromTop(10);
+      layoutField(content.removeFromTop(rowHeight()), driverLabel, driverBox);
+      content.removeFromTop(FluentSettingsStyle::rowGap);
+      layoutField(content.removeFromTop(rowHeight()), deviceLabel, deviceBox);
+      content.removeFromTop(FluentSettingsStyle::rowGap);
 
-      auto timingRow = content.removeFromTop(34);
+      auto timingRow = content.removeFromTop(rowHeight());
       auto sampleArea = timingRow.removeFromLeft(timingRow.getWidth() / 2 - 6);
       timingRow.removeFromLeft(12);
       layoutField(sampleArea, sampleRateLabel, sampleRateBox);
       layoutField(timingRow, bufferSizeLabel, bufferSizeBox);
-      content.removeFromTop(10);
-      layoutField(content.removeFromTop(34), channelPairLabel,
+      content.removeFromTop(FluentSettingsStyle::rowGap);
+      layoutField(content.removeFromTop(rowHeight()), channelPairLabel,
                   channelPairBox);
 
       auto status =
@@ -2138,12 +2163,13 @@ public:
 
       auto buttons = status;
       auto testBounds = buttons.removeFromRight(112);
-      testBounds = testBounds.withSizeKeepingCentre(112, 34);
+      testBounds = testBounds.withSizeKeepingCentre(112, rowHeight());
       testButton.setBounds(testBounds);
       buttons.removeFromRight(8);
       if (controlPanelButton.isVisible()) {
         auto controlBounds = buttons.removeFromRight(126);
-        controlBounds = controlBounds.withSizeKeepingCentre(126, 34);
+        controlBounds =
+            controlBounds.withSizeKeepingCentre(126, rowHeight());
         controlPanelButton.setBounds(controlBounds);
         buttons.removeFromRight(8);
       } else {
@@ -2152,8 +2178,8 @@ public:
 
       auto statusText = buttons;
       statusText.removeFromLeft(22);
-      statusTitleLabel.setBounds(statusText.removeFromTop(24));
-      statusDetailLabel.setBounds(statusText.removeFromTop(24));
+      statusTitleLabel.setBounds(statusText.removeFromTop(sectionHeight()));
+      statusDetailLabel.setBounds(statusText.removeFromTop(sectionHeight()));
     }
 
   private:
@@ -2414,9 +2440,28 @@ public:
   struct FontSettingsContent : public juce::Component {
     std::function<void()> onSettingsChanged;
 
+    int rowHeight() const {
+      return FluentSettingsStyle::controlHeight(fluentLookAndFeel);
+    }
+
+    int sectionHeight() const {
+      return LegacyDesignTokens::Typography::lineHeight(
+          LegacyDesignTokens::Typography::body,
+          fluentLookAndFeel.getUIFontSize());
+    }
+
+    int cardHeight() const {
+      return FluentSettingsStyle::cardPadding * 2 + sectionHeight() + 8 +
+             rowHeight() * 2 + FluentSettingsStyle::rowGap;
+    }
+
+    int preferredHeight() const {
+      return FluentSettingsStyle::panelMargin * 2 + cardHeight() * 2 + 12;
+    }
+
     FontSettingsContent(FluentLookAndFeel &laf) : fluentLookAndFeel(laf) {
       setLookAndFeel(&fluentLookAndFeel);
-      setSize(500, 400);
+      setSize(500, preferredHeight());
       setOpaque(false);
 
       availableFonts = juce::Font::findAllTypefaceNames();
@@ -2477,7 +2522,7 @@ public:
       uiFontSizeSlider.setValue(getAppSettings().getLegacyUIFontSize());
       uiFontSizeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
       uiFontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50,
-                                       20);
+                                       rowHeight());
       uiFontSizeSlider.onValueChange = [this]() {
         const float size = (float)uiFontSizeSlider.getValue();
         getAppSettings().setLegacyUIFontSize(size);
@@ -2524,7 +2569,7 @@ public:
       playlistFontSizeSlider.setValue(getAppSettings().getPlaylistFontSize());
       playlistFontSizeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
       playlistFontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false,
-                                             50, 20);
+                                             50, rowHeight());
       playlistFontSizeSlider.onValueChange = [this]() {
         float size = (float)playlistFontSizeSlider.getValue();
         getAppSettings().setPlaylistFontSize(size);
@@ -2620,6 +2665,11 @@ public:
                                           fluentLookAndFeel);
       FluentSettingsStyle::configureLabel(playlistFontSizeLabel,
                                           fluentLookAndFeel);
+      uiFontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50,
+                                       rowHeight());
+      playlistFontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false,
+                                             50, rowHeight());
+      setSize(getWidth(), preferredHeight());
       resized();
       repaint();
       if (auto *window = getTopLevelComponent())
@@ -2629,34 +2679,35 @@ public:
     void resized() override {
       auto area =
           getLocalBounds().reduced(FluentSettingsStyle::panelMargin);
-      interfaceCardBounds = area.removeFromTop(172);
+      interfaceCardBounds = area.removeFromTop(cardHeight());
       area.removeFromTop(12);
-      playlistCardBounds = area.removeFromTop(172);
+      playlistCardBounds = area.removeFromTop(cardHeight());
 
       constexpr int labelWidth = 88;
       auto interfaceContent =
           interfaceCardBounds.reduced(FluentSettingsStyle::cardPadding);
-      interfaceSectionLabel.setBounds(interfaceContent.removeFromTop(22));
+      interfaceSectionLabel.setBounds(
+          interfaceContent.removeFromTop(sectionHeight()));
       interfaceContent.removeFromTop(8);
-      const int rowHeight =
-          FluentSettingsStyle::controlHeight(fluentLookAndFeel);
-      auto uiRow = interfaceContent.removeFromTop(rowHeight);
+      const int currentRowHeight = rowHeight();
+      auto uiRow = interfaceContent.removeFromTop(currentRowHeight);
       uiFontLabel.setBounds(uiRow.removeFromLeft(labelWidth));
       uiFontCombo.setBounds(uiRow);
       interfaceContent.removeFromTop(FluentSettingsStyle::rowGap);
-      auto uiSizeRow = interfaceContent.removeFromTop(rowHeight);
+      auto uiSizeRow = interfaceContent.removeFromTop(currentRowHeight);
       uiFontSizeLabel.setBounds(uiSizeRow.removeFromLeft(labelWidth));
       uiFontSizeSlider.setBounds(uiSizeRow);
 
       auto playlistContent =
           playlistCardBounds.reduced(FluentSettingsStyle::cardPadding);
-      playlistSectionLabel.setBounds(playlistContent.removeFromTop(22));
+      playlistSectionLabel.setBounds(
+          playlistContent.removeFromTop(sectionHeight()));
       playlistContent.removeFromTop(8);
-      auto fontRow = playlistContent.removeFromTop(rowHeight);
+      auto fontRow = playlistContent.removeFromTop(currentRowHeight);
       playlistFontLabel.setBounds(fontRow.removeFromLeft(labelWidth));
       playlistFontCombo.setBounds(fontRow);
       playlistContent.removeFromTop(FluentSettingsStyle::rowGap);
-      auto sizeRow = playlistContent.removeFromTop(rowHeight);
+      auto sizeRow = playlistContent.removeFromTop(currentRowHeight);
       playlistFontSizeLabel.setBounds(sizeRow.removeFromLeft(labelWidth));
       playlistFontSizeSlider.setBounds(sizeRow);
     }

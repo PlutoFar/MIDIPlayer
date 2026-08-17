@@ -629,6 +629,12 @@ int main(int argc, char *argv[]) {
              !toggleLayout.interactionBounds.contains(
                  juce::Point<float>(320.0f, 20.0f)),
          "toggle hover feedback should stop after its visible label");
+  FluentLookAndFeel::setFluentSwitchStyle(interactionToggle);
+  const auto switchLayout =
+      interactionLookAndFeel.getToggleButtonLayout(interactionToggle);
+  expect(switchLayout.tickBounds.getWidth() == 40.0f &&
+             switchLayout.tickBounds.getHeight() == 20.0f,
+         "immediate settings should use Fluent switch geometry");
 
   const auto normalisedMaterial = WindowMaterial::normalise(
       {WindowMaterial::Type::Acrylic, 0.1f, 80});
@@ -646,6 +652,9 @@ int main(int argc, char *argv[]) {
       {WindowMaterial::Type::Acrylic, 0.98f, 24});
   expect(highAcrylicOpacity - lowAcrylicOpacity > 0.35f,
          "dialog opacity changes should produce a clearly visible range");
+  expect(FluentSettingsStyle::readableSurfaceAlpha(lowAcrylicOpacity) ==
+             FluentSettingsStyle::minimumReadableSurfaceAlpha,
+         "dialog content surfaces should retain a readable contrast floor");
   expect(getVolumeIconGlyph(0.0f) == L"\uE992" &&
              getVolumeIconGlyph(0.2f) == L"\uE993" &&
              getVolumeIconGlyph(0.5f) == L"\uE994" &&
