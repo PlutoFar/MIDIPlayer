@@ -68,9 +68,9 @@ public:
 
   void startOpenAnimation() {
     animationPhase = AnimationPhase::opening;
-    animationStartAlpha = 0.0f;
+    animationStartAlpha = dialogTransitionAlphaFloor;
     animationStartTimeMs = juce::Time::getMillisecondCounterHiRes();
-    setAlpha(0.0f);
+    setAlpha(dialogTransitionAlphaFloor);
     startTimerHz(60);
   }
 
@@ -105,11 +105,10 @@ private:
     }
 
     if (animationPhase == AnimationPhase::closing) {
-      setAlpha(animationStartAlpha * getDialogExitAlpha(progress));
+      setAlpha(getDialogExitAlpha(animationStartAlpha, progress));
       if (progress >= 1.0f) {
         stopTimer();
         animationPhase = AnimationPhase::idle;
-        setAlpha(0.0f);
         nativeWindowHidden = Win11Helpers::hideNativeWindowAndFlush(this);
         setVisible(false);
       }
@@ -348,7 +347,7 @@ launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
   applyDialogWindowStyle(window);
   Win11Helpers::setOwnedWindow(window, nativeOwner);
   centreDialogNow(window);
-  window->setAlpha(0.0f);
+  window->setAlpha(dialogTransitionAlphaFloor);
   window->enterModalState(true, nullptr, true);
   window->startOpenAnimation();
   refreshDialogNativeStyleLater(window);

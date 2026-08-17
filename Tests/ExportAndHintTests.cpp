@@ -614,14 +614,18 @@ int main(int argc, char *argv[]) {
              getNonDraggableDialogControlKind(WindowControlKind::close) ==
                  WindowControlKind::close,
          "modal dialog hit testing should block native caption movement");
-  expect(getDialogEnterAlpha(0.0f) == 0.0f &&
+  expect(getDialogEnterAlpha(0.0f) == dialogTransitionAlphaFloor &&
              getDialogEnterAlpha(1.0f) == 1.0f &&
              getDialogEnterAlpha(0.5f) > 0.5f,
          "dialog enter animation should ease quickly toward full opacity");
   expect(getDialogExitAlpha(0.0f) == 1.0f &&
-             getDialogExitAlpha(1.0f) == 0.0f &&
+             getDialogExitAlpha(1.0f) == dialogTransitionAlphaFloor &&
              getDialogExitAlpha(0.5f) > 0.5f,
-         "dialog exit animation should remain visible before easing out");
+         "dialog exit animation should retain surface coverage before hiding");
+  expect(getDialogExitAlpha(0.6f, 0.0f) == 0.6f &&
+             getDialogExitAlpha(0.6f, 1.0f) ==
+                 dialogTransitionAlphaFloor,
+         "dialog exit animation should support closing during fade-in");
   const auto nativeDialogPolicy = getFluentDialogWindowPolicy(true);
   expect(!nativeDialogPolicy.useSystemDropShadow,
          "all material dialogs should use one clipped native window");

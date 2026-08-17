@@ -24,13 +24,29 @@ inline juce::Component::WindowControlKind getNonDraggableDialogControlKind(
   return control == Kind::close ? Kind::close : Kind::client;
 }
 
+constexpr float dialogTransitionAlphaFloor = 0.32f;
+
 inline float getDialogEnterAlpha(float progress) {
   progress = juce::jlimit(0.0f, 1.0f, progress);
   const float remaining = 1.0f - progress;
-  return 1.0f - remaining * remaining * remaining;
+  const float eased = 1.0f - remaining * remaining * remaining;
+  return dialogTransitionAlphaFloor +
+         (1.0f - dialogTransitionAlphaFloor) * eased;
 }
 
 inline float getDialogExitAlpha(float progress) {
   progress = juce::jlimit(0.0f, 1.0f, progress);
-  return 1.0f - progress * progress * progress;
+  const float eased = 1.0f - progress * progress * progress;
+  return dialogTransitionAlphaFloor +
+         (1.0f - dialogTransitionAlphaFloor) * eased;
+}
+
+inline float getDialogExitAlpha(float initialAlpha, float progress) {
+  initialAlpha =
+      juce::jlimit(dialogTransitionAlphaFloor, 1.0f, initialAlpha);
+  const float normalised =
+      (getDialogExitAlpha(progress) - dialogTransitionAlphaFloor) /
+      (1.0f - dialogTransitionAlphaFloor);
+  return dialogTransitionAlphaFloor +
+         (initialAlpha - dialogTransitionAlphaFloor) * normalised;
 }
