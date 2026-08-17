@@ -3,6 +3,7 @@
 #include "ButtonAnimationSupport.h"
 #include "CustomLookAndFeel.h"
 #include "TooltipPlacement.h"
+#include <cmath>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 class SvgButton : public juce::Button, public juce::Timer {
@@ -141,6 +142,15 @@ public:
     float targetAlpha = isMouseOver ? 1.0f : 0.8f;
     currentAlpha += (targetAlpha - currentAlpha) * 0.2f;
 
+    const float destructiveHoverTarget =
+        destructiveStyle && isEnabled() && isMouseOver ? 1.0f : 0.0f;
+    const float destructivePressTarget =
+        destructiveStyle && isEnabled() && isButtonDown ? 1.0f : 0.0f;
+    destructiveHoverProgress +=
+        (destructiveHoverTarget - destructiveHoverProgress) * 0.22f;
+    destructivePressProgress +=
+        (destructivePressTarget - destructivePressProgress) * 0.28f;
+
     auto bounds = getLocalBounds().toFloat();
     auto center = bounds.getCentre();
 
@@ -154,11 +164,14 @@ public:
 
     if (auto *laf =
             dynamic_cast<class FluentLookAndFeel *>(&getLookAndFeel())) {
-      const bool showDestructiveState =
-          destructiveStyle && isEnabled() && (isMouseOver || isButtonDown);
+      const bool showDestructiveState = destructiveHoverProgress > 0.001f;
       if (showDestructiveState) {
-        g.setColour(isButtonDown ? juce::Colour(0xFFA80000)
-                                 : juce::Colour(0xFFC42B1C));
+        const auto closeHover = juce::Colour(0xFFC42B1C);
+        const auto closePressed = juce::Colour(0xFFA80000);
+        g.setColour(closeHover
+                        .interpolatedWith(closePressed,
+                                          destructivePressProgress)
+                        .withMultipliedAlpha(destructiveHoverProgress));
         g.fillRect(bounds);
       } else {
         laf->drawButtonBackground(g, *this, juce::Colours::transparentBlack,
@@ -168,8 +181,8 @@ public:
       if (buttonText.isNotEmpty()) {
         const auto firstChar =
             (uint32_t)buttonText.getCharPointer().getAndAdvance();
-        g.setColour(showDestructiveState ? juce::Colours::white
-                                         : laf->getColors().textPrimary);
+        g.setColour(laf->getColors().textPrimary.interpolatedWith(
+            juce::Colours::white, destructiveHoverProgress));
         if (firstChar >= 0xE000) {
           if (systemGlyphSize > 0.0f)
             laf->drawSystemIconGlyph(g, buttonText,
@@ -194,7 +207,15 @@ public:
   void timerCallback() override {
     const float targetScale = isMouseButtonDown() ? 0.99f : 1.0f;
     const float targetAlpha = isMouseOver() ? 1.0f : 0.8f;
-    if (shouldRunButtonAnimationTimer(isMouseOver() || isMouseButtonDown(),
+    const float hoverTarget =
+        destructiveStyle && isEnabled() && isMouseOver() ? 1.0f : 0.0f;
+    const float pressTarget =
+        destructiveStyle && isEnabled() && isMouseButtonDown() ? 1.0f : 0.0f;
+    const bool destructiveAnimating =
+        std::abs(destructiveHoverProgress - hoverTarget) > 0.01f ||
+        std::abs(destructivePressProgress - pressTarget) > 0.01f;
+    if (destructiveAnimating ||
+        shouldRunButtonAnimationTimer(isMouseOver() || isMouseButtonDown(),
                                       currentScale, targetScale, currentAlpha,
                                       targetAlpha)) {
       repaint();
@@ -220,7 +241,15 @@ private:
   void updateTimerState() {
     const float targetScale = isMouseButtonDown() ? 0.99f : 1.0f;
     const float targetAlpha = isMouseOver() ? 1.0f : 0.8f;
-    if (shouldRunButtonAnimationTimer(isMouseOver() || isMouseButtonDown(),
+    const float hoverTarget =
+        destructiveStyle && isEnabled() && isMouseOver() ? 1.0f : 0.0f;
+    const float pressTarget =
+        destructiveStyle && isEnabled() && isMouseButtonDown() ? 1.0f : 0.0f;
+    const bool destructiveAnimating =
+        std::abs(destructiveHoverProgress - hoverTarget) > 0.01f ||
+        std::abs(destructivePressProgress - pressTarget) > 0.01f;
+    if (destructiveAnimating ||
+        shouldRunButtonAnimationTimer(isMouseOver() || isMouseButtonDown(),
                                       currentScale, targetScale, currentAlpha,
                                       targetAlpha)) {
       if (!isTimerRunning())
@@ -236,6 +265,8 @@ private:
   float systemGlyphSize = 0.0f;
   float currentScale = 1.0f;
   float currentAlpha = 0.8f;
+  float destructiveHoverProgress = 0.0f;
+  float destructivePressProgress = 0.0f;
 };
 
 /**

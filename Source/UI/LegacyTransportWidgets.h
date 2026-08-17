@@ -4,6 +4,16 @@
 #include "TooltipPlacement.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
+inline juce::String getVolumeIconGlyph(float volume) {
+  if (volume <= 0.0f)
+    return L"\uE992";
+  if (volume <= 1.0f / 3.0f)
+    return L"\uE993";
+  if (volume <= 2.0f / 3.0f)
+    return L"\uE994";
+  return L"\uE995";
+}
+
 class ProgressTimeTooltip final : public juce::Component {
 public:
   explicit ProgressTimeTooltip(FluentLookAndFeel &laf) : lookAndFeel(laf) {

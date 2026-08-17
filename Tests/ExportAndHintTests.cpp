@@ -20,6 +20,8 @@
 #include "UI/MarqueeLabelSupport.h"
 #include "UI/ExportPresetSupport.h"
 #include "UI/FluentDialogSupport.h"
+#include "UI/FluentSettingsStyle.h"
+#include "UI/LegacyTransportWidgets.h"
 #include "UI/CustomControls.h"
 #include "UI/LegacyIconAssets.h"
 #include "UI/PlaylistAnimationSupport.h"
@@ -128,38 +130,39 @@ renderSystemGlyphBounds(FluentLookAndFeel &lookAndFeel,
 
 void testProductionIconVisualBounds() {
   FluentLookAndFeel lookAndFeel(true);
-  const std::array<const wchar_t *, 23> productionGlyphs = {
+  const std::array<const wchar_t *, 24> productionGlyphs = {
       L"\uE73E", L"\uE71A", L"\uE74D", L"\uE768", L"\uE769",
-      L"\uE892", L"\uE893", L"\uE8A7", L"\uE8B1", L"\uE8ED",
-      L"\uE8EE", L"\uE992", L"\uE994", L"\uE995", L"\uE9A1",
-      L"\uEA42", L"\uE713", L"\uE718", L"\uE840", L"\uE8D2",
-      L"\uE8D6", L"\uE90B", L"\uE91B"};
+      L"\uE892", L"\uE893", L"\uE896", L"\uE8A7", L"\uE8B1",
+      L"\uE8ED", L"\uE8EE", L"\uE992", L"\uE994", L"\uE995",
+      L"\uE9A1", L"\uEA42", L"\uE713", L"\uE718", L"\uE840",
+      L"\uE8D2", L"\uE8D6", L"\uE90B", L"\uE91B"};
 
   for (const float visualSize : {16.0f, 24.0f, 36.0f, 48.0f}) {
-    const auto reference =
-        renderGlyphIconBounds(lookAndFeel, L"\uE995", visualSize);
-    const auto sequential = renderSvgIconBounds(
-        lookAndFeel, LegacyIconAssets::sequentialPlaybackSvg, visualSize);
-    const auto exportAudio = renderSvgIconBounds(
-        lookAndFeel, LegacyIconAssets::exportAudioSvg, visualSize);
-    std::cout << "Icon bounds " << visualSize << "px: sequential="
-              << sequential.toString() << ", reference="
-              << reference.toString() << '\n';
-
-    expect(!sequential.isEmpty() && !reference.isEmpty(),
-           "transport icons must render a visible alpha boundary");
-    expect(sequential == reference,
-           "SVG and font icon alpha boundaries must match exactly");
-    expect(exportAudio == reference,
-           "all production SVG alpha boundaries must match exactly");
-
     for (const auto *glyph : productionGlyphs) {
       const auto bounds =
           renderGlyphIconBounds(lookAndFeel, glyph, visualSize);
-      expect(bounds == reference,
-             "all production glyph alpha boundaries must match exactly");
+      expect(!bounds.isEmpty() && bounds.getWidth() <= visualSize + 1.0f &&
+                 bounds.getHeight() <= visualSize + 1.0f,
+             "Fluent glyphs should retain their official font metrics");
     }
   }
+
+  constexpr float productionIconSize = LegacyDesignTokens::Icon::transport;
+  const auto reference =
+      renderGlyphIconBounds(lookAndFeel, L"\uE995", productionIconSize);
+  const auto sequential = renderSvgIconBounds(
+      lookAndFeel, LegacyIconAssets::sequentialPlaybackSvg,
+      productionIconSize * LegacyIconAssets::sequentialPlaybackOpticalScale);
+  std::cout << "Production icon bounds: sequential=" << sequential.toString()
+            << ", reference=" << reference.toString() << '\n';
+  expect(!sequential.isEmpty() && !reference.isEmpty(),
+         "transport icons must render a visible alpha boundary");
+  expect(std::abs(sequential.getWidth() - reference.getWidth()) <= 1 &&
+             std::abs(sequential.getHeight() - reference.getHeight()) <= 1,
+         "custom playback SVG should match the reference Fluent icon size");
+  expect(std::abs(sequential.getCentreX() - reference.getCentreX()) <= 1 &&
+             std::abs(sequential.getCentreY() - reference.getCentreY()) <= 1,
+         "custom playback SVG should match the reference Fluent icon centre");
 
   const auto paneToggle = renderSystemGlyphBounds(
       lookAndFeel, L"\uE700", LegacyDesignTokens::Icon::paneToggle,
@@ -588,14 +591,14 @@ int main(int argc, char *argv[]) {
   testProductionIconVisualBounds();
 
   const auto customDialogPolicy = getFluentDialogWindowPolicy(false);
-  expect(!customDialogPolicy.useSystemDropShadow,
-         "custom-titlebar dialogs must not use the mismatched DWM shadow");
+  expect(customDialogPolicy.useSystemDropShadow,
+         "material dialogs should retain the DWM window shadow");
   expect(customDialogPolicy.configureBeforeEnteringModal,
          "dialog peer styles must be configured before modal ownership starts");
-  expect(!customDialogPolicy.useDwmRoundedCorners,
-         "custom Fluent dialogs must not ask DWM to restore its shadow");
-  expect(customDialogPolicy.useWindowRegion,
-         "custom Fluent dialogs should clip their own rounded window region");
+  expect(customDialogPolicy.useDwmRoundedCorners,
+         "material dialogs should use DWM rounded corners");
+  expect(!customDialogPolicy.useWindowRegion,
+         "material dialogs should avoid region clipping during window moves");
   const auto nativeDialogPolicy = getFluentDialogWindowPolicy(true);
   expect(nativeDialogPolicy.useSystemDropShadow,
          "native-titlebar dialogs may use the matching system shadow");
@@ -614,6 +617,17 @@ int main(int argc, char *argv[]) {
              WindowMaterial::supportsStrength(
                  WindowMaterial::Type::GaussianBlur),
          "pure transparency should disable the effect-strength control");
+  const float lowAcrylicOpacity = FluentSettingsStyle::dialogSurfaceAlpha(
+      {WindowMaterial::Type::Acrylic, 0.25f, 24});
+  const float highAcrylicOpacity = FluentSettingsStyle::dialogSurfaceAlpha(
+      {WindowMaterial::Type::Acrylic, 0.98f, 24});
+  expect(highAcrylicOpacity - lowAcrylicOpacity > 0.35f,
+         "dialog opacity changes should produce a clearly visible range");
+  expect(getVolumeIconGlyph(0.0f) == L"\uE992" &&
+             getVolumeIconGlyph(0.2f) == L"\uE993" &&
+             getVolumeIconGlyph(0.5f) == L"\uE994" &&
+             getVolumeIconGlyph(0.9f) == L"\uE995",
+         "volume icons should cover mute, low, medium, and high stages");
 
   const juce::Rectangle<int> tooltipParent(0, 0, 200, 120);
   const juce::Rectangle<int> topAnchor(80, 2, 40, 20);

@@ -13,9 +13,18 @@ typedef long HRESULT;
 typedef unsigned long DWORD;
 typedef int BOOL;
 
+struct DwmMargins {
+  int left;
+  int right;
+  int top;
+  int bottom;
+};
+
 __declspec(dllimport) HRESULT __stdcall
 DwmSetWindowAttribute(HWND hwnd, DWORD dwAttribute, const void *pvAttribute,
                       DWORD cbAttribute);
+__declspec(dllimport) HRESULT __stdcall
+DwmExtendFrameIntoClientArea(HWND hwnd, const DwmMargins *margins);
 __declspec(dllimport) HRGN __stdcall
 CreateRoundRectRgn(int left, int top, int right, int bottom, int width,
                    int height);
@@ -187,6 +196,24 @@ inline int applyDialogMaterial(juce::Component *component,
     return 0;
 
   config = WindowMaterial::normalise(config);
+  const bool usesSystemBackdrop =
+      config.type == WindowMaterial::Type::FrostedGlass ||
+      config.type == WindowMaterial::Type::Acrylic;
+
+  int backdropType = usesSystemBackdrop
+                         ? DwmAttributes::DWMSBT_TRANSIENTWINDOW
+                         : DwmAttributes::DWMSBT_NONE;
+  int appliedCount =
+      DwmSetWindowAttribute(hwnd, DwmAttributes::DWMWA_SYSTEMBACKDROP_TYPE,
+                            &backdropType, sizeof(backdropType)) >= 0
+          ? 1
+          : 0;
+
+  const DwmMargins margins = usesSystemBackdrop ? DwmMargins{-1, -1, -1, -1}
+                                                : DwmMargins{0, 0, 0, 0};
+  if (DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0)
+    appliedCount++;
+
   CompositionAttributes::AccentPolicy policy;
   switch (config.type) {
   case WindowMaterial::Type::Transparent:
@@ -197,13 +224,10 @@ inline int applyDialogMaterial(juce::Component *component,
     policy.state = CompositionAttributes::ACCENT_ENABLE_BLURBEHIND;
     break;
   case WindowMaterial::Type::FrostedGlass:
-    policy.state = CompositionAttributes::ACCENT_ENABLE_BLURBEHIND;
-    policy.flags = 2;
+    policy.state = CompositionAttributes::ACCENT_DISABLED;
     break;
   case WindowMaterial::Type::Acrylic:
-    policy.state =
-        CompositionAttributes::ACCENT_ENABLE_ACRYLICBLURBEHIND;
-    policy.flags = 2;
+    policy.state = CompositionAttributes::ACCENT_DISABLED;
     break;
   }
   policy.gradientColor =
@@ -212,7 +236,9 @@ inline int applyDialogMaterial(juce::Component *component,
   CompositionAttributes::WindowCompositionAttributeData data;
   data.data = &policy;
   data.size = sizeof(policy);
-  return setWindowCompositionAttribute(hwnd, &data) != 0 ? 1 : 0;
+  if (setWindowCompositionAttribute(hwnd, &data) != 0)
+    appliedCount++;
+  return appliedCount;
 }
 
 /**

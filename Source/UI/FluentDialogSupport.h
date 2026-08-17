@@ -8,6 +8,6 @@ struct FluentDialogWindowPolicy {
 };
 
 constexpr FluentDialogWindowPolicy
-getFluentDialogWindowPolicy(bool usesNativeTitleBar) {
-  return {usesNativeTitleBar, usesNativeTitleBar, !usesNativeTitleBar, true};
+getFluentDialogWindowPolicy(bool) {
+  return {true, true, false, true};
 }

@@ -372,6 +372,7 @@ public:
     drawIconButton(g, scanBtn, L"\uE9A1");
     drawIconButton(g, unloadBtn, L"\uE74D");
     drawIconButton(g, openPluginBtn, L"\uE8A7");
+    drawIconButton(g, exportBtn, L"\uE896");
 
     drawIconButton(g, prevBtn, L"\uE892",
                    LegacyDesignTokens::Icon::transport);
@@ -382,8 +383,7 @@ public:
                    LegacyDesignTokens::Icon::transport);
 
     float vol = (float)volumeSlider.getValue();
-    juce::String volIcon =
-        vol > 0.5f ? L"\uE995" : (vol > 0 ? L"\uE994" : L"\uE992");
+    const auto volIcon = getVolumeIconGlyph(vol);
     drawIconButton(g, volumeBtn, volIcon,
                    LegacyDesignTokens::Icon::transport);
 
@@ -886,8 +886,11 @@ public:
     auto accentColor =
         juce::Colour::fromString(getAppSettings().getThemeAccentColor());
     fluentLookAndFeel.updateAccentColor(accentColor);
-    refreshDialogMaterials();
     repaint();
+  }
+
+  void dialogMaterialChanged(bool nativeMaterialChanged) override {
+    refreshDialogMaterials(nativeMaterialChanged);
   }
 
   void backgroundSettingsClosed() override {}
@@ -1228,7 +1231,8 @@ private:
         }
         fluentLookAndFeel.drawDrawableIcon(
             g, *sequentialIconDrawable, btn.getBounds().toFloat(),
-            LegacyDesignTokens::Icon::transport);
+            LegacyDesignTokens::Icon::transport *
+                LegacyIconAssets::sequentialPlaybackOpticalScale);
       }
     }
   }
@@ -1838,10 +1842,15 @@ public:
     fontSettingsWindow.deleteAndZero();
   }
 
-  void refreshDialogMaterials() {
-    auto apply = [](juce::Component::SafePointer<juce::DialogWindow> window) {
-      if (window != nullptr)
+  void refreshDialogMaterials(bool nativeMaterialChanged) {
+    auto apply = [nativeMaterialChanged](
+                     juce::Component::SafePointer<juce::DialogWindow> window) {
+      if (window == nullptr)
+        return;
+      if (nativeMaterialChanged)
         FluentSettingsStyle::refreshDialogMaterial(window.getComponent());
+      else
+        FluentSettingsStyle::refreshDialogSurface(window.getComponent());
     };
     apply(audioSettingsWindow);
     apply(backgroundSettingsWindow);
@@ -2671,7 +2680,7 @@ public:
   juce::Label pageTitle;
   juce::ComboBox pluginSelector;
   TransparentButton loopModeBtn;
-  SvgButton exportBtn{LegacyIconAssets::exportAudioSvg};
+  TransparentButton exportBtn;
   juce::Slider volumeSlider;
   TransparentButton scanBtn, unloadBtn, openPluginBtn;
 

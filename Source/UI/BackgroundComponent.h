@@ -1680,6 +1680,7 @@ public:
   public:
     virtual ~Listener() = default;
     virtual void backgroundSettingsChanged(bool reapplyEffects) = 0;
+    virtual void dialogMaterialChanged(bool nativeMaterialChanged) = 0;
     virtual void backgroundSettingsClosed() = 0;
   };
 
@@ -1723,7 +1724,7 @@ public:
       getAppSettings().setDialogMaterialType(
           static_cast<WindowMaterial::Type>(dialogMaterialCombo.getSelectedId()));
       updateDialogMaterialControlState();
-      applyDialogMaterialSettings();
+      applyDialogMaterialSettings(true);
       getAppSettings().save();
     };
 
@@ -1743,7 +1744,7 @@ public:
     dialogOpacitySlider.onValueChange = [this]() {
       getAppSettings().setDialogMaterialOpacity(
           (float)dialogOpacitySlider.getValue() / 100.0f);
-      applyDialogMaterialSettings();
+      applyDialogMaterialSettings(false);
     };
     dialogOpacitySlider.onDragEnd = []() { getAppSettings().save(); };
 
@@ -1762,7 +1763,7 @@ public:
     dialogStrengthSlider.onValueChange = [this]() {
       getAppSettings().setDialogMaterialStrength(
           juce::roundToInt(dialogStrengthSlider.getValue()));
-      applyDialogMaterialSettings();
+      applyDialogMaterialSettings(false);
     };
     dialogStrengthSlider.onDragEnd = []() { getAppSettings().save(); };
 
@@ -2125,18 +2126,19 @@ private:
         static_cast<WindowMaterial::Type>(dialogMaterialCombo.getSelectedId()));
     dialogStrengthLabel.setEnabled(supportsStrength);
     dialogStrengthSlider.setEnabled(supportsStrength);
-    const auto tooltip = supportsStrength
-                             ? juce::String()
-                             : juce::String(L"纯透明模式不使用效果强度");
-    dialogStrengthLabel.setTooltip(tooltip);
-    dialogStrengthSlider.setTooltip(tooltip);
+    dialogStrengthLabel.setTooltip({});
+    dialogStrengthSlider.setTooltip({});
   }
 
-  void applyDialogMaterialSettings() {
-    if (auto *window = findParentComponentOfClass<juce::DialogWindow>())
-      FluentSettingsStyle::refreshDialogMaterial(window);
+  void applyDialogMaterialSettings(bool nativeMaterialChanged) {
+    if (auto *window = findParentComponentOfClass<juce::DialogWindow>()) {
+      if (nativeMaterialChanged)
+        FluentSettingsStyle::refreshDialogMaterial(window);
+      else
+        FluentSettingsStyle::refreshDialogSurface(window);
+    }
     if (listener)
-      listener->backgroundSettingsChanged(false);
+      listener->dialogMaterialChanged(nativeMaterialChanged);
     repaint();
   }
 

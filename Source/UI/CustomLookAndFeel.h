@@ -219,29 +219,7 @@ public:
 
   void drawIconGlyph(juce::Graphics &g, const juce::String &icon,
                      juce::Rectangle<float> bounds, float visualSize) const {
-    auto font = getIconFont(visualSize);
-    juce::GlyphArrangement glyphs;
-    glyphs.addLineOfText(font, icon, 0.0f, font.getAscent());
-
-    juce::Path path;
-    glyphs.createPath(path);
-    const auto sourceBounds = path.getBounds();
-    const auto targetBounds = getIconOpticalBounds(bounds, visualSize);
-
-    if (sourceBounds.isEmpty()) {
-      g.setFont(font);
-      g.drawText(icon, targetBounds.toNearestInt(),
-                 juce::Justification::centred, false);
-      return;
-    }
-
-    path.applyTransform(
-        juce::AffineTransform::translation(-sourceBounds.getX(),
-                                           -sourceBounds.getY())
-            .scaled(targetBounds.getWidth() / sourceBounds.getWidth(),
-                    targetBounds.getHeight() / sourceBounds.getHeight())
-            .translated(targetBounds.getX(), targetBounds.getY()));
-    g.fillPath(path);
+    drawSystemIconGlyph(g, icon, bounds, visualSize);
   }
 
   void drawSystemIconGlyph(juce::Graphics &g, const juce::String &icon,
@@ -252,18 +230,12 @@ public:
                false);
   }
 
-  juce::Rectangle<float>
-  getIconOpticalBounds(juce::Rectangle<float> bounds, float visualSize) const {
-    return bounds.withSizeKeepingCentre(
-        visualSize,
-        visualSize * LegacyDesignTokens::Icon::opticalHeightRatio);
-  }
-
   void drawDrawableIcon(juce::Graphics &g, juce::Drawable &drawable,
                         juce::Rectangle<float> bounds, float visualSize,
                         float opacity = 1.0f) const {
-    drawable.drawWithin(g, getIconOpticalBounds(bounds, visualSize),
-                        juce::RectanglePlacement::stretchToFit, opacity);
+    drawable.drawWithin(
+        g, bounds.withSizeKeepingCentre(visualSize, visualSize),
+        juce::RectanglePlacement::centred, opacity);
   }
 
   juce::Font getLabelFont(juce::Label &label) override {
@@ -487,7 +459,7 @@ public:
   void drawComboBox(juce::Graphics &g, int width, int height, bool isButtonDown,
                     int, int, int, int, juce::ComboBox &box) override {
     auto bounds = juce::Rectangle<float>(0, 0, (float)width, (float)height);
-    float radius = scaled(6.0f);
+    float radius = scaled(8.0f);
 
     bool isMenuOpen = box.isPopupActive();
     auto &motion = getComboBoxMotion(box);
@@ -506,8 +478,12 @@ public:
                .interpolatedWith(active, motion.getOpenProgress());
     }
 
+    juce::Path roundedBounds;
+    roundedBounds.addRoundedRectangle(bounds, radius);
+    g.saveState();
+    g.reduceClipRegion(roundedBounds);
     g.setColour(bg);
-    g.fillRoundedRectangle(bounds, radius);
+    g.fillRect(bounds);
 
     const auto border =
         colors.controlBorder.interpolatedWith(
@@ -532,6 +508,17 @@ public:
     g.strokePath(arrow, juce::PathStrokeType(
                             scaled(1.35f), juce::PathStrokeType::curved,
                             juce::PathStrokeType::rounded));
+    g.restoreState();
+  }
+
+  juce::Label *createComboBoxTextBox(juce::ComboBox &box) override {
+    auto *label = juce::LookAndFeel_V4::createComboBoxTextBox(box);
+    label->setOpaque(false);
+    label->setColour(juce::Label::backgroundColourId,
+                     juce::Colours::transparentBlack);
+    label->setColour(juce::Label::outlineColourId,
+                     juce::Colours::transparentBlack);
+    return label;
   }
 
   juce::Font getComboBoxFont(juce::ComboBox &) override {

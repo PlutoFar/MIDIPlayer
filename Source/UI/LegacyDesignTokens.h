@@ -35,7 +35,6 @@ constexpr float overlay = 12.0f;
 constexpr float small = 16.0f;
 constexpr float paneToggle = 20.0f;
 constexpr float primaryAction = 24.0f;
-constexpr float opticalHeightRatio = 11.0f / 12.0f;
 constexpr float toolbar = primaryAction;
 constexpr float transport = primaryAction;
 constexpr float navigation = primaryAction;
