@@ -16,6 +16,9 @@ public:
       : owner(ownerComponent) {}
 
   void setOwner(juce::Component *ownerComponent) { owner = ownerComponent; }
+  void setConstrainedComponent(juce::Component *component) {
+    constrainedComponent = component;
+  }
 
   void checkBounds(juce::Rectangle<int> &bounds,
                    const juce::Rectangle<int> &previousBounds,
@@ -25,12 +28,18 @@ public:
     juce::ComponentBoundsConstrainer::checkBounds(
         bounds, previousBounds, limits, isStretchingTop, isStretchingLeft,
         isStretchingBottom, isStretchingRight);
-    if (owner != nullptr)
-      bounds = constrainDialogBoundsToOwner(bounds, owner->getScreenBounds());
+    if (owner != nullptr && constrainedComponent != nullptr) {
+      const auto ownerBounds =
+          constrainedComponent->getLocalArea(owner.getComponent(),
+                                             owner->getLocalBounds()) +
+          constrainedComponent->getPosition();
+      bounds = constrainDialogBoundsToOwner(bounds, ownerBounds);
+    }
   }
 
 private:
   juce::Component::SafePointer<juce::Component> owner;
+  juce::Component::SafePointer<juce::Component> constrainedComponent;
 };
 
 class FluentDialogWindow final : public juce::DialogWindow,
@@ -60,6 +69,7 @@ public:
     setResizable(options.resizable, options.useBottomRightCornerResizer);
     setUsingNativeTitleBar(options.useNativeTitleBar);
     setAlwaysOnTop(false);
+    ownerConstrainer.setConstrainedComponent(this);
     setConstrainer(&ownerConstrainer);
     if (this->nativeOwner != nullptr) {
       restoreOwnerAlwaysOnTop = this->nativeOwner->isAlwaysOnTop();
@@ -257,7 +267,9 @@ inline void constrainDialogToWorkAreaNow(juce::DialogWindow *window) {
     return;
 
   const auto workArea =
-      display->userBounds.getSmallestIntegerContainer().reduced(8);
+      (window->getLocalArea(nullptr, display->userBounds).toNearestInt() +
+       window->getPosition())
+          .reduced(8);
   window->setBounds(window->getBounds().constrainedWithin(workArea));
 }
 

@@ -618,6 +618,10 @@ int main(int argc, char *argv[]) {
   expect(constrainDialogBoundsToOwner({0, 0, 1000, 700}, ownerBounds) ==
              ownerBounds,
          "owned dialogs larger than the owner should fit inside its bounds");
+  expect(constrainDialogBoundsToOwner({790, 30, 500, 400},
+                                      {0, 0, 1100, 700}) ==
+             juce::Rectangle<int>(600, 30, 500, 400),
+         "high-DPI dialog coordinates should clamp at the logical owner edge");
 
   FluentLookAndFeel interactionLookAndFeel(true);
   juce::ToggleButton interactionToggle(L"更换原生图标样式");
