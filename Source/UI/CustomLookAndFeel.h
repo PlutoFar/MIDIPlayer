@@ -685,39 +685,42 @@ public:
   juce::Rectangle<int>
   getTooltipBounds(const juce::String &tipText, juce::Point<int> screenPos,
                    juce::Rectangle<int> parentArea) override {
-    juce::Font font = getBodyFont();
+    const auto size = getFluentTooltipSize(tipText);
+    const int edgeGap = 12;
+    juce::Rectangle<int> bounds(screenPos.x, screenPos.y - size.y - 10,
+                                size.x, size.y);
+    return bounds.constrainedWithin(parentArea.reduced(edgeGap));
+  }
+
+  juce::Point<int> getFluentTooltipSize(const juce::String &text) const {
+    const auto font = getBodyFont();
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4996)
 #endif
-    int w = font.getStringWidth(tipText) + 20;
+    const int width = font.getStringWidth(text) + 24;
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
-    int h = LegacyDesignTokens::Layout::controlHeight(uiFontSize);
+    return {width, LegacyDesignTokens::Layout::controlHeight(uiFontSize)};
+  }
 
-    const int edgeGap = 12;
-    juce::Rectangle<int> bounds(screenPos.x, screenPos.y - h - 10, w, h);
-
-    return bounds.constrainedWithin(parentArea.reduced(edgeGap));
+  void drawFluentTooltip(juce::Graphics &g, const juce::String &text,
+                         juce::Rectangle<float> bounds) const {
+    g.fillAll(juce::Colours::transparentBlack);
+    g.setColour(juce::Colour(0xF0202020));
+    g.fillRoundedRectangle(bounds, 8.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.1f));
+    g.drawRoundedRectangle(bounds.reduced(0.5f), 8.0f, 1.0f);
+    g.setColour(juce::Colours::white);
+    g.setFont(getBodyFont());
+    g.drawText(text, bounds, juce::Justification::centred, false);
   }
 
   void drawTooltip(juce::Graphics &g, const juce::String &text, int width,
                    int height) override {
-    // 透明背景清空可避免圆角区域残留。
-    g.fillAll(juce::Colours::transparentBlack);
-
-    juce::Rectangle<float> bounds(0, 0, (float)width, (float)height);
-
-    g.setColour(juce::Colour(0xE6202020));
-    g.fillRoundedRectangle(bounds, 6.0f);
-
-    g.setColour(juce::Colours::white.withAlpha(0.1f));
-    g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
-
-    g.setColour(juce::Colours::white);
-    g.setFont(getBodyFont());
-    g.drawText(text, bounds, juce::Justification::centred, false);
+    drawFluentTooltip(g, text,
+                      {0.0f, 0.0f, (float)width, (float)height});
   }
 
   void drawAlertBox(juce::Graphics &g, juce::AlertWindow &alert,
@@ -770,8 +773,10 @@ public:
                                   bool) override {
     auto bounds = juce::Rectangle<int>(0, 0, w, h).toFloat();
 
-    // 标题栏背景与卡片背景保持一致。
-    g.setColour(colors.cardBackground);
+    const float surfaceAlpha = static_cast<float>((double)
+        window.getProperties().getWithDefault("fluentDialogSurfaceAlpha",
+                                              1.0));
+    g.setColour(colors.cardBackground.withAlpha(surfaceAlpha));
     g.fillAll();
 
     g.setColour(colors.textPrimary);

@@ -1332,6 +1332,8 @@ private:
 
 class ImagePreviewButton : public juce::Button, private juce::Timer {
 public:
+  std::function<void()> onRemoveRequested;
+
   ImagePreviewButton(const juce::File &f)
       : juce::Button(f.getFileName()), file(f) {
     setTooltip(f.getFileName());
@@ -1341,6 +1343,20 @@ public:
 
   ~ImagePreviewButton() override {
     stopTimer();
+  }
+
+  void mouseDown(const juce::MouseEvent &event) override {
+    if (!event.mods.isPopupMenu())
+      juce::Button::mouseDown(event);
+  }
+
+  void mouseUp(const juce::MouseEvent &event) override {
+    if (event.mods.isPopupMenu()) {
+      if (onRemoveRequested)
+        onRemoveRequested();
+      return;
+    }
+    juce::Button::mouseUp(event);
   }
 
   void paintButton(juce::Graphics &g, bool isMouseOver,
@@ -1569,25 +1585,18 @@ public:
                          : juce::Colours::white;
       if (isMouseOver || isButtonDown) {
         g.setColour(isButtonDown ? hoverColour.brighter(0.1f) : hoverColour);
-        g.fillRoundedRectangle(bounds, 4.0f);
+        g.fillRoundedRectangle(bounds, 6.0f);
       }
 
       g.setColour(isEnabled() ? iconColour : iconColour.withAlpha(0.3f));
-      juce::Path p;
-      float s = std::min(bounds.getWidth(), bounds.getHeight()) * 0.35f;
-      float cx = bounds.getCentreX();
-      float cy = bounds.getCentreY();
+      if (laf != nullptr)
+        laf->drawSystemIconGlyph(g, left ? L"\uE76B" : L"\uE76C", bounds,
+                                 LegacyDesignTokens::Icon::small);
 
-      if (left) {
-        p.startNewSubPath(cx + s / 2, cy - s / 2);
-        p.lineTo(cx - s / 2, cy);
-        p.lineTo(cx + s / 2, cy + s / 2);
-      } else {
-        p.startNewSubPath(cx - s / 2, cy - s / 2);
-        p.lineTo(cx + s / 2, cy);
-        p.lineTo(cx - s / 2, cy + s / 2);
+      if (hasKeyboardFocus(false)) {
+        g.setColour(iconColour);
+        g.drawRoundedRectangle(bounds.reduced(1.5f), 6.0f, 1.5f);
       }
-      g.strokePath(p, juce::PathStrokeType(1.5f));
     }
     bool left;
   };
@@ -1606,7 +1615,6 @@ public:
 
     ~HorizontalViewport() override {
       stopTimer();
-      clearOverscrollTransform();
     }
 
     void setScrollBounds(int maximumPosition) {
@@ -1619,7 +1627,6 @@ public:
     void jumpTo(int position) {
       stopTimer();
       motion.setPosition((float)position);
-      clearOverscrollTransform();
       setViewPosition(juce::roundToInt(motion.getPosition()), 0);
     }
 
@@ -1658,24 +1665,12 @@ public:
       const bool moving = motion.tick();
       setViewPosition(juce::roundToInt(motion.getPosition()), 0);
 
-      if (auto *viewedComp = getViewedComponent()) {
-        const float offset = -motion.getOverscroll() * 0.35f;
-        viewedComp->setTransform(
-            juce::AffineTransform::translation(offset, 0.0f));
-      }
-
       if (!moving) {
-        clearOverscrollTransform();
         stopTimer();
       }
 
       if (onVisibleAreaChanged)
         onVisibleAreaChanged();
-    }
-
-    void clearOverscrollTransform() {
-      if (auto *viewedComp = getViewedComponent())
-        viewedComp->setTransform(juce::AffineTransform());
     }
 
     BackgroundScrollMotion motion;
@@ -1707,9 +1702,69 @@ public:
                                         fluentLookAndFeel, true);
 
     addAndMakeVisible(behaviorSectionLabel);
-    behaviorSectionLabel.setText(L"界面行为", juce::dontSendNotification);
+    behaviorSectionLabel.setText(L"窗口与界面", juce::dontSendNotification);
     FluentSettingsStyle::configureLabel(behaviorSectionLabel,
                                         fluentLookAndFeel, true);
+
+    addAndMakeVisible(dialogMaterialLabel);
+    dialogMaterialLabel.setText(L"窗口材质", juce::dontSendNotification);
+    FluentSettingsStyle::configureLabel(dialogMaterialLabel,
+                                        fluentLookAndFeel);
+
+    addAndMakeVisible(dialogMaterialCombo);
+    dialogMaterialCombo.addItem(L"纯透明", 1);
+    dialogMaterialCombo.addItem(L"高斯模糊", 2);
+    dialogMaterialCombo.addItem(L"磨砂玻璃", 3);
+    dialogMaterialCombo.addItem(L"亚克力", 4);
+    dialogMaterialCombo.setSelectedId(
+        static_cast<int>(getAppSettings().getDialogMaterialType()),
+        juce::dontSendNotification);
+    dialogMaterialCombo.onChange = [this]() {
+      getAppSettings().setDialogMaterialType(
+          static_cast<WindowMaterial::Type>(dialogMaterialCombo.getSelectedId()));
+      updateDialogMaterialControlState();
+      applyDialogMaterialSettings();
+      getAppSettings().save();
+    };
+
+    addAndMakeVisible(dialogOpacityLabel);
+    dialogOpacityLabel.setText(L"背景不透明度", juce::dontSendNotification);
+    FluentSettingsStyle::configureLabel(dialogOpacityLabel,
+                                        fluentLookAndFeel);
+
+    addAndMakeVisible(dialogOpacitySlider);
+    dialogOpacitySlider.setRange(25.0, 98.0, 1.0);
+    dialogOpacitySlider.setValue(
+        getAppSettings().getDialogMaterialOpacity() * 100.0,
+        juce::dontSendNotification);
+    dialogOpacitySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 58,
+                                        24);
+    dialogOpacitySlider.setTextValueSuffix("%");
+    dialogOpacitySlider.onValueChange = [this]() {
+      getAppSettings().setDialogMaterialOpacity(
+          (float)dialogOpacitySlider.getValue() / 100.0f);
+      applyDialogMaterialSettings();
+    };
+    dialogOpacitySlider.onDragEnd = []() { getAppSettings().save(); };
+
+    addAndMakeVisible(dialogStrengthLabel);
+    dialogStrengthLabel.setText(L"效果强度", juce::dontSendNotification);
+    FluentSettingsStyle::configureLabel(dialogStrengthLabel,
+                                        fluentLookAndFeel);
+
+    addAndMakeVisible(dialogStrengthSlider);
+    dialogStrengthSlider.setRange(1.0, 50.0, 1.0);
+    dialogStrengthSlider.setValue(
+        getAppSettings().getDialogMaterialStrength(),
+        juce::dontSendNotification);
+    dialogStrengthSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 58,
+                                         24);
+    dialogStrengthSlider.onValueChange = [this]() {
+      getAppSettings().setDialogMaterialStrength(
+          juce::roundToInt(dialogStrengthSlider.getValue()));
+      applyDialogMaterialSettings();
+    };
+    dialogStrengthSlider.onDragEnd = []() { getAppSettings().save(); };
 
     addAndMakeVisible(imageLabel);
     imageLabel.setText(L"图片", juce::dontSendNotification);
@@ -1907,6 +1962,7 @@ public:
 
     updateBlurRadiusVisibility();
     updateImageDependentControls();
+    updateDialogMaterialControlState();
 
     addChildComponent(tooltipOverlay);
     addMouseListener(&tooltipOverlay, true);
@@ -1994,6 +2050,28 @@ public:
     sequentialIconToggle.setBounds(toggleRow.removeFromLeft(toggleWidth));
     toggleRow.removeFromLeft(16);
     rememberWindowToggle.setBounds(toggleRow);
+
+    constexpr int materialLabelWidth = 112;
+    behavior.removeFromTop(FluentSettingsStyle::rowGap);
+    auto materialRow = behavior.removeFromTop(
+        FluentSettingsStyle::controlHeight(fluentLookAndFeel));
+    dialogMaterialLabel.setBounds(
+        materialRow.removeFromLeft(materialLabelWidth));
+    dialogMaterialCombo.setBounds(materialRow);
+
+    behavior.removeFromTop(FluentSettingsStyle::rowGap);
+    auto opacityRow = behavior.removeFromTop(
+        FluentSettingsStyle::controlHeight(fluentLookAndFeel));
+    dialogOpacityLabel.setBounds(
+        opacityRow.removeFromLeft(materialLabelWidth));
+    dialogOpacitySlider.setBounds(opacityRow);
+
+    behavior.removeFromTop(FluentSettingsStyle::rowGap);
+    auto strengthRow = behavior.removeFromTop(
+        FluentSettingsStyle::controlHeight(fluentLookAndFeel));
+    dialogStrengthLabel.setBounds(
+        strengthRow.removeFromLeft(materialLabelWidth));
+    dialogStrengthSlider.setBounds(strengthRow);
   }
 
   ~BackgroundSettingsDialog() override {
@@ -2032,7 +2110,8 @@ public:
 
   int getBehaviorCardHeight() const {
     return FluentSettingsStyle::cardPadding * 2 + 22 + 8 +
-           FluentSettingsStyle::controlHeight(fluentLookAndFeel);
+           FluentSettingsStyle::controlHeight(fluentLookAndFeel) * 4 +
+           FluentSettingsStyle::rowGap * 3;
   }
 
   int getPreferredHeight() const {
@@ -2041,6 +2120,26 @@ public:
   }
 
 private:
+  void updateDialogMaterialControlState() {
+    const bool supportsStrength = WindowMaterial::supportsStrength(
+        static_cast<WindowMaterial::Type>(dialogMaterialCombo.getSelectedId()));
+    dialogStrengthLabel.setEnabled(supportsStrength);
+    dialogStrengthSlider.setEnabled(supportsStrength);
+    const auto tooltip = supportsStrength
+                             ? juce::String()
+                             : juce::String(L"纯透明模式不使用效果强度");
+    dialogStrengthLabel.setTooltip(tooltip);
+    dialogStrengthSlider.setTooltip(tooltip);
+  }
+
+  void applyDialogMaterialSettings() {
+    if (auto *window = findParentComponentOfClass<juce::DialogWindow>())
+      FluentSettingsStyle::refreshDialogMaterial(window);
+    if (listener)
+      listener->backgroundSettingsChanged(false);
+    repaint();
+  }
+
   void selectImage() {
     fileChooser = std::make_unique<juce::FileChooser>(
         L"选择背景图片",
@@ -2237,6 +2336,54 @@ private:
     return candidate;
   }
 
+  bool isCurrentBackgroundFile(const juce::File &file) const {
+    const auto currentPath = getAppSettings().getBackgroundImagePath();
+    return currentPath.isNotEmpty() &&
+           juce::File(currentPath).getFullPathName().equalsIgnoreCase(
+               file.getFullPathName());
+  }
+
+  void showRecentImageContextMenu(
+      const juce::File &file,
+      juce::Component::SafePointer<ImagePreviewButton> target) {
+    if (target == nullptr)
+      return;
+
+    const bool isCurrent = isCurrentBackgroundFile(file);
+    juce::PopupMenu menu;
+    menu.addItem(1,
+                 isCurrent ? L"正在使用，无法移除"
+                           : L"从最近使用中移除",
+                 !isCurrent);
+
+    auto safeThis =
+        juce::Component::SafePointer<BackgroundSettingsDialog>(this);
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(target.getComponent()),
+        [safeThis, file](int result) {
+          if (result == 1 && safeThis != nullptr)
+            safeThis->removeRecentImageCache(file);
+        });
+  }
+
+  void removeRecentImageCache(const juce::File &file) {
+    const auto cacheDirectory =
+        UserSettings::getSettingsDirectory().getChildFile("Backgrounds");
+    const auto currentFile =
+        juce::File(getAppSettings().getBackgroundImagePath());
+    if (!canRemoveRecentBackgroundCache(cacheDirectory, currentFile, file))
+      return;
+
+    if (file.existsAsFile() && !file.deleteFile()) {
+      juce::AlertWindow::showMessageBoxAsync(
+          juce::AlertWindow::WarningIcon, L"无法移除背景",
+          L"背景缓存文件正在使用或没有删除权限。", L"确定", this);
+      return;
+    }
+
+    refreshRecentImages();
+  }
+
   void refreshRecentImages() {
     recentImagesContainer.removeAllChildren();
     recentButtons.clear();
@@ -2271,6 +2418,11 @@ private:
         updateCurrentPath();
         if (listener)
           listener->backgroundSettingsChanged(true);
+      };
+      btn->onRemoveRequested = [this, f, safeButton =
+                                    juce::Component::SafePointer<
+                                        ImagePreviewButton>(btn)] {
+        showRecentImageContextMenu(f, safeButton);
       };
       recentImagesContainer.addAndMakeVisible(btn);
     }
@@ -2391,14 +2543,17 @@ private:
   FluentLookAndFeel &fluentLookAndFeel;
   juce::Label titleLabel, effectsSectionLabel, behaviorSectionLabel, imageLabel,
       recentImagesLabel, blurModeLabel, blurRadiusLabel, overlayLabel,
-      currentPathLabel;
+      currentPathLabel, dialogMaterialLabel, dialogOpacityLabel,
+      dialogStrengthLabel;
   juce::TextButton selectImageBtn, clearImageBtn;
   VectorIconButton vectorLeftBtn{"<", true}, vectorRightBtn{">", false};
   HorizontalViewport historyViewport;
   juce::Component recentImagesContainer;
   juce::OwnedArray<ImagePreviewButton> recentButtons;
   juce::ComboBox blurModeCombo;
-  juce::Slider blurRadiusSlider, overlaySlider;
+  juce::ComboBox dialogMaterialCombo;
+  juce::Slider blurRadiusSlider, overlaySlider, dialogOpacitySlider,
+      dialogStrengthSlider;
   juce::ToggleButton monetToggle;
   PaletteSelector paletteSelector;
   juce::ToggleButton sequentialIconToggle;

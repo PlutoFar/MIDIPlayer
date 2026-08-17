@@ -66,3 +66,12 @@ getUniqueRecentBackgroundFiles(const juce::Array<juce::File> &files,
 
   return uniqueFiles;
 }
+
+inline bool canRemoveRecentBackgroundCache(const juce::File &cacheDirectory,
+                                           const juce::File &currentFile,
+                                           const juce::File &candidate) {
+  return candidate.isAChildOf(cacheDirectory) &&
+         candidate.getFileName().matchesWildcard("bg_*.png", true) &&
+         !candidate.getFullPathName().equalsIgnoreCase(
+             currentFile.getFullPathName());
+}

@@ -83,10 +83,18 @@ int runPersistenceTests() {
            "UI font size should default to 14");
     expect(failures, settings.getLegacyUIFontSize() == 16.0f,
            "Legacy UI font size should migrate the old default to 16");
+    expect(failures,
+           settings.getDialogMaterialType() == WindowMaterial::Type::Acrylic &&
+               settings.getDialogMaterialOpacity() == 0.78f &&
+               settings.getDialogMaterialStrength() == 24,
+           "dialog materials should default to Acrylic with balanced values");
     settings.setUIFontSize(30.0f);
     expect(failures, settings.getUIFontSize() == 20.0f,
            "UI font size should clamp to the supported maximum");
     settings.setUIFontSize(18.0f);
+    settings.setDialogMaterialType(WindowMaterial::Type::FrostedGlass);
+    settings.setDialogMaterialOpacity(0.1f);
+    settings.setDialogMaterialStrength(80);
     expect(failures, settings.save(), "UI font size should save");
   }
   {
@@ -95,6 +103,12 @@ int runPersistenceTests() {
            "UI font size should persist");
     expect(failures, settings.getLegacyUIFontSize() == 18.0f,
            "Legacy UI font size should preserve a larger migrated value");
+    expect(failures,
+           settings.getDialogMaterialType() ==
+                   WindowMaterial::Type::FrostedGlass &&
+               settings.getDialogMaterialOpacity() == 0.25f &&
+               settings.getDialogMaterialStrength() == 50,
+           "dialog material settings should persist with range clamping");
     settings.setLegacyUIFontSize(30.0f);
     expect(failures, settings.getLegacyUIFontSize() == 22.0f,
            "Legacy UI font size should clamp to the supported maximum");

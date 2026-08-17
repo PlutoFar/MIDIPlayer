@@ -1,5 +1,6 @@
 #pragma once
 
+#include "WindowMaterial.h"
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -230,6 +231,39 @@ public:
   }
   void setBackgroundOverlay(float opacity) {
     settings.setValue("backgroundOverlay", juce::jlimit(0.0f, 1.0f, opacity));
+  }
+
+  WindowMaterial::Type getDialogMaterialType() const {
+    return static_cast<WindowMaterial::Type>(juce::jlimit(
+        1, 4, settings.getIntValue("dialogMaterialType", 4)));
+  }
+  void setDialogMaterialType(WindowMaterial::Type type) {
+    settings.setValue("dialogMaterialType",
+                      juce::jlimit(1, 4, static_cast<int>(type)));
+  }
+
+  float getDialogMaterialOpacity() const {
+    return juce::jlimit(
+        0.25f, 0.98f,
+        (float)settings.getDoubleValue("dialogMaterialOpacity", 0.78));
+  }
+  void setDialogMaterialOpacity(float opacity) {
+    settings.setValue("dialogMaterialOpacity",
+                      juce::jlimit(0.25f, 0.98f, opacity));
+  }
+
+  int getDialogMaterialStrength() const {
+    return juce::jlimit(
+        1, 50, settings.getIntValue("dialogMaterialStrength", 24));
+  }
+  void setDialogMaterialStrength(int strength) {
+    settings.setValue("dialogMaterialStrength", juce::jlimit(1, 50, strength));
+  }
+
+  WindowMaterial::Config getDialogMaterialConfig() const {
+    return WindowMaterial::normalise(
+        {getDialogMaterialType(), getDialogMaterialOpacity(),
+         getDialogMaterialStrength()});
   }
 
   juce::String getLastPlaylistPath() const {

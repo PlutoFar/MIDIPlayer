@@ -4,6 +4,26 @@
 #include <algorithm>
 #include <cmath>
 
+inline float getNavigationIconTargetScale(bool isHovered, bool isPressed) {
+  if (isPressed)
+    return LegacyDesignTokens::Motion::navigationPressedScale;
+  if (isHovered)
+    return LegacyDesignTokens::Motion::navigationHoverScale;
+  return 1.0f;
+}
+
+inline bool advanceNavigationIconScale(float &currentScale, bool isHovered,
+                                       bool isPressed) {
+  const float target = getNavigationIconTargetScale(isHovered, isPressed);
+  const float difference = target - currentScale;
+  if (std::abs(difference) <= 0.005f) {
+    currentScale = target;
+    return false;
+  }
+  currentScale += difference * 0.25f;
+  return true;
+}
+
 class SidebarAnimationController {
 public:
   enum class Phase {

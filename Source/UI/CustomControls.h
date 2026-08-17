@@ -2,6 +2,7 @@
 
 #include "ButtonAnimationSupport.h"
 #include "CustomLookAndFeel.h"
+#include "TooltipPlacement.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 class SvgButton : public juce::Button, public juce::Timer {
@@ -127,6 +128,11 @@ public:
     repaint();
   }
 
+  void setSystemGlyphSize(float size) {
+    systemGlyphSize = juce::jmax(0.0f, size);
+    repaint();
+  }
+
   void paintButton(juce::Graphics &g, bool isMouseOver,
                    bool isButtonDown) override {
     float targetScale = isButtonDown ? 0.99f : 1.0f;
@@ -165,8 +171,13 @@ public:
         g.setColour(showDestructiveState ? juce::Colours::white
                                          : laf->getColors().textPrimary);
         if (firstChar >= 0xE000) {
-          laf->drawIconGlyph(g, buttonText, getLocalBounds().toFloat(),
-                             LegacyDesignTokens::Icon::toolbar);
+          if (systemGlyphSize > 0.0f)
+            laf->drawSystemIconGlyph(g, buttonText,
+                                     getLocalBounds().toFloat(),
+                                     systemGlyphSize);
+          else
+            laf->drawIconGlyph(g, buttonText, getLocalBounds().toFloat(),
+                               LegacyDesignTokens::Icon::toolbar);
         } else {
           g.setFont(laf->getBodyFont());
           g.drawText(buttonText, getLocalBounds(),
@@ -222,6 +233,7 @@ private:
   juce::String tooltip;
   juce::String customText;
   bool destructiveStyle = false;
+  float systemGlyphSize = 0.0f;
   float currentScale = 1.0f;
   float currentAlpha = 0.8f;
 };
@@ -303,17 +315,8 @@ public:
   }
 
   void paint(juce::Graphics &g) override {
-    auto bounds = getLocalBounds().toFloat();
-
-    g.setColour(juce::Colour(0xF0202020));
-    g.fillRoundedRectangle(bounds, 8.0f);
-
-    g.setColour(juce::Colours::white.withAlpha(0.1f));
-    g.drawRoundedRectangle(bounds.reduced(0.5f), 8.0f, 1.0f);
-
-    g.setColour(juce::Colours::white);
-    g.setFont(lookAndFeel.getBodyFont());
-    g.drawText(currentText, bounds, juce::Justification::centred, false);
+    lookAndFeel.drawFluentTooltip(g, currentText,
+                                  getLocalBounds().toFloat());
   }
 
   void timerCallback() override {
@@ -339,24 +342,13 @@ private:
     currentText = pendingText;
     isWaitingToShow = false;
 
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    auto font = lookAndFeel.getBodyFont();
-    int w = font.getStringWidth(currentText) + 24;
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    int h = LegacyDesignTokens::Layout::controlHeight(
-        lookAndFeel.getUIFontSize());
+    const auto tooltipSize = lookAndFeel.getFluentTooltipSize(currentText);
 
     auto *topLevel = getParentComponent();
     if (topLevel == nullptr)
       return;
 
-    w = juce::jmin(w, juce::jmax(0, topLevel->getWidth() - 8));
-    if (w <= 0 || h <= 0) {
+    if (tooltipSize.x <= 0 || tooltipSize.y <= 0) {
       setVisible(false);
       stopTimer();
       return;
@@ -365,17 +357,14 @@ private:
     auto targetBounds = topLevel->getLocalArea(currentTarget.getComponent(),
                                                currentTarget->getLocalBounds());
 
-    int x = targetBounds.getCentreX() - w / 2;
-    int y = targetBounds.getY() - h - 8;
-
-    if (y < 4) {
-      y = targetBounds.getBottom() + 8;
+    const auto bounds = TooltipPlacement::place(
+        tooltipSize, targetBounds, topLevel->getLocalBounds());
+    if (bounds.isEmpty()) {
+      setVisible(false);
+      stopTimer();
+      return;
     }
-
-    x = juce::jlimit(4, topLevel->getWidth() - w - 4, x);
-    y = juce::jlimit(4, topLevel->getHeight() - h - 4, y);
-
-    setBounds(x, y, w, h);
+    setBounds(bounds);
     setVisible(true);
     toFront(false);
     repaint();
@@ -505,6 +494,8 @@ FluentLookAndFeel::createDocumentWindowButton(int buttonType) {
   } else if (buttonType == juce::DocumentWindow::maximiseButton) {
     b->setButtonText(L"\uE922");
   }
+
+  b->setSystemGlyphSize(12.0f);
 
   return b;
 }

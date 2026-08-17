@@ -1,30 +1,33 @@
 #pragma once
 
+#include "CustomLookAndFeel.h"
+#include "TooltipPlacement.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 class ProgressTimeTooltip final : public juce::Component {
 public:
-  ProgressTimeTooltip() {
+  explicit ProgressTimeTooltip(FluentLookAndFeel &laf) : lookAndFeel(laf) {
     setInterceptsMouseClicks(false, false);
     setAlwaysOnTop(true);
     setVisible(false);
   }
 
-  void showAt(const juce::String &text, int anchorX, int topY,
-              juce::Rectangle<int> parentArea) {
+  void showAt(const juce::String &text, juce::Rectangle<int> anchor,
+              juce::Rectangle<int> parentArea,
+              const juce::Array<juce::Rectangle<int>> &avoidAreas = {}) {
     if (text.isEmpty() || parentArea.isEmpty()) {
       hide();
       return;
     }
 
     currentText = text;
-    const auto font = juce::Font(juce::FontOptions(14.0f));
-    const int width =
-        juce::GlyphArrangement::getStringWidthInt(font, currentText) + 18;
-    constexpr int height = 28;
-    auto bounds = juce::Rectangle<int>(anchorX - width / 2,
-                                       topY - height - 8, width, height)
-                      .constrainedWithin(parentArea.reduced(8));
+    const auto bounds = TooltipPlacement::place(
+        lookAndFeel.getFluentTooltipSize(currentText), anchor, parentArea,
+        avoidAreas);
+    if (bounds.isEmpty()) {
+      hide();
+      return;
+    }
     setBounds(bounds);
     setVisible(true);
     toFront(false);
@@ -32,26 +35,18 @@ public:
   }
 
   void hide() {
-    if (!isVisible())
-      return;
     currentText.clear();
     setVisible(false);
     setBounds(0, 0, 0, 0);
   }
 
   void paint(juce::Graphics &graphics) override {
-    const auto bounds = getLocalBounds().toFloat();
-    graphics.setColour(juce::Colour(0xE6202020));
-    graphics.fillRoundedRectangle(bounds, 6.0f);
-    graphics.setColour(juce::Colours::white.withAlpha(0.1f));
-    graphics.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
-    graphics.setColour(juce::Colours::white);
-    graphics.setFont(juce::Font(juce::FontOptions(14.0f)));
-    graphics.drawText(currentText, getLocalBounds(),
-                      juce::Justification::centred, false);
+    lookAndFeel.drawFluentTooltip(graphics, currentText,
+                                  getLocalBounds().toFloat());
   }
 
 private:
+  FluentLookAndFeel &lookAndFeel;
   juce::String currentText;
 };
 

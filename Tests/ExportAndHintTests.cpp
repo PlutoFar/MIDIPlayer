@@ -25,6 +25,7 @@
 #include "UI/PlaylistAnimationSupport.h"
 #include "UI/PluginWindowLifecycle.h"
 #include "UI/SidebarAnimationSupport.h"
+#include "UI/TooltipPlacement.h"
 #include "Utils/CommandLineMidiFileSupport.h"
 #include "Utils/PaletteSelectionSupport.h"
 #include "Utils/UserSettings.h"
@@ -127,13 +128,12 @@ renderSystemGlyphBounds(FluentLookAndFeel &lookAndFeel,
 
 void testProductionIconVisualBounds() {
   FluentLookAndFeel lookAndFeel(true);
-  const std::array<const wchar_t *, 26> productionGlyphs = {
-      L"\uE73E", L"\uE8BB", L"\uE921", L"\uE922", L"\uE71A",
-      L"\uE74D", L"\uE768", L"\uE769", L"\uE892", L"\uE893",
-      L"\uE8A7", L"\uE8B1", L"\uE8ED", L"\uE8EE", L"\uE992",
-      L"\uE994", L"\uE995", L"\uE9A1", L"\uEA42", L"\uE713",
-      L"\uE718", L"\uE840", L"\uE8D2", L"\uE8D6", L"\uE90B",
-      L"\uE91B"};
+  const std::array<const wchar_t *, 23> productionGlyphs = {
+      L"\uE73E", L"\uE71A", L"\uE74D", L"\uE768", L"\uE769",
+      L"\uE892", L"\uE893", L"\uE8A7", L"\uE8B1", L"\uE8ED",
+      L"\uE8EE", L"\uE992", L"\uE994", L"\uE995", L"\uE9A1",
+      L"\uEA42", L"\uE713", L"\uE718", L"\uE840", L"\uE8D2",
+      L"\uE8D6", L"\uE90B", L"\uE91B"};
 
   for (const float visualSize : {16.0f, 24.0f, 36.0f, 48.0f}) {
     const auto reference =
@@ -173,6 +173,17 @@ void testProductionIconVisualBounds() {
   expect(std::abs(paneToggle.getCentreX() - 64) <= 1 &&
              std::abs(paneToggle.getCentreY() - 64) <= 1,
          "NavigationView pane toggle must remain centred in its button");
+
+  for (const auto *captionGlyph : {L"\uE8BB", L"\uE921", L"\uE922"}) {
+    const auto caption =
+        renderSystemGlyphBounds(lookAndFeel, captionGlyph, 12.0f, 40.0f);
+    expect(!caption.isEmpty() && caption.getWidth() <= 13 &&
+               caption.getHeight() <= 13,
+           "window caption glyphs should preserve Fluent 12px metrics");
+    expect(std::abs(caption.getCentreX() - 64) <= 1 &&
+               std::abs(caption.getCentreY() - 64) <= 1,
+           "window caption glyphs should remain centred in their buttons");
+  }
 }
 
 void setTestEnvironmentVariable(const wchar_t *name, const wchar_t *value) {
@@ -593,6 +604,34 @@ int main(int argc, char *argv[]) {
   expect(!nativeDialogPolicy.useWindowRegion,
          "native-titlebar dialogs should not override the system window region");
 
+  const auto normalisedMaterial = WindowMaterial::normalise(
+      {WindowMaterial::Type::Acrylic, 0.1f, 80});
+  expect(normalisedMaterial.opacity == 0.25f &&
+             normalisedMaterial.strength == 50,
+         "dialog material settings should remain inside supported ranges");
+  expect(!WindowMaterial::supportsStrength(
+             WindowMaterial::Type::Transparent) &&
+             WindowMaterial::supportsStrength(
+                 WindowMaterial::Type::GaussianBlur),
+         "pure transparency should disable the effect-strength control");
+
+  const juce::Rectangle<int> tooltipParent(0, 0, 200, 120);
+  const juce::Rectangle<int> topAnchor(80, 2, 40, 20);
+  const auto topPlacement =
+      TooltipPlacement::place({80, 40}, topAnchor, tooltipParent);
+  expect(topPlacement.getY() >= topAnchor.getBottom() &&
+             !topPlacement.intersects(topAnchor),
+         "tooltips near the top edge should automatically move below");
+
+  juce::Array<juce::Rectangle<int>> tooltipAvoidAreas;
+  tooltipAvoidAreas.add({60, 0, 100, 46});
+  const juce::Rectangle<int> centreAnchor(80, 54, 40, 20);
+  const auto avoidingPlacement = TooltipPlacement::place(
+      {80, 40}, centreAnchor, tooltipParent, tooltipAvoidAreas);
+  expect(!avoidingPlacement.intersects(centreAnchor) &&
+             !avoidingPlacement.intersects(tooltipAvoidAreas[0]),
+         "tooltips should avoid the anchor and registered overlay regions");
+
   ComboBoxAnimationState comboMotion;
   comboMotion.setTargets(true, true);
   comboMotion.tick();
@@ -610,6 +649,18 @@ int main(int argc, char *argv[]) {
   expect(comboMotion.getOpenProgress() == 0.0f &&
              comboMotion.getHoverProgress() == 0.0f,
          "ComboBox closing animation should settle exactly");
+
+  float navigationIconScale = 1.0f;
+  while (advanceNavigationIconScale(navigationIconScale, true, false))
+    ;
+  expect(navigationIconScale ==
+             LegacyDesignTokens::Motion::navigationHoverScale,
+         "all sidebar icons should share the same hover-scale animation");
+  while (advanceNavigationIconScale(navigationIconScale, true, true))
+    ;
+  expect(navigationIconScale ==
+             LegacyDesignTokens::Motion::navigationPressedScale,
+         "all sidebar icons should share the same pressed-scale animation");
 
   PlaylistAnimationState playlistMotion;
   expect(getCurrentTrackIndexAfterRemoval(2, 2) == -1,
@@ -657,11 +708,11 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < 180 && backgroundScroll.tick(); ++i)
     reachedOverscroll =
         reachedOverscroll || backgroundScroll.getOverscroll() > 0.0f;
-  expect(reachedOverscroll,
-         "background history should visibly resist at the final edge");
+  expect(!reachedOverscroll,
+         "background history should stop at the edge without overscroll");
   expect(std::abs(backgroundScroll.getPosition() - 100.0f) < 0.01f &&
              std::abs(backgroundScroll.getOverscroll()) < 0.01f,
-         "background history should spring back to the final edge");
+         "background history should settle directly on the final edge");
 
   AudioStatusAnimation audioStatus;
   audioStatus.beginBusy();
@@ -834,6 +885,21 @@ int main(int argc, char *argv[]) {
   expect(historyLayout.getNextPagePosition(finalHistoryPage) ==
              finalHistoryPage,
          "history navigation should not wrap at the end");
+
+  const auto cacheRoot = historyTestDir.getChildFile("Backgrounds");
+  const auto currentBackground = cacheRoot.getChildFile("bg_current.png");
+  const auto removableBackground = cacheRoot.getChildFile("bg_old.png");
+  const auto externalBackground =
+      historyTestDir.getChildFile("bg_external.png");
+  expect(!canRemoveRecentBackgroundCache(cacheRoot, currentBackground,
+                                         currentBackground),
+         "the active background cache must remain protected");
+  expect(canRemoveRecentBackgroundCache(cacheRoot, currentBackground,
+                                        removableBackground),
+         "inactive background cache entries should be removable");
+  expect(!canRemoveRecentBackgroundCache(cacheRoot, currentBackground,
+                                         externalBackground),
+         "background removal must stay inside the managed cache directory");
   historyTestDir.deleteRecursively();
 
   expect(exportOfflineBlockSize <= 4096,

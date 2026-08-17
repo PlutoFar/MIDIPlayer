@@ -44,6 +44,7 @@ public:
       : core(c), legacy(c), engine(legacy.engine()), playlist(legacy.playlist()),
         fluentLookAndFeel(applicationLookAndFeel),
         navigation(fluentLookAndFeel), playlistPanel(playlist),
+        progressTimeTooltip(fluentLookAndFeel),
         tooltipOverlay(fluentLookAndFeel) {
     setLookAndFeel(&fluentLookAndFeel);
     setWantsKeyboardFocus(true);
@@ -165,8 +166,9 @@ public:
     volumeSlider.setValue(savedVol, juce::dontSendNotification);
     core.volume(savedVol);
     volumeSlider.addListener(this);
+    volumeSlider.addMouseListener(this, false);
     volumeSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
-    volumeSlider.setPopupDisplayEnabled(true, true, this);
+    volumeSlider.setPopupDisplayEnabled(false, false, this);
     volumeSlider.setNumDecimalPlacesToDisplay(0);
     volumeSlider.textFromValueFunction = [](double v) {
       return juce::String(juce::roundToInt(v * 100)) + "%";
@@ -884,6 +886,7 @@ public:
     auto accentColor =
         juce::Colour::fromString(getAppSettings().getThemeAccentColor());
     fluentLookAndFeel.updateAccentColor(accentColor);
+    refreshDialogMaterials();
     repaint();
   }
 
@@ -936,21 +939,30 @@ public:
   void mouseMove(const juce::MouseEvent &e) override {
     if (e.eventComponent == &progressSlider)
       updateProgressTimeTooltip(e);
+    else if (e.eventComponent == &volumeSlider)
+      updateVolumeTooltip(e);
   }
 
   void mouseDrag(const juce::MouseEvent &e) override {
     if (e.eventComponent == &progressSlider)
       updateProgressTimeTooltip(e);
+    else if (e.eventComponent == &volumeSlider)
+      updateVolumeTooltip(e);
   }
 
   void mouseExit(const juce::MouseEvent &e) override {
-    if (e.eventComponent == &progressSlider)
+    if (e.eventComponent == &progressSlider ||
+        e.eventComponent == &volumeSlider)
       progressTimeTooltip.hide();
   }
 
   void mouseDown(const juce::MouseEvent &e) override {
     if (e.eventComponent == &progressSlider) {
       updateProgressTimeTooltip(e);
+      return;
+    }
+    if (e.eventComponent == &volumeSlider) {
+      updateVolumeTooltip(e);
       return;
     }
 
@@ -993,8 +1005,36 @@ private:
       return;
     }
 
-    progressTimeTooltip.showAt(text, anchorX, progressSlider.getY(),
-                               getLocalBounds());
+    juce::Array<juce::Rectangle<int>> avoidAreas;
+    avoidAreas.add(loopModeBtn.getBounds());
+    avoidAreas.add(volumeBtn.getBounds());
+    progressTimeTooltip.showAt(
+        text, {anchorX, progressSlider.getY(), 1, progressSlider.getHeight()},
+        getLocalBounds(), avoidAreas);
+  }
+
+  void updateVolumeTooltip(const juce::MouseEvent &e) {
+    if (!volumeSlider.isEnabled() || volumeSlider.getWidth() <= 0) {
+      progressTimeTooltip.hide();
+      return;
+    }
+
+    const double minPosition = volumeSlider.getPositionOfValue(0.0);
+    const double maxPosition = volumeSlider.getPositionOfValue(1.0);
+    const double span = juce::jmax(0.001, maxPosition - minPosition);
+    const double ratio = juce::jlimit(
+        0.0, 1.0, ((double)e.getPosition().x - minPosition) / span);
+    const int anchorX = volumeSlider.getX() + juce::roundToInt(
+        minPosition + ratio * span);
+    const auto text = juce::String(juce::roundToInt(ratio * 100.0)) + "%";
+
+    juce::Array<juce::Rectangle<int>> avoidAreas;
+    avoidAreas.add(loopModeBtn.getBounds());
+    avoidAreas.add(volumeBtn.getBounds());
+    avoidAreas.add(progressSlider.getBounds());
+    progressTimeTooltip.showAt(
+        text, {anchorX, volumeSlider.getY(), 1, volumeSlider.getHeight()},
+        getLocalBounds(), avoidAreas);
   }
 
   void showExportDialog() {
@@ -1796,6 +1836,16 @@ public:
     audioSettingsWindow.deleteAndZero();
     backgroundSettingsWindow.deleteAndZero();
     fontSettingsWindow.deleteAndZero();
+  }
+
+  void refreshDialogMaterials() {
+    auto apply = [](juce::Component::SafePointer<juce::DialogWindow> window) {
+      if (window != nullptr)
+        FluentSettingsStyle::refreshDialogMaterial(window.getComponent());
+    };
+    apply(audioSettingsWindow);
+    apply(backgroundSettingsWindow);
+    apply(fontSettingsWindow);
   }
 
   void updatePluginList() {

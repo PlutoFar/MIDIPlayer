@@ -13,7 +13,6 @@ public:
 
   void setPosition(float newPosition) {
     position = std::clamp(newPosition, minimum, maximum);
-    overscroll = 0.0f;
     velocity = 0.0f;
     hasTarget = false;
   }
@@ -32,39 +31,25 @@ public:
     if (hasTarget)
       velocity += (target - position) * targetSpring;
 
-    const float rawPosition = position + overscroll + velocity;
-    if (rawPosition < minimum) {
-      position = minimum;
-      overscroll = rawPosition - minimum;
-      velocity += -overscroll * edgeSpring;
-      target = minimum;
-      hasTarget = true;
-    } else if (rawPosition > maximum) {
-      position = maximum;
-      overscroll = rawPosition - maximum;
-      velocity += -overscroll * edgeSpring;
-      target = maximum;
-      hasTarget = true;
-    } else {
-      position = rawPosition;
-      overscroll = 0.0f;
+    const float rawPosition = position + velocity;
+    position = std::clamp(rawPosition, minimum, maximum);
+    if (position != rawPosition) {
+      velocity = 0.0f;
+      if (!hasTarget || target == position)
+        hasTarget = false;
     }
 
     velocity *= friction;
 
     if (hasTarget && std::abs(target - position) < settleDistance &&
-        std::abs(velocity) < settleVelocity &&
-        std::abs(overscroll) < settleDistance) {
+        std::abs(velocity) < settleVelocity) {
       position = target;
       velocity = 0.0f;
-      overscroll = 0.0f;
       hasTarget = false;
     }
 
-    if (!hasTarget && std::abs(velocity) < settleVelocity &&
-        std::abs(overscroll) < settleDistance) {
+    if (!hasTarget && std::abs(velocity) < settleVelocity) {
       velocity = 0.0f;
-      overscroll = 0.0f;
       position = std::clamp(position, minimum, maximum);
       return false;
     }
@@ -73,11 +58,10 @@ public:
   }
 
   float getPosition() const { return position; }
-  float getOverscroll() const { return overscroll; }
+  float getOverscroll() const { return 0.0f; }
 
 private:
   static constexpr float friction = 0.82f;
-  static constexpr float edgeSpring = 0.22f;
   static constexpr float targetSpring = 0.13f;
   static constexpr float settleDistance = 0.05f;
   static constexpr float settleVelocity = 0.05f;
@@ -85,7 +69,6 @@ private:
   float minimum = 0.0f;
   float maximum = 0.0f;
   float position = 0.0f;
-  float overscroll = 0.0f;
   float velocity = 0.0f;
   float target = 0.0f;
   bool hasTarget = false;

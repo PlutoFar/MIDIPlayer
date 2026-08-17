@@ -43,6 +43,10 @@ public:
 
     addAndMakeVisible(collapseBtn);
     collapseBtn.onClick = [this]() { toggleCollapsed(); };
+    collapseBtn.onStateChange = [this]() {
+      ensureAnimating();
+      repaint(collapseBtn.getBounds());
+    };
 
     isCollapsed = getAppSettings().getSidebarCollapsed();
     animation.reset(isCollapsed);
@@ -103,25 +107,25 @@ public:
 
     auto animateScales = [&](const std::vector<NavItem> &navItems) {
       for (auto &ni : navItems) {
-        float target = 1.0f;
-        if (ni.id == pressedItemId)
-          target = LegacyDesignTokens::Motion::navigationPressedScale;
-        else if (ni.id == hoveredItemId)
-          target = LegacyDesignTokens::Motion::navigationHoverScale;
-
         auto it = iconScales.find(ni.id);
         float current = (it != iconScales.end()) ? it->second : 1.0f;
-        float diff = target - current;
-        if (std::abs(diff) > 0.005f) {
-          iconScales[ni.id] = current + diff * 0.25f;
+        if (advanceNavigationIconScale(current, ni.id == hoveredItemId,
+                                       ni.id == pressedItemId)) {
+          iconScales[ni.id] = current;
           needsMore = true;
         } else {
-          iconScales[ni.id] = target;
+          iconScales[ni.id] = current;
         }
       }
     };
     animateScales(items);
     animateScales(footerItems);
+
+    if (advanceNavigationIconScale(collapseIconScale,
+                                   collapseBtn.isMouseOver(),
+                                   collapseBtn.isMouseButtonDown())) {
+      needsMore = true;
+    }
 
     if (!needsMore)
       stopTimer();
@@ -188,10 +192,18 @@ public:
   void paintOverChildren(juce::Graphics &g) override {
     auto &colors = fluentLookAndFeel.getColors();
 
+    g.saveState();
+    const auto collapseCentre = collapseBtn.getBounds().getCentre().toFloat();
+    g.addTransform(
+        juce::AffineTransform::translation(-collapseCentre.x,
+                                           -collapseCentre.y)
+            .scaled(collapseIconScale)
+            .translated(collapseCentre.x, collapseCentre.y));
     g.setColour(colors.textPrimary);
     fluentLookAndFeel.drawSystemIconGlyph(
         g, L"\uE700", collapseBtn.getBounds().toFloat(),
         LegacyDesignTokens::Icon::paneToggle);
+    g.restoreState();
 
     for (size_t i = 0; i < items.size(); ++i) {
       if (i < itemBounds.size())
@@ -518,6 +530,7 @@ private:
 
   bool isCollapsed = false;
   bool isPinned = false;
+  float collapseIconScale = 1.0f;
   SidebarAnimationController animation;
 
   std::map<juce::String, float> indicatorHeights;
