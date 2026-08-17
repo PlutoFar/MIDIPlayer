@@ -10,6 +10,8 @@
 
 class TransparentButton;
 
+constexpr float fluentAlertCornerRadius = 12.0f;
+
 inline juce::Component *
 findFluentAlertConstraintTarget(juce::Component *associatedComponent) {
   if (associatedComponent != nullptr)
@@ -75,7 +77,8 @@ public:
   void mouseDown(const juce::MouseEvent &) override {}
   void mouseDrag(const juce::MouseEvent &) override {}
   void resized() override {
-    Win11Helpers::applyRoundedWindowRegion(this, true);
+    Win11Helpers::applyRoundedWindowRegion(this, true,
+                                           fluentAlertCornerRadius);
   }
 
 private:
@@ -94,7 +97,8 @@ private:
                         (double)WindowMaterial::surfaceAlpha(config));
     Win11Helpers::applyFluentDialogStyle(this, true, false);
     Win11Helpers::applyDialogMaterial(this, config);
-    Win11Helpers::applyRoundedWindowRegion(this, true);
+    Win11Helpers::applyRoundedWindowRegion(this, true,
+                                           fluentAlertCornerRadius);
     if (nativeOwner != nullptr)
       Win11Helpers::setOwnedWindow(this, nativeOwner.getComponent());
   }
@@ -860,7 +864,7 @@ public:
                     const juce::Rectangle<int> &textArea,
                     juce::TextLayout &layout) override {
     auto bounds = alert.getLocalBounds().toFloat();
-    float radius = scaled(12.0f);
+    const float radius = scaled(fluentAlertCornerRadius);
     const auto config = getAppSettings().getDialogMaterialConfig();
 
     {

@@ -306,6 +306,10 @@ public:
     }
   }
 
+  void mouseDown(const juce::MouseEvent &) override {
+    hideTooltip();
+  }
+
   // 为特定组件显示 tooltip，需要转换到父组件坐标系。
   void showForComponent(juce::Component *target, const juce::String &text) {
     if (target == nullptr || text.isEmpty()) {
