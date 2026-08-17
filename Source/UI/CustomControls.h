@@ -36,8 +36,9 @@ public:
     g.saveState();
     g.addTransform(transform);
 
+    auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel());
     if (isEnabled() && (isMouseOver || isButtonDown)) {
-      if (auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel())) {
+      if (laf != nullptr) {
         auto &colors = laf->getColors();
         g.setColour(isButtonDown ? colors.controlPressed : colors.controlHover);
         g.fillRoundedRectangle(bounds.reduced(2.0f), 6.0f);
@@ -49,9 +50,13 @@ public:
     if (drawable != nullptr) {
       // 源 SVG 应使用黑色图标，深色主题下统一替换为白色。
       drawable->replaceColour(juce::Colours::black, juce::Colours::white);
-      drawable->drawWithin(
-          g, bounds.withSizeKeepingCentre(iconVisualSize, iconVisualSize),
-          juce::RectanglePlacement::centred, currentAlpha);
+      if (laf != nullptr)
+        laf->drawDrawableIcon(g, *drawable, bounds, iconVisualSize,
+                              currentAlpha);
+      else
+        drawable->drawWithin(
+            g, bounds.withSizeKeepingCentre(iconVisualSize, iconVisualSize),
+            juce::RectanglePlacement::stretchToFit, currentAlpha);
     }
     g.restoreState();
     paintKeyboardFocus(g, bounds);

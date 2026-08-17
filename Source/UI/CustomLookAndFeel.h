@@ -226,8 +226,7 @@ public:
     juce::Path path;
     glyphs.createPath(path);
     const auto sourceBounds = path.getBounds();
-    const auto targetBounds =
-        bounds.withSizeKeepingCentre(visualSize, visualSize);
+    const auto targetBounds = getIconOpticalBounds(bounds, visualSize);
 
     if (sourceBounds.isEmpty()) {
       g.setFont(font);
@@ -236,22 +235,27 @@ public:
       return;
     }
 
-    const float scale = juce::jmin(
-        targetBounds.getWidth() / sourceBounds.getWidth(),
-        targetBounds.getHeight() / sourceBounds.getHeight());
-    const float scaledWidth = sourceBounds.getWidth() * scale;
-    const float scaledHeight = sourceBounds.getHeight() * scale;
-    const float targetX =
-        targetBounds.getX() + (targetBounds.getWidth() - scaledWidth) * 0.5f;
-    const float targetY =
-        targetBounds.getY() + (targetBounds.getHeight() - scaledHeight) * 0.5f;
-
     path.applyTransform(
         juce::AffineTransform::translation(-sourceBounds.getX(),
                                            -sourceBounds.getY())
-            .scaled(scale)
-            .translated(targetX, targetY));
+            .scaled(targetBounds.getWidth() / sourceBounds.getWidth(),
+                    targetBounds.getHeight() / sourceBounds.getHeight())
+            .translated(targetBounds.getX(), targetBounds.getY()));
     g.fillPath(path);
+  }
+
+  juce::Rectangle<float>
+  getIconOpticalBounds(juce::Rectangle<float> bounds, float visualSize) const {
+    return bounds.withSizeKeepingCentre(
+        visualSize,
+        visualSize * LegacyDesignTokens::Icon::opticalHeightRatio);
+  }
+
+  void drawDrawableIcon(juce::Graphics &g, juce::Drawable &drawable,
+                        juce::Rectangle<float> bounds, float visualSize,
+                        float opacity = 1.0f) const {
+    drawable.drawWithin(g, getIconOpticalBounds(bounds, visualSize),
+                        juce::RectanglePlacement::stretchToFit, opacity);
   }
 
   juce::Font getLabelFont(juce::Label &label) override {
@@ -342,8 +346,7 @@ public:
   }
 
   void drawCircularButton(juce::Graphics &g, juce::Rectangle<float> bounds,
-                          const juce::String &icon, bool isPlaying, bool,
-                          bool) {
+                          const juce::String &icon, bool, bool, bool) {
     g.setColour(colors.textPrimary);
     drawIconGlyph(g, icon, bounds, LegacyDesignTokens::Icon::primary);
   }
@@ -756,7 +759,7 @@ public:
                                   juce::Graphics &g, int w, int h,
                                   int titleSpaceX, int titleSpaceW,
                                   const juce::Image *icon,
-                                  bool drawTitleTextOnLeft) override {
+                                  bool) override {
     auto bounds = juce::Rectangle<int>(0, 0, w, h).toFloat();
 
     // 标题栏背景与卡片背景保持一致。

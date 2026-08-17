@@ -20,6 +20,8 @@
 #include "UI/MarqueeLabelSupport.h"
 #include "UI/ExportPresetSupport.h"
 #include "UI/FluentDialogSupport.h"
+#include "UI/CustomControls.h"
+#include "UI/LegacyIconAssets.h"
 #include "UI/PlaylistAnimationSupport.h"
 #include "UI/PluginWindowLifecycle.h"
 #include "UI/SidebarAnimationSupport.h"
@@ -30,7 +32,9 @@
 
 #include "TestHarness.h"
 
+#include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <thread>
@@ -47,6 +51,97 @@ void expect(bool condition, const char *message) {
   if (!condition) {
     std::cerr << "FAIL: " << message << '\n';
     ++failures;
+  }
+}
+
+juce::Rectangle<int> getVisibleAlphaBounds(const juce::Image &image) {
+  int minX = image.getWidth();
+  int minY = image.getHeight();
+  int maxX = -1;
+  int maxY = -1;
+
+  for (int y = 0; y < image.getHeight(); ++y) {
+    for (int x = 0; x < image.getWidth(); ++x) {
+      if (image.getPixelAt(x, y).getAlpha() == 0)
+        continue;
+      minX = juce::jmin(minX, x);
+      minY = juce::jmin(minY, y);
+      maxX = juce::jmax(maxX, x);
+      maxY = juce::jmax(maxY, y);
+    }
+  }
+
+  if (maxX < minX || maxY < minY)
+    return {};
+  return {minX, minY, maxX - minX + 1, maxY - minY + 1};
+}
+
+juce::Rectangle<int>
+renderSvgIconBounds(FluentLookAndFeel &lookAndFeel, const char *svg,
+                    float visualSize) {
+  juce::Image image(juce::Image::ARGB, 128, 128, true);
+  auto xml = juce::XmlDocument::parse(svg);
+  auto drawable = xml != nullptr ? juce::Drawable::createFromSVG(*xml)
+                                 : nullptr;
+  if (drawable == nullptr)
+    return {};
+
+  drawable->replaceColour(juce::Colours::black, juce::Colours::white);
+  {
+    juce::Graphics graphics(image);
+    lookAndFeel.drawDrawableIcon(graphics, *drawable,
+                                 image.getBounds().toFloat(), visualSize);
+  }
+  return getVisibleAlphaBounds(image);
+}
+
+juce::Rectangle<int> renderGlyphIconBounds(FluentLookAndFeel &lookAndFeel,
+                                           const juce::String &glyph,
+                                           float visualSize) {
+  juce::Image image(juce::Image::ARGB, 128, 128, true);
+  {
+    juce::Graphics graphics(image);
+    graphics.setColour(juce::Colours::white);
+    lookAndFeel.drawIconGlyph(graphics, glyph, image.getBounds().toFloat(),
+                              visualSize);
+  }
+  return getVisibleAlphaBounds(image);
+}
+
+void testProductionIconVisualBounds() {
+  FluentLookAndFeel lookAndFeel(true);
+  const std::array<const wchar_t *, 28> productionGlyphs = {
+      L"\uE73E", L"\uE8BB", L"\uE921", L"\uE922", L"\uE71A",
+      L"\uE74D", L"\uE768", L"\uE769", L"\uE892", L"\uE893",
+      L"\uE8A7", L"\uE8B1", L"\uE8ED", L"\uE8EE", L"\uE992",
+      L"\uE994", L"\uE995", L"\uE9A1", L"\uEA42", L"\uE713",
+      L"\uE718", L"\uE76B", L"\uE76C", L"\uE840", L"\uE8D2",
+      L"\uE8D6", L"\uE90B", L"\uE91B"};
+
+  for (const float visualSize : {16.0f, 24.0f, 36.0f, 48.0f}) {
+    const auto reference =
+        renderGlyphIconBounds(lookAndFeel, L"\uE995", visualSize);
+    const auto sequential = renderSvgIconBounds(
+        lookAndFeel, LegacyIconAssets::sequentialPlaybackSvg, visualSize);
+    const auto exportAudio = renderSvgIconBounds(
+        lookAndFeel, LegacyIconAssets::exportAudioSvg, visualSize);
+    std::cout << "Icon bounds " << visualSize << "px: sequential="
+              << sequential.toString() << ", reference="
+              << reference.toString() << '\n';
+
+    expect(!sequential.isEmpty() && !reference.isEmpty(),
+           "transport icons must render a visible alpha boundary");
+    expect(sequential == reference,
+           "SVG and font icon alpha boundaries must match exactly");
+    expect(exportAudio == reference,
+           "all production SVG alpha boundaries must match exactly");
+
+    for (const auto *glyph : productionGlyphs) {
+      const auto bounds =
+          renderGlyphIconBounds(lookAndFeel, glyph, visualSize);
+      expect(bounds == reference,
+             "all production glyph alpha boundaries must match exactly");
+    }
   }
 }
 
@@ -448,6 +543,8 @@ int main(int argc, char *argv[]) {
 
   if (runBridgeWorkerChildIfRequested(argc, argv))
     return 0;
+
+  testProductionIconVisualBounds();
 
   const auto customDialogPolicy = getFluentDialogWindowPolicy(false);
   expect(!customDialogPolicy.useSystemDropShadow,

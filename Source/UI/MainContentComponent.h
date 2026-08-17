@@ -20,6 +20,7 @@
 #include "ExportDialog.h"
 #include "FluentSettingsStyle.h"
 #include "LegacyExportTask.h"
+#include "LegacyIconAssets.h"
 #include "LegacyTransportWidgets.h"
 
 #include <cmath>
@@ -48,11 +49,8 @@ public:
     setWantsKeyboardFocus(true);
     loadSettings();
 
-    auto xml = juce::XmlDocument::parse (
-        R"(<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M3.5 5.25H16.5M3.5 9.75H14M3.5 14.25H11.5" stroke="#000000" stroke-width="1.5" stroke-linecap="round"/>
-  <path d="M13.25 12L16.5 14.5L13.25 17" stroke="#000000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>)");
+    auto xml = juce::XmlDocument::parse(
+        LegacyIconAssets::sequentialPlaybackSvg);
     if (xml != nullptr) {
       sequentialIconDrawable = juce::Drawable::createFromSVG (*xml);
     }
@@ -1188,11 +1186,9 @@ private:
           sequentialIconDrawable->replaceColour(lastSequentialIconColor, iconColor);
           lastSequentialIconColor = iconColor;
         }
-        auto r = btn.getBounds().toFloat();
-        auto iconBounds = r.withSizeKeepingCentre(
-            LegacyDesignTokens::Icon::transport,
+        fluentLookAndFeel.drawDrawableIcon(
+            g, *sequentialIconDrawable, btn.getBounds().toFloat(),
             LegacyDesignTokens::Icon::transport);
-        sequentialIconDrawable->drawWithin(g, iconBounds, juce::RectanglePlacement::centred, 1.0f);
       }
     }
   }
@@ -2625,7 +2621,7 @@ public:
   juce::Label pageTitle;
   juce::ComboBox pluginSelector;
   TransparentButton loopModeBtn;
-  SvgButton exportBtn{R"(<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 15V3M12 15L8 11M12 15L16 11" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 16V18C20 19.1046 19.1046 20 18 20H6C4.89543 20 4 19.1046 4 18V16" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>)"};
+  SvgButton exportBtn{LegacyIconAssets::exportAudioSvg};
   juce::Slider volumeSlider;
   TransparentButton scanBtn, unloadBtn, openPluginBtn;
 
