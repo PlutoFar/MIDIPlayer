@@ -381,7 +381,8 @@ inline void refreshDialogNativeStyleLater(juce::DialogWindow *window) {
 }
 
 inline juce::DialogWindow *
-launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
+launchDialogAsync(juce::DialogWindow::LaunchOptions &options,
+                  bool animateWindow = true) {
   options.dialogBackgroundColour = juce::Colours::transparentBlack;
   auto *anchor = options.componentToCentreAround;
   auto *nativeOwner = anchor != nullptr ? anchor->getTopLevelComponent()
@@ -395,9 +396,10 @@ launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
   applyDialogWindowStyle(window);
   Win11Helpers::setOwnedWindow(window, nativeOwner);
   centreDialogNow(window);
-  window->setAlpha(dialogTransitionAlphaFloor);
+  window->setAlpha(animateWindow ? dialogTransitionAlphaFloor : 1.0f);
   window->enterModalState(true, nullptr, true);
-  window->startOpenAnimation();
+  if (animateWindow)
+    window->startOpenAnimation();
   refreshDialogNativeStyleLater(window);
   return window;
 }
@@ -406,7 +408,8 @@ inline juce::DialogWindow *
 showMessageDialogAsync(const juce::String &title, const juce::String &message,
                        juce::Component *anchor,
                        FluentLookAndFeel &lookAndFeel,
-                       const juce::String &buttonText = L"确定") {
+                       const juce::String &buttonText = L"确定",
+                       bool animateWindow = true) {
   auto *content =
       new FluentMessageDialogContent(lookAndFeel, message, buttonText);
   juce::DialogWindow::LaunchOptions options;
@@ -417,6 +420,6 @@ showMessageDialogAsync(const juce::String &title, const juce::String &message,
   options.useNativeTitleBar = false;
   options.resizable = false;
   options.componentToCentreAround = anchor;
-  return launchDialogAsync(options);
+  return launchDialogAsync(options, animateWindow);
 }
 } // namespace FluentSettingsStyle

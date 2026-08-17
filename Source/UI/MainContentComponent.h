@@ -1432,9 +1432,12 @@ public:
     const juce::String pluginName(plugin.name.c_str());
     auto *loadingWindow = FluentSettingsStyle::showMessageDialogAsync(
         L"正在加载乐器", L"正在加载插件: " + pluginName + L"\n请稍候...",
-        this, fluentLookAndFeel, {});
+        this, fluentLookAndFeel, {}, false);
     auto safeLoadingWindow =
         juce::Component::SafePointer<juce::DialogWindow>(loadingWindow);
+    loadingWindow->repaint();
+    if (auto *peer = loadingWindow->getPeer())
+      peer->performAnyPendingRepaintsNow();
 
     auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
     juce::Timer::callAfterDelay(

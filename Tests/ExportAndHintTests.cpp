@@ -696,6 +696,8 @@ int main(int argc, char *argv[]) {
              getDialogExitAlpha(0.6f, 1.0f) ==
                  dialogTransitionAlphaFloor,
          "dialog exit animation should support closing during fade-in");
+  expect(dialogTransitionAlphaFloor < 1.0f,
+         "interactive settings dialogs should retain a visible fade range");
   const auto nativeDialogPolicy = getFluentDialogWindowPolicy(true);
   expect(!nativeDialogPolicy.useSystemDropShadow,
          "all material dialogs should use one clipped native window");
