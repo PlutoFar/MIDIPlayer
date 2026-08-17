@@ -626,6 +626,11 @@ int main(int argc, char *argv[]) {
   interactionToggle.setBounds(0, 0, 420, 40);
   const auto toggleLayout =
       interactionLookAndFeel.getToggleButtonLayout(interactionToggle);
+  expect(interactionLookAndFeel.getToggleButtonPreferredWidth(
+             interactionToggle) > 100,
+         "toggle preferred width should include its visible label");
+  expect(toggleLayout.textBounds.getWidth() > 0,
+         "toggle layout should reserve visible label width");
   expect(toggleLayout.interactionBounds.contains(
              juce::Point<float>(12.0f, 20.0f)) &&
              !toggleLayout.interactionBounds.contains(

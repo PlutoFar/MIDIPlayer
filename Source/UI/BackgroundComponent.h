@@ -1690,7 +1690,6 @@ public:
         tooltipOverlay(laf) {
     background.addChangeListener(this);
     setLookAndFeel(&fluentLookAndFeel);
-    setSize(640, getPreferredHeight());
     setOpaque(false);
 
     addAndMakeVisible(titleLabel);
@@ -1964,6 +1963,10 @@ public:
     updateBlurRadiusVisibility();
     updateImageDependentControls();
     updateDialogMaterialControlState();
+
+    // ToggleButton widths depend on their final text, so perform the initial
+    // layout only after every control has been configured.
+    setSize(640, getPreferredHeight());
 
     addChildComponent(tooltipOverlay);
     addMouseListener(&tooltipOverlay, true);
