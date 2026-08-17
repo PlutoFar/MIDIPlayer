@@ -32,16 +32,13 @@ public:
     setUsingNativeTitleBar(options.useNativeTitleBar);
     setAlwaysOnTop(false);
     setDraggable(false);
+    // JUCE's Windows peer blocks client and non-client owner input while this
+    // component is modal. Disabling the owner HWND separately breaks focus and
+    // Z-order restoration when the dialog is destroyed.
     if (this->nativeOwner != nullptr) {
       restoreOwnerAlwaysOnTop = this->nativeOwner->isAlwaysOnTop();
       if (restoreOwnerAlwaysOnTop)
         this->nativeOwner->setAlwaysOnTop(false);
-      restoreOwnerInteraction =
-          Win11Helpers::isNativeWindowInteractionEnabled(
-              this->nativeOwner.getComponent());
-      if (restoreOwnerInteraction)
-        Win11Helpers::setNativeWindowInteractionEnabled(
-            this->nativeOwner.getComponent(), false);
     }
   }
 
@@ -50,7 +47,6 @@ public:
       Win11Helpers::hideNativeWindowAndFlush(this);
     if (restoreOwnerAlwaysOnTop && nativeOwner != nullptr)
       nativeOwner->setAlwaysOnTop(true);
-    restoreOwnerInteractionIfNeeded();
   }
 
   void closeButtonPressed() override {
@@ -90,18 +86,9 @@ private:
         juce::DialogWindow::findControlAtPoint(point));
   }
 
-  void restoreOwnerInteractionIfNeeded() {
-    if (!restoreOwnerInteraction || nativeOwner == nullptr)
-      return;
-    Win11Helpers::setNativeWindowInteractionEnabled(
-        nativeOwner.getComponent(), true);
-    restoreOwnerInteraction = false;
-  }
-
   juce::Component::SafePointer<juce::Component> constraintOwner;
   juce::Component::SafePointer<juce::Component> nativeOwner;
   bool restoreOwnerAlwaysOnTop = false;
-  bool restoreOwnerInteraction = false;
   bool closing = false;
   bool nativeWindowHidden = false;
 };
