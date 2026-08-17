@@ -97,6 +97,54 @@ inline bool setOwnedWindow(juce::Component *window, juce::Component *owner) {
   return true;
 }
 
+inline bool isNativeWindowInteractionEnabled(juce::Component *component) {
+  if (component == nullptr || component->getPeer() == nullptr)
+    return false;
+  auto hwnd = static_cast<HWND>(component->getPeer()->getNativeHandle());
+  if (hwnd == nullptr)
+    return false;
+
+  using Function = BOOL(__stdcall *)(HWND);
+  static juce::DynamicLibrary user32("user32.dll");
+  static auto function =
+      reinterpret_cast<Function>(user32.getFunction("IsWindowEnabled"));
+  return function != nullptr && function(hwnd) != 0;
+}
+
+inline bool setNativeWindowInteractionEnabled(juce::Component *component,
+                                              bool shouldEnable) {
+  if (component == nullptr || component->getPeer() == nullptr)
+    return false;
+  auto hwnd = static_cast<HWND>(component->getPeer()->getNativeHandle());
+  if (hwnd == nullptr)
+    return false;
+
+  using Function = BOOL(__stdcall *)(HWND, BOOL);
+  static juce::DynamicLibrary user32("user32.dll");
+  static auto function =
+      reinterpret_cast<Function>(user32.getFunction("EnableWindow"));
+  if (function == nullptr)
+    return false;
+
+  function(hwnd, shouldEnable ? 1 : 0);
+  return isNativeWindowInteractionEnabled(component) == shouldEnable;
+}
+
+inline void activateNativeWindow(juce::Component *component) {
+  if (component == nullptr || component->getPeer() == nullptr)
+    return;
+  auto hwnd = static_cast<HWND>(component->getPeer()->getNativeHandle());
+  if (hwnd == nullptr)
+    return;
+
+  using Function = HWND(__stdcall *)(HWND);
+  static juce::DynamicLibrary user32("user32.dll");
+  static auto function =
+      reinterpret_cast<Function>(user32.getFunction("SetActiveWindow"));
+  if (function != nullptr)
+    function(hwnd);
+}
+
 inline bool isWindows11OrLater() {
   auto osType = juce::SystemStats::getOperatingSystemType();
   if (osType >= juce::SystemStats::Windows10) {
@@ -336,6 +384,20 @@ namespace Win11Helpers {
 inline bool isWindows11OrLater() { return false; }
 inline bool setOwnedWindow(juce::Component *, juce::Component *) {
   return false;
+}
+inline bool isNativeWindowInteractionEnabled(juce::Component *component) {
+  return component != nullptr && component->isEnabled();
+}
+inline bool setNativeWindowInteractionEnabled(juce::Component *component,
+                                              bool shouldEnable) {
+  if (component == nullptr)
+    return false;
+  component->setEnabled(shouldEnable);
+  return component->isEnabled() == shouldEnable;
+}
+inline void activateNativeWindow(juce::Component *component) {
+  if (component != nullptr)
+    component->toFront(true);
 }
 inline int applyWin11Style(juce::Component *, bool = true) { return 0; }
 inline int applyFluentDialogStyle(juce::Component *, bool = true,

@@ -10,38 +10,6 @@ constexpr int panelMargin = 16;
 constexpr int cardPadding = 16;
 constexpr int rowGap = 10;
 
-class OwnerBoundsConstrainer final : public juce::ComponentBoundsConstrainer {
-public:
-  explicit OwnerBoundsConstrainer(juce::Component *ownerComponent)
-      : owner(ownerComponent) {}
-
-  void setOwner(juce::Component *ownerComponent) { owner = ownerComponent; }
-  void setConstrainedComponent(juce::Component *component) {
-    constrainedComponent = component;
-  }
-
-  void checkBounds(juce::Rectangle<int> &bounds,
-                   const juce::Rectangle<int> &previousBounds,
-                   const juce::Rectangle<int> &limits, bool isStretchingTop,
-                   bool isStretchingLeft, bool isStretchingBottom,
-                   bool isStretchingRight) override {
-    juce::ComponentBoundsConstrainer::checkBounds(
-        bounds, previousBounds, limits, isStretchingTop, isStretchingLeft,
-        isStretchingBottom, isStretchingRight);
-    if (owner != nullptr && constrainedComponent != nullptr) {
-      const auto ownerBounds =
-          constrainedComponent->getLocalArea(owner.getComponent(),
-                                             owner->getLocalBounds()) +
-          constrainedComponent->getPosition();
-      bounds = constrainDialogBoundsToOwner(bounds, ownerBounds);
-    }
-  }
-
-private:
-  juce::Component::SafePointer<juce::Component> owner;
-  juce::Component::SafePointer<juce::Component> constrainedComponent;
-};
-
 class FluentDialogWindow final : public juce::DialogWindow,
                                  private juce::ComponentListener {
 public:
@@ -55,8 +23,7 @@ public:
                 ? juce::Component::getApproximateScaleFactorForComponent(
                       options.componentToCentreAround)
                 : 1.0f),
-        constraintOwner(constraintOwner), nativeOwner(nativeOwner),
-        ownerConstrainer(constraintOwner) {
+        constraintOwner(constraintOwner), nativeOwner(nativeOwner) {
     if (options.content.willDeleteObject())
       setContentOwned(options.content.release(), true);
     else
@@ -69,18 +36,24 @@ public:
     setResizable(options.resizable, options.useBottomRightCornerResizer);
     setUsingNativeTitleBar(options.useNativeTitleBar);
     setAlwaysOnTop(false);
-    ownerConstrainer.setConstrainedComponent(this);
-    setConstrainer(&ownerConstrainer);
+    setDraggable(false);
     if (this->nativeOwner != nullptr) {
       restoreOwnerAlwaysOnTop = this->nativeOwner->isAlwaysOnTop();
       if (restoreOwnerAlwaysOnTop)
         this->nativeOwner->setAlwaysOnTop(false);
+      restoreOwnerInteraction =
+          Win11Helpers::isNativeWindowInteractionEnabled(
+              this->nativeOwner.getComponent());
+      if (restoreOwnerInteraction)
+        Win11Helpers::setNativeWindowInteractionEnabled(
+            this->nativeOwner.getComponent(), false);
       this->nativeOwner->addComponentListener(this);
     }
     if (this->constraintOwner != nullptr &&
         this->constraintOwner != this->nativeOwner)
       this->constraintOwner->addComponentListener(this);
-    constrainToOwner();
+    centringEnabled = true;
+    centreOnOwner();
   }
 
   ~FluentDialogWindow() override {
@@ -88,9 +61,9 @@ public:
       nativeOwner->removeComponentListener(this);
     if (constraintOwner != nullptr && constraintOwner != nativeOwner)
       constraintOwner->removeComponentListener(this);
-    setConstrainer(nullptr);
     if (restoreOwnerAlwaysOnTop && nativeOwner != nullptr)
       nativeOwner->setAlwaysOnTop(true);
+    restoreOwnerInteractionIfNeeded();
   }
 
   void closeButtonPressed() override { setVisible(false); }
@@ -103,29 +76,52 @@ public:
     return nativeOwner.getComponent();
   }
 
-  void constrainToOwner() {
-    if (constraintOwner != nullptr)
-      setBoundsConstrained(getBounds());
+  void centreOnOwner() {
+    if (!centringEnabled || centringInProgress || constraintOwner == nullptr)
+      return;
+
+    juce::ScopedValueSetter<bool> guard(centringInProgress, true);
+    centreAroundComponent(constraintOwner.getComponent(), getWidth(),
+                          getHeight());
   }
 
 private:
+  void moved() override {
+    juce::DialogWindow::moved();
+    centreOnOwner();
+  }
+
+  void resized() override {
+    juce::DialogWindow::resized();
+    centreOnOwner();
+  }
+
   void componentMovedOrResized(juce::Component &, bool, bool) override {
-    constrainToOwner();
+    centreOnOwner();
   }
 
   void componentBeingDeleted(juce::Component &component) override {
     if (nativeOwner.getComponent() == &component)
       nativeOwner = nullptr;
-    if (constraintOwner.getComponent() == &component) {
+    if (constraintOwner.getComponent() == &component)
       constraintOwner = nullptr;
-      ownerConstrainer.setOwner(nullptr);
-    }
+  }
+
+  void restoreOwnerInteractionIfNeeded() {
+    if (!restoreOwnerInteraction || nativeOwner == nullptr)
+      return;
+    Win11Helpers::setNativeWindowInteractionEnabled(
+        nativeOwner.getComponent(), true);
+    Win11Helpers::activateNativeWindow(nativeOwner.getComponent());
+    restoreOwnerInteraction = false;
   }
 
   juce::Component::SafePointer<juce::Component> constraintOwner;
   juce::Component::SafePointer<juce::Component> nativeOwner;
-  OwnerBoundsConstrainer ownerConstrainer;
   bool restoreOwnerAlwaysOnTop = false;
+  bool restoreOwnerInteraction = false;
+  bool centringEnabled = false;
+  bool centringInProgress = false;
 };
 
 inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {
@@ -247,13 +243,13 @@ inline void applyTypography(juce::Component &component,
   }
 }
 
-inline void constrainDialogToWorkAreaNow(juce::DialogWindow *window) {
+inline void centreDialogNow(juce::DialogWindow *window) {
   if (window == nullptr)
     return;
 
   if (auto *ownedWindow = dynamic_cast<FluentDialogWindow *>(window)) {
     if (ownedWindow->getConstraintOwner() != nullptr) {
-      ownedWindow->constrainToOwner();
+      ownedWindow->centreOnOwner();
       return;
     }
   }
@@ -266,11 +262,8 @@ inline void constrainDialogToWorkAreaNow(juce::DialogWindow *window) {
   if (display == nullptr)
     return;
 
-  const auto workArea =
-      (window->getLocalArea(nullptr, display->userBounds).toNearestInt() +
-       window->getPosition())
-          .reduced(8);
-  window->setBounds(window->getBounds().constrainedWithin(workArea));
+  window->setCentrePosition(
+      display->userBounds.getSmallestIntegerContainer().getCentre());
 }
 
 inline void refreshDialogSurface(juce::DialogWindow *window) {
@@ -312,8 +305,8 @@ inline void applyDialogWindowStyle(juce::DialogWindow *window) {
   Win11Helpers::applyRoundedWindowRegion(window, policy.useWindowRegion);
 }
 
-inline void constrainDialogToWorkArea(juce::DialogWindow *window) {
-  constrainDialogToWorkAreaNow(window);
+inline void maintainDialogCentre(juce::DialogWindow *window) {
+  centreDialogNow(window);
   auto safeWindow = juce::Component::SafePointer<juce::DialogWindow>(window);
   juce::Timer::callAfterDelay(100, [safeWindow]() {
     if (safeWindow != nullptr) {
@@ -328,7 +321,7 @@ inline void constrainDialogToWorkArea(juce::DialogWindow *window) {
               dynamic_cast<FluentDialogWindow *>(safeWindow.getComponent()))
         Win11Helpers::setOwnedWindow(ownedWindow,
                                      ownedWindow->getNativeOwner());
-      constrainDialogToWorkAreaNow(safeWindow.getComponent());
+      centreDialogNow(safeWindow.getComponent());
     }
   });
 }
@@ -347,9 +340,9 @@ launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
       new FluentDialogWindow(options, constraintOwner, nativeOwner);
   applyDialogWindowStyle(window);
   Win11Helpers::setOwnedWindow(window, nativeOwner);
-  constrainDialogToWorkAreaNow(window);
+  centreDialogNow(window);
   window->enterModalState(true, nullptr, true);
-  constrainDialogToWorkArea(window);
+  maintainDialogCentre(window);
   return window;
 }
 } // namespace FluentSettingsStyle
