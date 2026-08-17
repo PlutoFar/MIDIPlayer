@@ -141,7 +141,8 @@ inline void constrainDialogToWorkAreaNow(juce::DialogWindow *window) {
   if (display == nullptr)
     return;
 
-  const auto workArea = display->userArea.reduced(8);
+  const auto workArea =
+      display->userBounds.getSmallestIntegerContainer().reduced(8);
   window->setBounds(window->getBounds().constrainedWithin(workArea));
 }
 

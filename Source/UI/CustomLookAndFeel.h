@@ -542,9 +542,11 @@ public:
         LegacyDesignTokens::Layout::controlHeight(uiFontSize));
     const int visibleItems = juce::jlimit(1, 9, box.getNumItems());
     const int estimatedHeight = visibleItems * itemHeight + scaledInt(12);
-    const int roomAbove = screenBounds.getY() - display->userArea.getY();
+    const auto userBounds =
+        display->userBounds.getSmallestIntegerContainer();
+    const int roomAbove = screenBounds.getY() - userBounds.getY();
     const int roomBelow =
-        display->userArea.getBottom() - screenBounds.getBottom();
+        userBounds.getBottom() - screenBounds.getBottom();
     const auto direction =
         roomBelow < estimatedHeight && roomAbove > roomBelow
             ? juce::PopupMenu::Options::PopupDirection::upwards
@@ -681,14 +683,8 @@ public:
 
   juce::Point<int> getFluentTooltipSize(const juce::String &text) const {
     const auto font = getBodyFont();
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    const int width = font.getStringWidth(text) + 24;
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+    const int width =
+        juce::GlyphArrangement::getStringWidthInt(font, text) + 24;
     return {width, LegacyDesignTokens::Layout::controlHeight(uiFontSize)};
   }
 

@@ -295,7 +295,7 @@ private:
       return;
     }
 
-    auto *editor = processor->createEditorIfNeeded();
+    auto *editor = processor->createEditorAndMakeActive();
     if (editor == nullptr) {
       sendStatus(StatusCode::pluginLoadFailed, "plugin has no editor",
                  Command::openEditor);

@@ -478,15 +478,8 @@ private:
   static constexpr int toastHeight = 36;
 
   int getToastWidth(const juce::String &text) const {
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    const int width = label.getFont().getStringWidth(text) + 32;
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    return width;
+    return juce::GlyphArrangement::getStringWidthInt(label.getFont(), text) +
+           32;
   }
 
   void showAt(const juce::String &text, int x, int y, int holdDurationMs) {

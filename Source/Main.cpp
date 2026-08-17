@@ -111,7 +111,8 @@ public:
           auto &displays = juce::Desktop::getInstance().getDisplays();
           auto *display = displays.getDisplayForRect(bounds);
           auto displayArea = display != nullptr
-                                 ? display->userArea
+                                 ? display->userBounds
+                                       .getSmallestIntegerContainer()
                                  : displays.getTotalBounds(true);
           if (displayArea.intersects(bounds)) {
             bounds.setSize(juce::jlimit(800, displayArea.getWidth(),

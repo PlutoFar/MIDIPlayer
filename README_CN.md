@@ -6,7 +6,7 @@ MIDI Player 是一款使用 C++17、JUCE 与 WinUI 3 开发的 Windows 桌面 MI
 
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4)
 ![C++](https://img.shields.io/badge/C%2B%2B-17-00599C)
-![JUCE](https://img.shields.io/badge/JUCE-8.0.12-F28C28)
+![JUCE](https://img.shields.io/badge/JUCE-8.0.15-F28C28)
 ![WinUI](https://img.shields.io/badge/WinUI-3-0078D4)
 
 ## 版本说明
@@ -68,7 +68,7 @@ Legacy 版只需要 Visual C++ x64 运行库。
 - Visual Studio 2022，安装 MSVC v143 桌面 C++ 工作负载
 - CMake 3.27 或更高版本
 - Windows SDK 10.0.26100.0
-- JUCE 提交 `501c07674e1ad693085a7e7c398f205c2677f5da`，源码版本为 JUCE 8.0.12
+- JUCE 提交 `91ad83ae34a81e0833b1a2b0866f54846370ae53`，源码版本为 JUCE 8.0.15
 - 构建 WinUI 版时需要 Visual Studio 的 C++/WinRT 与 Windows App SDK C++ 项目支持
 - 构建 ASIO 支持时需要 Steinberg ASIO SDK
 
@@ -78,7 +78,7 @@ Legacy 版只需要 Visual C++ x64 运行库。
 git clone https://github.com/PlutoFar/MIDIPlayer.git
 cd MIDIPlayer
 git clone https://github.com/juce-framework/JUCE.git JUCE
-git -C JUCE checkout 501c07674e1ad693085a7e7c398f205c2677f5da
+git -C JUCE checkout 91ad83ae34a81e0833b1a2b0866f54846370ae53
 git -C JUCE apply ../patches/juce-child-process-kill.patch
 ```
 

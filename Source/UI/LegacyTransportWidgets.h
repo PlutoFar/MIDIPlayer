@@ -127,15 +127,7 @@ private:
   }
 
   float getTextWidth(const juce::String &value) const {
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    const auto width = static_cast<float>(font.getStringWidth(value));
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    return width;
+    return juce::GlyphArrangement::getStringWidth(font, value);
   }
 
   juce::String text;

@@ -6,7 +6,7 @@ MIDI Player is a Windows desktop player and VST3 instrument host built with C++1
 
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4)
 ![C++](https://img.shields.io/badge/C%2B%2B-17-00599C)
-![JUCE](https://img.shields.io/badge/JUCE-8.0.12-F28C28)
+![JUCE](https://img.shields.io/badge/JUCE-8.0.15-F28C28)
 ![WinUI](https://img.shields.io/badge/WinUI-3-0078D4)
 
 ## Editions
@@ -67,7 +67,7 @@ The scanner checks the system VST3 directory and the package-local `VST3/` direc
 - Visual Studio 2022 with the MSVC v143 desktop C++ workload
 - CMake 3.27 or newer
 - Windows SDK 10.0.26100.0
-- JUCE at commit `501c07674e1ad693085a7e7c398f205c2677f5da` (JUCE 8.0.12 source version)
+- JUCE at commit `91ad83ae34a81e0833b1a2b0866f54846370ae53` (JUCE 8.0.15 source version)
 - For WinUI: C++/WinRT and Windows App SDK C++ project support in Visual Studio
 - Optional ASIO build: Steinberg ASIO SDK
 
@@ -77,7 +77,7 @@ Clone the repository and the pinned JUCE revision:
 git clone https://github.com/PlutoFar/MIDIPlayer.git
 cd MIDIPlayer
 git clone https://github.com/juce-framework/JUCE.git JUCE
-git -C JUCE checkout 501c07674e1ad693085a7e7c398f205c2677f5da
+git -C JUCE checkout 91ad83ae34a81e0833b1a2b0866f54846370ae53
 git -C JUCE apply ../patches/juce-child-process-kill.patch
 ```
 
