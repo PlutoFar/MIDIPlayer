@@ -157,13 +157,16 @@ public:
       if (buttonText.isNotEmpty()) {
         const auto firstChar =
             (uint32_t)buttonText.getCharPointer().getAndAdvance();
-        g.setFont(firstChar >= 0xE000
-                      ? laf->getIconFont(LegacyDesignTokens::Icon::toolbar)
-                      : laf->getBodyFont());
         g.setColour(showDestructiveState ? juce::Colours::white
                                          : laf->getColors().textPrimary);
-        g.drawText(buttonText, getLocalBounds(), juce::Justification::centred,
-                   false);
+        if (firstChar >= 0xE000) {
+          laf->drawIconGlyph(g, buttonText, getLocalBounds().toFloat(),
+                             LegacyDesignTokens::Icon::toolbar);
+        } else {
+          g.setFont(laf->getBodyFont());
+          g.drawText(buttonText, getLocalBounds(),
+                     juce::Justification::centred, false);
+        }
       }
     }
     if (hasKeyboardFocus(false)) {
@@ -226,7 +229,7 @@ private:
 */
 class EmbeddedTooltip : public juce::Component, public juce::Timer {
 public:
-  EmbeddedTooltip() {
+  explicit EmbeddedTooltip(FluentLookAndFeel &laf) : lookAndFeel(laf) {
     setInterceptsMouseClicks(false, false);
     setAlwaysOnTop(true);
     setVisible(false);
@@ -261,12 +264,15 @@ public:
       return;
     }
 
-    // 已在显示同一个目标时不重复启动延迟。
-    if (isVisible() && currentTarget == target && currentText == text) {
+    const bool sameTarget = currentTarget.getComponent() == target;
+    if ((isVisible() && sameTarget && currentText == text) ||
+        (isWaitingToShow && sameTarget && pendingText == text)) {
       return;
     }
 
-    currentTarget = target;
+    setVisible(false);
+    currentText.clear();
+    currentTarget = juce::Component::SafePointer<juce::Component>(target);
     pendingText = text;
     delayCounter = 0;
     isWaitingToShow = true;
@@ -282,7 +288,6 @@ public:
     }
 
     isWaitingToShow = false;
-    isFadingOut = false;
     pendingText.clear();
     currentTarget = nullptr;
     setVisible(false);
@@ -293,18 +298,16 @@ public:
   }
 
   void paint(juce::Graphics &g) override {
-    g.setOpacity(alpha);
-
     auto bounds = getLocalBounds().toFloat();
 
-    g.setColour(juce::Colour(0xE6202020));
-    g.fillRoundedRectangle(bounds, 6.0f);
+    g.setColour(juce::Colour(0xF0202020));
+    g.fillRoundedRectangle(bounds, 8.0f);
 
-    g.setColour(juce::Colours::white.withAlpha(0.1f * alpha));
-    g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.1f));
+    g.drawRoundedRectangle(bounds.reduced(0.5f), 8.0f, 1.0f);
 
-    g.setColour(juce::Colours::white.withAlpha(alpha));
-    g.setFont(juce::Font(juce::FontOptions(14.0f)));
+    g.setColour(juce::Colours::white);
+    g.setFont(lookAndFeel.getBodyFont());
     g.drawText(currentText, bounds, juce::Justification::centred, false);
   }
 
@@ -317,49 +320,45 @@ public:
       }
       return;
     }
-
-    if (isFadingOut) {
-      alpha -= 0.15f;
-      if (alpha <= 0.0f) {
-        alpha = 0.0f;
-        setVisible(false);
-        isFadingOut = false;
-        currentTarget = nullptr;
-        currentText.clear();
-        stopTimer();
-      }
-      repaint();
-    }
   }
 
 private:
   void showTooltipNow() {
     if (pendingText.isEmpty() || currentTarget == nullptr) {
       isWaitingToShow = false;
+      setVisible(false);
+      stopTimer();
       return;
     }
 
     currentText = pendingText;
     isWaitingToShow = false;
-    isFadingOut = false;
 
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4996)
 #endif
-    auto font = juce::Font(juce::FontOptions(14.0f));
-    int w = font.getStringWidth(currentText) + 20;
+    auto font = lookAndFeel.getBodyFont();
+    int w = font.getStringWidth(currentText) + 24;
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
-    int h = 32;
+    int h = LegacyDesignTokens::Layout::controlHeight(
+        lookAndFeel.getUIFontSize());
 
     auto *topLevel = getParentComponent();
     if (topLevel == nullptr)
       return;
 
-    auto targetBounds = topLevel->getLocalArea(
-        currentTarget->getParentComponent(), currentTarget->getBounds());
+    w = juce::jmin(w, juce::jmax(0, topLevel->getWidth() - 8));
+    if (w <= 0 || h <= 0) {
+      setVisible(false);
+      stopTimer();
+      return;
+    }
+
+    auto targetBounds = topLevel->getLocalArea(currentTarget.getComponent(),
+                                               currentTarget->getLocalBounds());
 
     int x = targetBounds.getCentreX() - w / 2;
     int y = targetBounds.getY() - h - 8;
@@ -372,20 +371,19 @@ private:
     y = juce::jlimit(4, topLevel->getHeight() - h - 4, y);
 
     setBounds(x, y, w, h);
-    alpha = 1.0f;
     setVisible(true);
     toFront(false);
     repaint();
+    stopTimer();
   }
 
 private:
-  juce::Component *currentTarget = nullptr;
+  FluentLookAndFeel &lookAndFeel;
+  juce::Component::SafePointer<juce::Component> currentTarget;
   juce::String currentText;
   juce::String pendingText;
   int delayCounter = 0;
-  float alpha = 1.0f;
   bool isWaitingToShow = false;
-  bool isFadingOut = false;
 };
 
 class ToastComponent : public juce::Component, public juce::Timer {

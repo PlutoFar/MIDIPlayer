@@ -42,7 +42,8 @@ public:
   MainContentComponent(midi::Core &c, FluentLookAndFeel &applicationLookAndFeel)
       : core(c), legacy(c), engine(legacy.engine()), playlist(legacy.playlist()),
         fluentLookAndFeel(applicationLookAndFeel),
-        navigation(fluentLookAndFeel), playlistPanel(playlist) {
+        navigation(fluentLookAndFeel), playlistPanel(playlist),
+        tooltipOverlay(fluentLookAndFeel) {
     setLookAndFeel(&fluentLookAndFeel);
     setWantsKeyboardFocus(true);
     loadSettings();
@@ -117,9 +118,11 @@ public:
 
     addAndMakeVisible(timeLabel);
     timeLabel.setText("0:00 / 0:00", juce::dontSendNotification);
-    timeLabel.setFont(fluentLookAndFeel.getCaptionFont());
+    timeLabel.setFont(fluentLookAndFeel.getBodyFont());
     timeLabel.setColour(juce::Label::textColourId,
                         fluentLookAndFeel.getColors().textSecondary);
+    timeLabel.setMinimumHorizontalScale(1.0f);
+    timeLabel.setJustificationType(juce::Justification::centredLeft);
 
     addAndMakeVisible(progressSlider);
     progressSlider.setRange(0.0, 1.0);
@@ -218,6 +221,8 @@ public:
     });
 
     addAndMakeVisible(modeToast);
+    addChildComponent(tooltipOverlay);
+    addMouseListener(&tooltipOverlay, true);
 
     runLater(200, [](MainContentComponent &self) {
       self.playlistPanel.autoLoadLastPlaylist();
@@ -229,6 +234,8 @@ public:
   }
 
   ~MainContentComponent() override {
+    removeMouseListener(&tooltipOverlay);
+    tooltipOverlay.hideTooltip();
     stopTimer();
     cancelPendingUpdate();
     closeSettingsWindows();
@@ -418,6 +425,8 @@ public:
     }
 
     modeToast.toFront(false);
+    if (tooltipOverlay.isVisible())
+      tooltipOverlay.toFront(false);
   }
 
   void resized() override {
@@ -532,7 +541,7 @@ public:
             fluentLookAndFeel.getUIFontSize())));
     timeLabel.setBounds(leftInfo.removeFromTop(
         LegacyDesignTokens::Typography::lineHeight(
-            LegacyDesignTokens::Typography::caption,
+            LegacyDesignTokens::Typography::body,
             fluentLookAndFeel.getUIFontSize())));
 
     int controlsHeight = playBtnSize;
@@ -1118,10 +1127,10 @@ private:
       g.fillRoundedRectangle(bounds.reduced(2.0f), 6.0f);
     }
 
-    g.setFont(fluentLookAndFeel.getIconFont(iconSize));
     g.setColour(btn.isEnabled() ? colors.textPrimary
                                 : colors.textSecondary.withAlpha(0.5f));
-    g.drawText(icon, btn.getBounds(), juce::Justification::centred, false);
+    fluentLookAndFeel.drawIconGlyph(g, icon, btn.getBounds().toFloat(),
+                                    iconSize);
   }
 
   void drawIconButtonCombined(juce::Graphics &g, juce::Button &btn,
@@ -1143,15 +1152,13 @@ private:
                                      : colors.textSecondary.withAlpha(0.5f);
     g.setColour(iconColor);
 
-    g.setFont(fluentLookAndFeel.getIconFont(
-        LegacyDesignTokens::Icon::toolbar));
     auto mainArea = btn.getBounds().translated(-2, -1);
-    g.drawText(mainIcon, mainArea, juce::Justification::centred, false);
+    fluentLookAndFeel.drawIconGlyph(
+        g, mainIcon, mainArea.toFloat(), LegacyDesignTokens::Icon::toolbar);
 
-    g.setFont(fluentLookAndFeel.getIconFont(
-        LegacyDesignTokens::Icon::overlay));
     auto subArea = btn.getBounds().translated(6, 6);
-    g.drawText(subIcon, subArea, juce::Justification::centred, false);
+    fluentLookAndFeel.drawIconGlyph(
+        g, subIcon, subArea.toFloat(), LegacyDesignTokens::Icon::overlay);
   }
 
   void drawSequentialIcon(juce::Graphics &g, juce::Button &btn) {
@@ -1172,10 +1179,9 @@ private:
     g.setColour(iconColor);
 
     if (getAppSettings().getSequentialIconListStyle()) {
-      g.setFont(fluentLookAndFeel.getIconFont(
-          LegacyDesignTokens::Icon::transport));
-      g.drawText(L"\uEA42", btn.getBounds(), juce::Justification::centred,
-                 false);
+      fluentLookAndFeel.drawIconGlyph(
+          g, L"\uEA42", btn.getBounds().toFloat(),
+          LegacyDesignTokens::Icon::transport);
     } else {
       if (sequentialIconDrawable != nullptr) {
         if (lastSequentialIconColor != iconColor) {
@@ -1208,12 +1214,11 @@ private:
       g.fillEllipse(bounds.reduced(3.0f));
     }
 
-    g.setFont(fluentLookAndFeel.getIconFont(
-        LegacyDesignTokens::Icon::primary));
     g.setColour(isEnabled ? colors.textPrimary
                           : colors.textSecondary.withAlpha(0.4f));
-    g.drawText(isPlaying ? L"\uE769" : L"\uE768", btn.getBounds(),
-               juce::Justification::centred, false);
+    fluentLookAndFeel.drawIconGlyph(
+        g, isPlaying ? L"\uE769" : L"\uE768", btn.getBounds().toFloat(),
+        LegacyDesignTokens::Icon::primary);
 
     if (!isEnabled) {
       g.setColour(colors.background.withAlpha(0.3f));
@@ -1788,7 +1793,7 @@ public:
     pageTitle.setFont(fluentLookAndFeel.getTitleFont());
     contentLabel.setFont(fluentLookAndFeel.getBodyLargeFont());
     trackLabel.setFont(fluentLookAndFeel.getBodyFont(true));
-    timeLabel.setFont(fluentLookAndFeel.getCaptionFont());
+    timeLabel.setFont(fluentLookAndFeel.getBodyFont());
   }
 
   void closeSettingsWindows() {
@@ -1876,7 +1881,7 @@ public:
                                 private juce::Timer {
     AudioSettingsContent(AudioEngine &e, FluentLookAndFeel &laf)
         : engine(e), fluentLookAndFeel(laf),
-          deviceManager(e.getDeviceManager()) {
+          deviceManager(e.getDeviceManager()), tooltipOverlay(laf) {
       setLookAndFeel(&fluentLookAndFeel);
       setSize(660, 350);
       setOpaque(false);
@@ -1984,9 +1989,14 @@ public:
 
       deviceManager.addChangeListener(this);
       refreshControls(true);
+
+      addChildComponent(tooltipOverlay);
+      addMouseListener(&tooltipOverlay, true);
     }
 
     ~AudioSettingsContent() override {
+      removeMouseListener(&tooltipOverlay);
+      tooltipOverlay.hideTooltip();
       stopTimer();
       deviceManager.removeChangeListener(this);
       engine.saveAudioDeviceSettings();
@@ -2339,6 +2349,7 @@ public:
     juce::Rectangle<int> deviceCardBounds;
     juce::Rectangle<int> statusCardBounds;
     juce::Rectangle<int> statusIndicator;
+    EmbeddedTooltip tooltipOverlay;
   };
 
   struct FontSettingsContent : public juce::Component {
@@ -2645,6 +2656,7 @@ public:
   double volumeBeforeMute = 1.0;
   float playbackModeAnimationScale = 1.0f;
   ToastComponent modeToast;
+  EmbeddedTooltip tooltipOverlay;
 
   std::atomic<uint32_t> lastSeekRequestTime{0};
   bool playbackPausedByPluginSwitch = false;

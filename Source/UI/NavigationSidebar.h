@@ -178,13 +178,12 @@ public:
   void paintOverChildren(juce::Graphics &g) override {
     auto &colors = fluentLookAndFeel.getColors();
 
-    g.setFont(fluentLookAndFeel.getIconFont(
-        LegacyDesignTokens::Icon::navigation));
     g.setColour(colors.textPrimary);
     juce::String collapseIcon =
         isCollapsed ? L"\uE76C" : L"\uE76B";
-    g.drawText(collapseIcon, collapseBtn.getBounds(),
-               juce::Justification::centred, false);
+    fluentLookAndFeel.drawIconGlyph(
+        g, collapseIcon, collapseBtn.getBounds().toFloat(),
+        LegacyDesignTokens::Icon::navigation);
 
     for (size_t i = 0; i < items.size(); ++i) {
       if (i < itemBounds.size())
@@ -287,10 +286,10 @@ private:
                          .scaled(scale)
                          .translated(center.x, center.y));
     }
-    g.setFont(fluentLookAndFeel.getIconFont(
-        LegacyDesignTokens::Icon::navigation));
     g.setColour(isSelected ? colors.accentPrimary : colors.textPrimary);
-    g.drawText(item.icon, iconArea, juce::Justification::centred, false);
+    fluentLookAndFeel.drawIconGlyph(
+        g, item.icon, iconArea.toFloat(),
+        LegacyDesignTokens::Icon::navigation);
     g.restoreState();
 
     drawAnimatedLabel(
@@ -325,15 +324,16 @@ private:
                          .scaled(scale)
                          .translated(center.x, center.y));
     }
-    g.setFont(fluentLookAndFeel.getIconFont(
-        LegacyDesignTokens::Icon::navigation));
     if (item.id == "pin") {
       g.setColour(isPinned ? colors.accentPrimary : colors.textPrimary);
-      g.drawText(isPinned ? L"\uE840" : L"\uE718", iconArea,
-                 juce::Justification::centred, false);
+      fluentLookAndFeel.drawIconGlyph(
+          g, isPinned ? L"\uE840" : L"\uE718", iconArea.toFloat(),
+          LegacyDesignTokens::Icon::navigation);
     } else {
       g.setColour(colors.textPrimary);
-      g.drawText(item.icon, iconArea, juce::Justification::centred, false);
+      fluentLookAndFeel.drawIconGlyph(
+          g, item.icon, iconArea.toFloat(),
+          LegacyDesignTokens::Icon::navigation);
     }
     g.restoreState();
 

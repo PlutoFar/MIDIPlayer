@@ -1,7 +1,6 @@
 #include "Core/Core.h"
 #include "PluginBridge/PluginScanProcess.h"
 #include "PluginBridge/PluginWorkerProcess.h"
-#include "UI/FluentTooltipWindow.h"
 #include "UI/MainContentComponent.h"
 #include "Utils/CommandLineMidiFileSupport.h"
 #include "Utils/DebugLogger.h"
@@ -34,7 +33,6 @@ public:
 
     applicationLookAndFeel = std::make_unique<FluentLookAndFeel>(true);
     juce::LookAndFeel::setDefaultLookAndFeel(applicationLookAndFeel.get());
-    tooltipWindow = std::make_unique<FluentTooltipWindow>(nullptr, 500);
 
     core = std::make_unique<midi::Core>();
     core->init();
@@ -65,7 +63,6 @@ public:
     LOG_DEBUG("Application Shutting Down...");
     mainWindow = nullptr;
     core = nullptr;
-    tooltipWindow = nullptr;
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     applicationLookAndFeel = nullptr;
     DebugLogger::shutdown();
@@ -189,7 +186,6 @@ public:
 
 private:
   std::unique_ptr<FluentLookAndFeel> applicationLookAndFeel;
-  std::unique_ptr<FluentTooltipWindow> tooltipWindow;
   std::unique_ptr<midi::Core> core;
   std::unique_ptr<MainWindow> mainWindow;
 };

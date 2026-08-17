@@ -217,6 +217,43 @@ public:
         juce::FontOptions(fontName, scaled(size), juce::Font::plain));
   }
 
+  void drawIconGlyph(juce::Graphics &g, const juce::String &icon,
+                     juce::Rectangle<float> bounds, float visualSize) const {
+    auto font = getIconFont(visualSize);
+    juce::GlyphArrangement glyphs;
+    glyphs.addLineOfText(font, icon, 0.0f, font.getAscent());
+
+    juce::Path path;
+    glyphs.createPath(path);
+    const auto sourceBounds = path.getBounds();
+    const auto targetBounds =
+        bounds.withSizeKeepingCentre(visualSize, visualSize);
+
+    if (sourceBounds.isEmpty()) {
+      g.setFont(font);
+      g.drawText(icon, targetBounds.toNearestInt(),
+                 juce::Justification::centred, false);
+      return;
+    }
+
+    const float scale = juce::jmin(
+        targetBounds.getWidth() / sourceBounds.getWidth(),
+        targetBounds.getHeight() / sourceBounds.getHeight());
+    const float scaledWidth = sourceBounds.getWidth() * scale;
+    const float scaledHeight = sourceBounds.getHeight() * scale;
+    const float targetX =
+        targetBounds.getX() + (targetBounds.getWidth() - scaledWidth) * 0.5f;
+    const float targetY =
+        targetBounds.getY() + (targetBounds.getHeight() - scaledHeight) * 0.5f;
+
+    path.applyTransform(
+        juce::AffineTransform::translation(-sourceBounds.getX(),
+                                           -sourceBounds.getY())
+            .scaled(scale)
+            .translated(targetX, targetY));
+    g.fillPath(path);
+  }
+
   juce::Font getLabelFont(juce::Label &label) override {
     auto f = label.getFont();
     if (f.getTypefaceName() == juce::Font::getDefaultSansSerifFontName()) {
@@ -288,10 +325,12 @@ public:
     // PUA 字符按图标字体绘制，其余文本使用界面字体。
     if (text.length() > 0 &&
         (uint32_t)text.getCharPointer().getAndAdvance() >= 0xE000) {
-      g.setFont(getIconFont(juce::jmin(
-          LegacyDesignTokens::Icon::toolbar, button.getHeight() * 0.5f)));
       g.setColour(button.getToggleState() ? juce::Colours::white
                                           : colors.textPrimary);
+      drawIconGlyph(g, text, button.getLocalBounds().toFloat(),
+                    juce::jmin(LegacyDesignTokens::Icon::toolbar,
+                               button.getHeight() * 0.6f));
+      return;
     } else {
       g.setFont(getBodyFont());
       g.setColour(button.getToggleState() ? juce::Colours::white
@@ -305,10 +344,8 @@ public:
   void drawCircularButton(juce::Graphics &g, juce::Rectangle<float> bounds,
                           const juce::String &icon, bool isPlaying, bool,
                           bool) {
-    g.setFont(getIconFont(LegacyDesignTokens::Icon::primary));
     g.setColour(colors.textPrimary);
-    g.drawText(icon, bounds.toNearestInt(), juce::Justification::centred,
-               false);
+    drawIconGlyph(g, icon, bounds, LegacyDesignTokens::Icon::primary);
   }
 
   int getSliderThumbRadius(juce::Slider &slider) override {

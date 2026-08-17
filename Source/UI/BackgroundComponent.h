@@ -8,6 +8,7 @@
 #include "../Utils/PaletteSelectionSupport.h"
 #include "BackgroundScrollMotion.h"
 #include "BackgroundThumbnailSupport.h"
+#include "CustomControls.h"
 #include "CustomLookAndFeel.h"
 #include "FluentSettingsStyle.h"
 #include <algorithm>
@@ -1514,10 +1515,10 @@ public:
         g.drawRoundedRectangle(r.reduced(0.5f), 4.0f, 3.5f);
 
         if (auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel())) {
-          g.setFont(laf->getIconFont(LegacyDesignTokens::Icon::small));
           g.setColour(isBright ? juce::Colours::black.withAlpha(0.85f)
                                : juce::Colours::white.withAlpha(0.95f));
-          g.drawText(L"\uE73E", r, juce::Justification::centred, false);
+          laf->drawIconGlyph(g, L"\uE73E", r.toFloat(),
+                             LegacyDesignTokens::Icon::small);
         }
       }
     }
@@ -1689,7 +1690,8 @@ public:
 
   BackgroundSettingsDialog(BackgroundComponent &bg, Listener *l,
                            FluentLookAndFeel &laf)
-      : background(bg), listener(l), fluentLookAndFeel(laf) {
+      : background(bg), listener(l), fluentLookAndFeel(laf),
+        tooltipOverlay(laf) {
     background.addChangeListener(this);
     setLookAndFeel(&fluentLookAndFeel);
     setSize(640, getPreferredHeight());
@@ -1905,6 +1907,9 @@ public:
 
     updateBlurRadiusVisibility();
     updateImageDependentControls();
+
+    addChildComponent(tooltipOverlay);
+    addMouseListener(&tooltipOverlay, true);
   }
 
   void paint(juce::Graphics &g) override {
@@ -1992,6 +1997,8 @@ public:
   }
 
   ~BackgroundSettingsDialog() override {
+    removeMouseListener(&tooltipOverlay);
+    tooltipOverlay.hideTooltip();
     background.removeChangeListener(this);
     if (listener)
       listener->backgroundSettingsClosed();
@@ -2399,6 +2406,7 @@ private:
   juce::Rectangle<int> sourceCardBounds, effectsCardBounds,
       behaviorCardBounds;
   BackgroundHistoryLayout historyLayout;
+  EmbeddedTooltip tooltipOverlay;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BackgroundSettingsDialog)
 };

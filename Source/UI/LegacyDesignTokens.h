@@ -33,10 +33,11 @@ inline int lineHeight(float semanticSize, float configuredBodySize) {
 namespace Icon {
 constexpr float overlay = 12.0f;
 constexpr float small = 16.0f;
-constexpr float toolbar = 20.0f;
-constexpr float transport = 24.0f;
-constexpr float navigation = 24.0f;
-constexpr float primary = 24.0f;
+constexpr float primaryAction = 24.0f;
+constexpr float toolbar = primaryAction;
+constexpr float transport = primaryAction;
+constexpr float navigation = primaryAction;
+constexpr float primary = primaryAction;
 } // namespace Icon
 
 namespace Motion {
@@ -96,8 +97,7 @@ inline int pageHeaderHeight(float configuredBodySize) {
 
 inline int transportHeight(float configuredBodySize) {
   const int textHeight =
-      Typography::lineHeight(Typography::body, configuredBodySize) +
-      Typography::lineHeight(Typography::caption, configuredBodySize);
+      Typography::lineHeight(Typography::body, configuredBodySize) * 2;
   const int controlRowHeight =
       std::max(transportPrimaryButtonSize, textHeight);
   return std::max(
