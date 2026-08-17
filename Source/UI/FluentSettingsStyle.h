@@ -10,7 +10,8 @@ constexpr int panelMargin = 16;
 constexpr int cardPadding = 16;
 constexpr int rowGap = 10;
 
-class FluentDialogWindow final : public juce::DialogWindow {
+class FluentDialogWindow final : public juce::DialogWindow,
+                                 private juce::Timer {
 public:
   FluentDialogWindow(juce::DialogWindow::LaunchOptions &options,
                      juce::Component *constraintOwner,
@@ -43,6 +44,7 @@ public:
   }
 
   ~FluentDialogWindow() override {
+    stopTimer();
     if (!nativeWindowHidden)
       Win11Helpers::hideNativeWindowAndFlush(this);
     if (restoreOwnerAlwaysOnTop && nativeOwner != nullptr)
@@ -53,8 +55,10 @@ public:
     if (closing)
       return;
     closing = true;
-    nativeWindowHidden = Win11Helpers::hideNativeWindowAndFlush(this);
-    setVisible(false);
+    animationPhase = AnimationPhase::closing;
+    animationStartAlpha = getAlpha();
+    animationStartTimeMs = juce::Time::getMillisecondCounterHiRes();
+    startTimerHz(60);
   }
 
   bool escapeKeyPressed() override {
@@ -70,6 +74,14 @@ public:
     return nativeOwner.getComponent();
   }
 
+  void startOpenAnimation() {
+    animationPhase = AnimationPhase::opening;
+    animationStartAlpha = 0.0f;
+    animationStartTimeMs = juce::Time::getMillisecondCounterHiRes();
+    setAlpha(0.0f);
+    startTimerHz(60);
+  }
+
   void centreOnOwner() {
     if (nativeOwner != nullptr &&
         Win11Helpers::centreWindowOnOwner(this, nativeOwner.getComponent()))
@@ -80,6 +92,38 @@ public:
   }
 
 private:
+  enum class AnimationPhase { idle, opening, closing };
+
+  void timerCallback() override {
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+    const double durationMs = animationPhase == AnimationPhase::opening
+                                  ? openAnimationDurationMs
+                                  : closeAnimationDurationMs;
+    const auto progress = static_cast<float>(juce::jlimit(
+        0.0, 1.0, (nowMs - animationStartTimeMs) / durationMs));
+
+    if (animationPhase == AnimationPhase::opening) {
+      setAlpha(getDialogEnterAlpha(progress));
+      if (progress >= 1.0f) {
+        setAlpha(1.0f);
+        animationPhase = AnimationPhase::idle;
+        stopTimer();
+      }
+      return;
+    }
+
+    if (animationPhase == AnimationPhase::closing) {
+      setAlpha(animationStartAlpha * getDialogExitAlpha(progress));
+      if (progress >= 1.0f) {
+        stopTimer();
+        animationPhase = AnimationPhase::idle;
+        setAlpha(0.0f);
+        nativeWindowHidden = Win11Helpers::hideNativeWindowAndFlush(this);
+        setVisible(false);
+      }
+    }
+  }
+
   WindowControlKind
   findControlAtPoint(juce::Point<float> point) const override {
     return getNonDraggableDialogControlKind(
@@ -91,6 +135,11 @@ private:
   bool restoreOwnerAlwaysOnTop = false;
   bool closing = false;
   bool nativeWindowHidden = false;
+  AnimationPhase animationPhase = AnimationPhase::idle;
+  float animationStartAlpha = 1.0f;
+  double animationStartTimeMs = 0.0;
+  static constexpr double openAnimationDurationMs = 140.0;
+  static constexpr double closeAnimationDurationMs = 100.0;
 };
 
 inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {
@@ -308,7 +357,9 @@ launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
   applyDialogWindowStyle(window);
   Win11Helpers::setOwnedWindow(window, nativeOwner);
   centreDialogNow(window);
+  window->setAlpha(0.0f);
   window->enterModalState(true, nullptr, true);
+  window->startOpenAnimation();
   refreshDialogNativeStyleLater(window);
   return window;
 }

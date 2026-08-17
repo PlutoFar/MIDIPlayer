@@ -614,6 +614,14 @@ int main(int argc, char *argv[]) {
              getNonDraggableDialogControlKind(WindowControlKind::close) ==
                  WindowControlKind::close,
          "modal dialog hit testing should block native caption movement");
+  expect(getDialogEnterAlpha(0.0f) == 0.0f &&
+             getDialogEnterAlpha(1.0f) == 1.0f &&
+             getDialogEnterAlpha(0.5f) > 0.5f,
+         "dialog enter animation should ease quickly toward full opacity");
+  expect(getDialogExitAlpha(0.0f) == 1.0f &&
+             getDialogExitAlpha(1.0f) == 0.0f &&
+             getDialogExitAlpha(0.5f) > 0.5f,
+         "dialog exit animation should remain visible before easing out");
   const auto nativeDialogPolicy = getFluentDialogWindowPolicy(true);
   expect(!nativeDialogPolicy.useSystemDropShadow,
          "all material dialogs should use one clipped native window");
