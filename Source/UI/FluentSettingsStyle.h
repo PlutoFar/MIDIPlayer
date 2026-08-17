@@ -9,45 +9,6 @@ namespace FluentSettingsStyle {
 constexpr int panelMargin = 16;
 constexpr int cardPadding = 16;
 constexpr int rowGap = 10;
-constexpr float minimumReadableSurfaceAlpha = 0.72f;
-
-inline float readableSurfaceAlpha(float requestedAlpha) {
-  return juce::jlimit(minimumReadableSurfaceAlpha, 0.96f, requestedAlpha);
-}
-
-class ScrollableDialogContent final : public juce::Component {
-public:
-  ScrollableDialogContent(juce::Component *content, bool ownsContent)
-      : viewedContent(content), minimumContentHeight(
-                                    content != nullptr ? content->getHeight()
-                                                       : 1) {
-    jassert(content != nullptr);
-    setOpaque(false);
-    setSize(content != nullptr ? content->getWidth() : 1,
-            minimumContentHeight);
-    viewport.setOpaque(false);
-    viewport.setScrollBarsShown(true, false, true, false);
-    viewport.setScrollBarThickness(10);
-    viewport.setViewedComponent(content, ownsContent);
-    addAndMakeVisible(viewport);
-  }
-
-  void resized() override {
-    viewport.setBounds(getLocalBounds());
-    if (viewedContent == nullptr)
-      return;
-
-    const int contentWidth = juce::jmax(420, viewport.getMaximumVisibleWidth());
-    viewedContent->setSize(
-        contentWidth,
-        juce::jmax(minimumContentHeight, viewedContent->getHeight()));
-  }
-
-private:
-  juce::Viewport viewport;
-  juce::Component::SafePointer<juce::Component> viewedContent;
-  int minimumContentHeight = 1;
-};
 
 class OwnerBoundsConstrainer final : public juce::ComponentBoundsConstrainer {
 public:
@@ -259,7 +220,7 @@ inline void paintCard(juce::Graphics &g, FluentLookAndFeel &lookAndFeel,
   const auto card = bounds.toFloat();
   const auto surface =
       colors.cardBackground.interpolatedWith(colors.textPrimary, 0.025f)
-          .withAlpha(readableSurfaceAlpha(dialogSurfaceAlpha() + 0.18f));
+          .withAlpha(juce::jmin(0.96f, dialogSurfaceAlpha() + 0.18f));
   g.setColour(surface);
   g.fillRoundedRectangle(card, 8.0f);
   g.setColour(colors.cardBorder.withMultipliedAlpha(0.55f));
@@ -305,9 +266,6 @@ inline void refreshDialogSurface(juce::DialogWindow *window) {
     return;
   window->getProperties().set("fluentDialogSurfaceAlpha",
                               (double)dialogSurfaceAlpha());
-  window->getProperties().set("fluentDialogHeaderSurfaceAlpha",
-                              (double)readableSurfaceAlpha(
-                                  dialogSurfaceAlpha()));
   window->repaint();
   if (auto *content = window->getContentComponent())
     content->repaint();
@@ -366,10 +324,6 @@ inline void constrainDialogToWorkArea(juce::DialogWindow *window) {
 inline juce::DialogWindow *
 launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
   options.dialogBackgroundColour = juce::Colours::transparentBlack;
-  const bool ownsContent = options.content.willDeleteObject();
-  auto *originalContent = options.content.release();
-  options.content.setOwned(
-      new ScrollableDialogContent(originalContent, ownsContent));
   auto *anchor = options.componentToCentreAround;
   auto *nativeOwner = anchor != nullptr ? anchor->getTopLevelComponent()
                                        : nullptr;

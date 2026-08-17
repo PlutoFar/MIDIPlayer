@@ -1898,7 +1898,6 @@ public:
     overlaySlider.onDragEnd = nullptr;
 
     addAndMakeVisible(monetToggle);
-    FluentLookAndFeel::setFluentSwitchStyle(monetToggle);
     monetToggle.setButtonText(L"自动提取主题色");
 
     // 背景可能仍在加载，因此同时检查已加载图像和设置中的路径
@@ -1935,7 +1934,6 @@ public:
     };
 
     addAndMakeVisible(sequentialIconToggle);
-    FluentLookAndFeel::setFluentSwitchStyle(sequentialIconToggle);
     sequentialIconToggle.setButtonText(L"更换原生图标样式");
     sequentialIconToggle.setToggleState(
         getAppSettings().getSequentialIconListStyle(),
@@ -1948,7 +1946,6 @@ public:
     };
 
     addAndMakeVisible(rememberWindowToggle);
-    FluentLookAndFeel::setFluentSwitchStyle(rememberWindowToggle);
     rememberWindowToggle.setButtonText(L"记住窗口位置和大小");
     rememberWindowToggle.setToggleState(
         getAppSettings().getRememberWindowBounds(), juce::dontSendNotification);

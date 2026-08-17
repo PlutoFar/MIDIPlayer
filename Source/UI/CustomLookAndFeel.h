@@ -527,22 +527,10 @@ public:
     juce::Rectangle<float> interactionBounds;
   };
 
-  static void setFluentSwitchStyle(juce::ToggleButton &button,
-                                   bool shouldUseSwitch = true) {
-    button.getProperties().set("fluentSwitch", shouldUseSwitch);
-  }
-
-  static bool isFluentSwitch(const juce::ToggleButton &button) {
-    return static_cast<bool>(
-        button.getProperties().getWithDefault("fluentSwitch", false));
-  }
-
   int getToggleButtonPreferredWidth(const juce::ToggleButton &button) const {
     const auto textWidth = juce::GlyphArrangement::getStringWidth(
         getBodyFont(), button.getButtonText());
-    const int indicatorSlot = isFluentSwitch(button) ? scaledInt(48)
-                                                      : scaledInt(22);
-    return indicatorSlot + juce::roundToInt(std::ceil(textWidth)) +
+    return scaledInt(22) + juce::roundToInt(std::ceil(textWidth)) +
            scaledInt(4);
   }
 
@@ -550,12 +538,9 @@ public:
   getToggleButtonLayout(const juce::ToggleButton &button) const {
     const auto localBounds = button.getLocalBounds().toFloat();
     auto textBounds = localBounds;
-    const bool switchStyle = isFluentSwitch(button);
-    const float indicatorSlot = scaled(switchStyle ? 48.0f : 22.0f);
-    auto tickBounds = textBounds.removeFromLeft(indicatorSlot)
-                          .withSizeKeepingCentre(
-                              scaled(switchStyle ? 40.0f : 18.0f),
-                              scaled(switchStyle ? 20.0f : 18.0f));
+    auto tickBounds =
+        textBounds.removeFromLeft(scaled(22.0f)).withSizeKeepingCentre(
+            scaled(18.0f), scaled(18.0f));
     const auto preferredWidth = static_cast<float>(
         juce::jmin(button.getWidth(), getToggleButtonPreferredWidth(button)));
     const auto interactionBounds = localBounds.withWidth(preferredWidth);
@@ -605,40 +590,6 @@ public:
     const bool pointerInside = layout.interactionBounds.contains(pointer);
     isMouseOver = isMouseOver && pointerInside;
     isButtonDown = isButtonDown && pointerInside;
-
-    if (isFluentSwitch(button)) {
-      const float progress = getSwitchProgress(button);
-      auto track = layout.tickBounds;
-      auto trackColour = colors.controlBackground.interpolatedWith(
-          colors.accentPrimary, progress);
-      if (isMouseOver)
-        trackColour = trackColour.interpolatedWith(colors.textPrimary, 0.08f);
-      if (!button.isEnabled())
-        trackColour = trackColour.withMultipliedAlpha(0.45f);
-
-      g.setColour(trackColour);
-      g.fillRoundedRectangle(track, track.getHeight() * 0.5f);
-      g.setColour(colors.controlBorder.withMultipliedAlpha(
-          button.isEnabled() ? 1.0f : 0.45f));
-      g.drawRoundedRectangle(track.reduced(0.5f), track.getHeight() * 0.5f,
-                             1.0f);
-
-      const float thumbSize = scaled(isButtonDown ? 12.0f : 14.0f);
-      const float startX = track.getX() + scaled(3.0f);
-      const float endX = track.getRight() - scaled(3.0f) - thumbSize;
-      const float thumbX = startX + (endX - startX) * progress;
-      const float thumbY = track.getCentreY() - thumbSize * 0.5f;
-      g.setColour(juce::Colours::white.withAlpha(button.isEnabled() ? 0.96f
-                                                                    : 0.55f));
-      g.fillEllipse(thumbX, thumbY, thumbSize, thumbSize);
-
-      g.setFont(getBodyFont());
-      g.setColour(button.isEnabled() ? colors.textPrimary
-                                     : colors.textDisabled);
-      g.drawText(button.getButtonText(), layout.textBounds.toNearestInt(),
-                 juce::Justification::centredLeft, false);
-      return;
-    }
 
     auto fill = colors.controlBackground;
     if (button.getToggleState())
@@ -836,7 +787,7 @@ public:
     auto bounds = juce::Rectangle<int>(0, 0, w, h).toFloat();
 
     const float surfaceAlpha = static_cast<float>((double)
-        window.getProperties().getWithDefault("fluentDialogHeaderSurfaceAlpha",
+        window.getProperties().getWithDefault("fluentDialogSurfaceAlpha",
                                               1.0));
     g.setColour(colors.cardBackground.withAlpha(surfaceAlpha));
     g.fillAll();
@@ -865,11 +816,6 @@ private:
     ComboBoxAnimationState motion;
   };
 
-  struct SwitchMotionEntry {
-    juce::Component::SafePointer<juce::ToggleButton> button;
-    float progress = 0.0f;
-  };
-
   ComboBoxAnimationState &getComboBoxMotion(juce::ComboBox &box) {
     for (auto &entry : comboBoxMotions)
       if (entry.box.getComponent() == &box)
@@ -877,21 +823,6 @@ private:
 
     comboBoxMotions.push_back({&box, {}});
     return comboBoxMotions.back().motion;
-  }
-
-  float getSwitchProgress(juce::ToggleButton &button) {
-    for (auto &entry : switchMotions) {
-      if (entry.button.getComponent() != &button)
-        continue;
-      const float target = button.getToggleState() ? 1.0f : 0.0f;
-      if (std::abs(entry.progress - target) > 0.001f && !isTimerRunning())
-        startTimerHz(60);
-      return entry.progress;
-    }
-
-    switchMotions.push_back(
-        {&button, button.getToggleState() ? 1.0f : 0.0f});
-    return switchMotions.back().progress;
   }
 
   void timerCallback() override {
@@ -909,22 +840,6 @@ private:
       ++it;
     }
 
-    for (auto it = switchMotions.begin(); it != switchMotions.end();) {
-      if (it->button == nullptr) {
-        it = switchMotions.erase(it);
-        continue;
-      }
-
-      const float target = it->button->getToggleState() ? 1.0f : 0.0f;
-      it->progress += (target - it->progress) * 0.24f;
-      if (std::abs(target - it->progress) < 0.002f)
-        it->progress = target;
-      else
-        keepRunning = true;
-      it->button->repaint();
-      ++it;
-    }
-
     if (!keepRunning)
       stopTimer();
   }
@@ -932,7 +847,6 @@ private:
   FluentColors colors;
   bool isDarkMode;
   std::vector<ComboBoxMotionEntry> comboBoxMotions;
-  std::vector<SwitchMotionEntry> switchMotions;
 
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FluentLookAndFeel)
