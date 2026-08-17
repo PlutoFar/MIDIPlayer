@@ -13,18 +13,9 @@ typedef long HRESULT;
 typedef unsigned long DWORD;
 typedef int BOOL;
 
-struct DwmMargins {
-  int left;
-  int right;
-  int top;
-  int bottom;
-};
-
 __declspec(dllimport) HRESULT __stdcall
 DwmSetWindowAttribute(HWND hwnd, DWORD dwAttribute, const void *pvAttribute,
                       DWORD cbAttribute);
-__declspec(dllimport) HRESULT __stdcall
-DwmExtendFrameIntoClientArea(HWND hwnd, const DwmMargins *margins);
 __declspec(dllimport) HRGN __stdcall
 CreateRoundRectRgn(int left, int top, int right, int bottom, int width,
                    int height);
@@ -208,11 +199,6 @@ inline int applyDialogMaterial(juce::Component *component,
                             &backdropType, sizeof(backdropType)) >= 0
           ? 1
           : 0;
-
-  const DwmMargins margins = usesSystemBackdrop ? DwmMargins{-1, -1, -1, -1}
-                                                : DwmMargins{0, 0, 0, 0};
-  if (DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0)
-    appliedCount++;
 
   CompositionAttributes::AccentPolicy policy;
   switch (config.type) {

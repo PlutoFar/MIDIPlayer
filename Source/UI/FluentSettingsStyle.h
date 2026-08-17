@@ -160,7 +160,6 @@ inline void refreshDialogMaterial(juce::DialogWindow *window) {
     return;
 
   const auto config = getAppSettings().getDialogMaterialConfig();
-  window->setOpaque(config.type != WindowMaterial::Type::Transparent);
   window->setColour(juce::ResizableWindow::backgroundColourId,
                     juce::Colours::transparentBlack);
   Win11Helpers::applyDialogMaterial(window, config);
@@ -175,6 +174,9 @@ inline void applyDialogWindowStyle(juce::DialogWindow *window) {
       getFluentDialogWindowPolicy(window->isUsingNativeTitleBar());
   if (window->isDropShadowEnabled() != policy.useSystemDropShadow)
     window->setDropShadowEnabled(policy.useSystemDropShadow);
+
+  if (window->isOpaque())
+    window->setOpaque(false);
 
   Win11Helpers::applyFluentDialogStyle(window, true,
                                        policy.useDwmRoundedCorners);
