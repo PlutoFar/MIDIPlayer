@@ -37,6 +37,8 @@ struct NativeWindowRect {
 };
 
 namespace DwmAttributes {
+constexpr DWORD DWMWA_TRANSITIONS_FORCEDISABLED = 3;
+constexpr DWORD DWMWA_CLOAK = 13;
 constexpr DWORD DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 constexpr DWORD DWMWA_WINDOW_CORNER_PREFERENCE = 33;
 constexpr DWORD DWMWA_SYSTEMBACKDROP_TYPE = 38;
@@ -206,6 +208,9 @@ inline bool hideNativeWindowAndFlush(juce::Component *component) {
   if (hwnd == nullptr)
     return false;
 
+  BOOL cloak = 1;
+  DwmSetWindowAttribute(hwnd, DwmAttributes::DWMWA_CLOAK, &cloak,
+                        sizeof(cloak));
   constexpr int hideWindow = 0; // SW_HIDE
   ShowWindow(hwnd, hideWindow);
   DwmFlush();
@@ -276,6 +281,12 @@ inline int applyFluentDialogStyle(juce::Component *component,
     return 0;
 
   int appliedCount = 0;
+  BOOL transitionsDisabled = 1;
+  if (DwmSetWindowAttribute(
+          hwnd, DwmAttributes::DWMWA_TRANSITIONS_FORCEDISABLED,
+          &transitionsDisabled, sizeof(transitionsDisabled)) >= 0)
+    appliedCount++;
+
   BOOL darkMode = useDarkMode ? 1 : 0;
   if (DwmSetWindowAttribute(hwnd, DwmAttributes::DWMWA_USE_IMMERSIVE_DARK_MODE,
                             &darkMode, sizeof(darkMode)) >= 0)

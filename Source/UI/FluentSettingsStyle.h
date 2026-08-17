@@ -95,7 +95,6 @@ private:
       return;
     Win11Helpers::setNativeWindowInteractionEnabled(
         nativeOwner.getComponent(), true);
-    Win11Helpers::activateNativeWindow(nativeOwner.getComponent());
     restoreOwnerInteraction = false;
   }
 
