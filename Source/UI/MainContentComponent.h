@@ -1062,6 +1062,7 @@ private:
       options.escapeKeyTriggersCloseButton = true;
       options.useNativeTitleBar = false;
       options.resizable = false;
+      options.componentToCentreAround = this;
       FluentSettingsStyle::launchDialogAsync(options);
   }
 
@@ -1779,6 +1780,7 @@ public:
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
     options.resizable = false;
+    options.componentToCentreAround = this;
     audioSettingsWindow = FluentSettingsStyle::launchDialogAsync(options);
   }
 
@@ -1796,6 +1798,7 @@ public:
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
     options.resizable = false;
+    options.componentToCentreAround = this;
     backgroundSettingsWindow =
         FluentSettingsStyle::launchDialogAsync(options);
   }
@@ -1826,6 +1829,7 @@ public:
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
     options.resizable = false;
+    options.componentToCentreAround = this;
     fontSettingsWindow = FluentSettingsStyle::launchDialogAsync(options);
   }
 

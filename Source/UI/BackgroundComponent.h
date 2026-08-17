@@ -2034,9 +2034,11 @@ public:
     overlayLabel.setBounds(overlayRow.removeFromLeft(effectLabelWidth));
     overlaySlider.setBounds(overlayRow);
     effects.removeFromTop(12);
-    monetToggle.setBounds(
-        effects.removeFromTop(
-            FluentSettingsStyle::controlHeight(fluentLookAndFeel)));
+    auto monetRow = effects.removeFromTop(
+        FluentSettingsStyle::controlHeight(fluentLookAndFeel));
+    monetToggle.setBounds(monetRow.removeFromLeft(juce::jmin(
+        monetRow.getWidth(),
+        fluentLookAndFeel.getToggleButtonPreferredWidth(monetToggle))));
     effects.removeFromTop(8);
     paletteSelector.setBounds(effects.removeFromTop(40));
 
@@ -2048,9 +2050,15 @@ public:
         behavior.removeFromTop(
             FluentSettingsStyle::controlHeight(fluentLookAndFeel));
     const int toggleWidth = (toggleRow.getWidth() - 16) / 2;
-    sequentialIconToggle.setBounds(toggleRow.removeFromLeft(toggleWidth));
+    auto sequentialArea = toggleRow.removeFromLeft(toggleWidth);
+    sequentialIconToggle.setBounds(sequentialArea.removeFromLeft(juce::jmin(
+        sequentialArea.getWidth(), fluentLookAndFeel
+                                       .getToggleButtonPreferredWidth(
+                                           sequentialIconToggle))));
     toggleRow.removeFromLeft(16);
-    rememberWindowToggle.setBounds(toggleRow);
+    rememberWindowToggle.setBounds(toggleRow.removeFromLeft(juce::jmin(
+        toggleRow.getWidth(), fluentLookAndFeel.getToggleButtonPreferredWidth(
+                                  rememberWindowToggle))));
 
     constexpr int materialLabelWidth = 112;
     behavior.removeFromTop(FluentSettingsStyle::rowGap);
@@ -2240,6 +2248,7 @@ private:
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
     options.resizable = true;
+    options.componentToCentreAround = this;
     options.content.setOwned(dialogContent);
     FluentSettingsStyle::launchDialogAsync(options);
   }

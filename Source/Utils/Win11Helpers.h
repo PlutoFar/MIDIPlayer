@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WindowMaterial.h"
+#include <cstdint>
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #if JUCE_WINDOWS
@@ -70,6 +71,30 @@ inline BOOL setWindowCompositionAttribute(HWND hwnd, void *data) {
   static auto function = reinterpret_cast<Function>(
       user32.getFunction("SetWindowCompositionAttribute"));
   return function != nullptr ? function(hwnd, data) : 0;
+}
+
+inline bool setOwnedWindow(juce::Component *window, juce::Component *owner) {
+  if (window == nullptr || owner == nullptr || window->getPeer() == nullptr ||
+      owner->getPeer() == nullptr)
+    return false;
+
+  auto windowHandle = static_cast<HWND>(window->getPeer()->getNativeHandle());
+  auto ownerHandle = static_cast<HWND>(owner->getPeer()->getNativeHandle());
+  if (windowHandle == nullptr || ownerHandle == nullptr ||
+      windowHandle == ownerHandle)
+    return false;
+
+  using Function = std::intptr_t(__stdcall *)(HWND, int, std::intptr_t);
+  static juce::DynamicLibrary user32("user32.dll");
+  static auto function = reinterpret_cast<Function>(
+      user32.getFunction("SetWindowLongPtrW"));
+  if (function == nullptr)
+    return false;
+
+  constexpr int ownerWindowIndex = -8; // GWLP_HWNDPARENT for top-level windows.
+  function(windowHandle, ownerWindowIndex,
+           reinterpret_cast<std::intptr_t>(ownerHandle));
+  return true;
 }
 
 inline bool isWindows11OrLater() {
@@ -309,6 +334,9 @@ inline void removeWin11Style(juce::Component *component) {
 #else
 namespace Win11Helpers {
 inline bool isWindows11OrLater() { return false; }
+inline bool setOwnedWindow(juce::Component *, juce::Component *) {
+  return false;
+}
 inline int applyWin11Style(juce::Component *, bool = true) { return 0; }
 inline int applyFluentDialogStyle(juce::Component *, bool = true,
                                   bool = false) {

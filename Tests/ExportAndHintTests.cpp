@@ -599,6 +599,10 @@ int main(int argc, char *argv[]) {
          "material dialogs should use DWM rounded corners");
   expect(!customDialogPolicy.useWindowRegion,
          "material dialogs should avoid region clipping during window moves");
+  expect(customDialogPolicy.constrainToOwner &&
+             customDialogPolicy.useNativeOwner &&
+             !customDialogPolicy.allowAlwaysOnTop,
+         "settings dialogs should stay inside and belong to the main window");
   const auto nativeDialogPolicy = getFluentDialogWindowPolicy(true);
   expect(nativeDialogPolicy.useSystemDropShadow,
          "native-titlebar dialogs may use the matching system shadow");
@@ -606,6 +610,25 @@ int main(int argc, char *argv[]) {
          "native-titlebar dialogs may use Windows 11 rounded corners");
   expect(!nativeDialogPolicy.useWindowRegion,
          "native-titlebar dialogs should not override the system window region");
+
+  const juce::Rectangle<int> ownerBounds(100, 100, 800, 600);
+  expect(constrainDialogBoundsToOwner({850, 650, 300, 200}, ownerBounds) ==
+             juce::Rectangle<int>(600, 500, 300, 200),
+         "owned dialogs should stop at the owner's right and bottom edges");
+  expect(constrainDialogBoundsToOwner({0, 0, 1000, 700}, ownerBounds) ==
+             ownerBounds,
+         "owned dialogs larger than the owner should fit inside its bounds");
+
+  FluentLookAndFeel interactionLookAndFeel(true);
+  juce::ToggleButton interactionToggle(L"更换原生图标样式");
+  interactionToggle.setBounds(0, 0, 420, 40);
+  const auto toggleLayout =
+      interactionLookAndFeel.getToggleButtonLayout(interactionToggle);
+  expect(toggleLayout.interactionBounds.contains(
+             juce::Point<float>(12.0f, 20.0f)) &&
+             !toggleLayout.interactionBounds.contains(
+                 juce::Point<float>(320.0f, 20.0f)),
+         "toggle hover feedback should stop after its visible label");
 
   const auto normalisedMaterial = WindowMaterial::normalise(
       {WindowMaterial::Type::Acrylic, 0.1f, 80});

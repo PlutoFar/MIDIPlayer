@@ -521,6 +521,34 @@ public:
     return label;
   }
 
+  struct ToggleButtonLayout {
+    juce::Rectangle<float> tickBounds;
+    juce::Rectangle<float> textBounds;
+    juce::Rectangle<float> interactionBounds;
+  };
+
+  int getToggleButtonPreferredWidth(const juce::ToggleButton &button) const {
+    const auto textWidth = juce::GlyphArrangement::getStringWidth(
+        getBodyFont(), button.getButtonText());
+    return scaledInt(22) + juce::roundToInt(std::ceil(textWidth)) +
+           scaledInt(4);
+  }
+
+  ToggleButtonLayout
+  getToggleButtonLayout(const juce::ToggleButton &button) const {
+    const auto localBounds = button.getLocalBounds().toFloat();
+    auto textBounds = localBounds;
+    auto tickBounds =
+        textBounds.removeFromLeft(scaled(22.0f)).withSizeKeepingCentre(
+            scaled(18.0f), scaled(18.0f));
+    const auto preferredWidth = static_cast<float>(
+        juce::jmin(button.getWidth(), getToggleButtonPreferredWidth(button)));
+    const auto interactionBounds = localBounds.withWidth(preferredWidth);
+    textBounds.setWidth(
+        juce::jmax(0.0f, interactionBounds.getRight() - textBounds.getX()));
+    return {tickBounds, textBounds, interactionBounds};
+  }
+
   juce::Font getComboBoxFont(juce::ComboBox &) override {
     return getBodyFont();
   }
@@ -557,10 +585,11 @@ public:
 
   void drawToggleButton(juce::Graphics &g, juce::ToggleButton &button,
                         bool isMouseOver, bool isButtonDown) override {
-    auto bounds = button.getLocalBounds().toFloat();
-    auto tickBounds =
-        bounds.removeFromLeft(scaled(22.0f)).withSizeKeepingCentre(
-            scaled(18.0f), scaled(18.0f));
+    const auto layout = getToggleButtonLayout(button);
+    const auto pointer = button.getMouseXYRelative().toFloat();
+    const bool pointerInside = layout.interactionBounds.contains(pointer);
+    isMouseOver = isMouseOver && pointerInside;
+    isButtonDown = isButtonDown && pointerInside;
 
     auto fill = colors.controlBackground;
     if (button.getToggleState())
@@ -571,21 +600,22 @@ public:
       fill = colors.controlHover;
 
     g.setColour(fill);
-    g.fillRoundedRectangle(tickBounds, scaled(4.0f));
+    g.fillRoundedRectangle(layout.tickBounds, scaled(4.0f));
     g.setColour(button.getToggleState() ? colors.accentPrimary.darker(0.25f)
                                         : colors.controlBorder);
-    g.drawRoundedRectangle(tickBounds.reduced(0.5f), scaled(4.0f), 1.0f);
+    g.drawRoundedRectangle(layout.tickBounds.reduced(0.5f), scaled(4.0f),
+                           1.0f);
 
     if (button.getToggleState()) {
       juce::Path tick;
-      const auto x = tickBounds.getX();
-      const auto y = tickBounds.getY();
-      tick.startNewSubPath(x + tickBounds.getWidth() * 0.24f,
-                           y + tickBounds.getHeight() * 0.52f);
-      tick.lineTo(x + tickBounds.getWidth() * 0.43f,
-                  y + tickBounds.getHeight() * 0.70f);
-      tick.lineTo(x + tickBounds.getWidth() * 0.77f,
-                  y + tickBounds.getHeight() * 0.30f);
+      const auto x = layout.tickBounds.getX();
+      const auto y = layout.tickBounds.getY();
+      tick.startNewSubPath(x + layout.tickBounds.getWidth() * 0.24f,
+                           y + layout.tickBounds.getHeight() * 0.52f);
+      tick.lineTo(x + layout.tickBounds.getWidth() * 0.43f,
+                  y + layout.tickBounds.getHeight() * 0.70f);
+      tick.lineTo(x + layout.tickBounds.getWidth() * 0.77f,
+                  y + layout.tickBounds.getHeight() * 0.30f);
       g.setColour(juce::Colours::white);
       g.strokePath(tick, juce::PathStrokeType(scaled(1.8f),
                                               juce::PathStrokeType::curved,
@@ -595,7 +625,7 @@ public:
     g.setFont(getBodyFont());
     g.setColour(button.isEnabled() ? colors.textPrimary
                                    : colors.textDisabled);
-    g.drawText(button.getButtonText(), bounds.toNearestInt(),
+    g.drawText(button.getButtonText(), layout.textBounds.toNearestInt(),
                juce::Justification::centredLeft, false);
   }
 

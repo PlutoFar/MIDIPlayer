@@ -10,6 +10,107 @@ constexpr int panelMargin = 16;
 constexpr int cardPadding = 16;
 constexpr int rowGap = 10;
 
+class OwnerBoundsConstrainer final : public juce::ComponentBoundsConstrainer {
+public:
+  explicit OwnerBoundsConstrainer(juce::Component *ownerComponent)
+      : owner(ownerComponent) {}
+
+  void setOwner(juce::Component *ownerComponent) { owner = ownerComponent; }
+
+  void checkBounds(juce::Rectangle<int> &bounds,
+                   const juce::Rectangle<int> &previousBounds,
+                   const juce::Rectangle<int> &limits, bool isStretchingTop,
+                   bool isStretchingLeft, bool isStretchingBottom,
+                   bool isStretchingRight) override {
+    juce::ComponentBoundsConstrainer::checkBounds(
+        bounds, previousBounds, limits, isStretchingTop, isStretchingLeft,
+        isStretchingBottom, isStretchingRight);
+    if (owner != nullptr)
+      bounds = constrainDialogBoundsToOwner(bounds, owner->getScreenBounds());
+  }
+
+private:
+  juce::Component::SafePointer<juce::Component> owner;
+};
+
+class FluentDialogWindow final : public juce::DialogWindow,
+                                 private juce::ComponentListener {
+public:
+  FluentDialogWindow(juce::DialogWindow::LaunchOptions &options,
+                     juce::Component *constraintOwner,
+                     juce::Component *nativeOwner)
+      : juce::DialogWindow(
+            options.dialogTitle, options.dialogBackgroundColour,
+            options.escapeKeyTriggersCloseButton, true,
+            options.componentToCentreAround != nullptr
+                ? juce::Component::getApproximateScaleFactorForComponent(
+                      options.componentToCentreAround)
+                : 1.0f),
+        constraintOwner(constraintOwner), nativeOwner(nativeOwner),
+        ownerConstrainer(constraintOwner) {
+    if (options.content.willDeleteObject())
+      setContentOwned(options.content.release(), true);
+    else
+      setContentNonOwned(options.content.release(), true);
+
+    auto *centreComponent = options.componentToCentreAround != nullptr
+                                ? options.componentToCentreAround
+                                : constraintOwner;
+    centreAroundComponent(centreComponent, getWidth(), getHeight());
+    setResizable(options.resizable, options.useBottomRightCornerResizer);
+    setUsingNativeTitleBar(options.useNativeTitleBar);
+    setAlwaysOnTop(false);
+    setConstrainer(&ownerConstrainer);
+    if (this->nativeOwner != nullptr)
+      this->nativeOwner->addComponentListener(this);
+    if (this->constraintOwner != nullptr &&
+        this->constraintOwner != this->nativeOwner)
+      this->constraintOwner->addComponentListener(this);
+    constrainToOwner();
+  }
+
+  ~FluentDialogWindow() override {
+    if (nativeOwner != nullptr)
+      nativeOwner->removeComponentListener(this);
+    if (constraintOwner != nullptr && constraintOwner != nativeOwner)
+      constraintOwner->removeComponentListener(this);
+    setConstrainer(nullptr);
+  }
+
+  void closeButtonPressed() override { setVisible(false); }
+
+  juce::Component *getConstraintOwner() const {
+    return constraintOwner.getComponent();
+  }
+
+  juce::Component *getNativeOwner() const {
+    return nativeOwner.getComponent();
+  }
+
+  void constrainToOwner() {
+    if (constraintOwner != nullptr)
+      setBoundsConstrained(getBounds());
+  }
+
+private:
+  void componentMovedOrResized(juce::Component &, bool, bool) override {
+    constrainToOwner();
+  }
+
+  void componentBeingDeleted(juce::Component &component) override {
+    if (nativeOwner.getComponent() == &component)
+      nativeOwner = nullptr;
+    if (constraintOwner.getComponent() == &component) {
+      constraintOwner = nullptr;
+      ownerConstrainer.setOwner(nullptr);
+    }
+  }
+
+  juce::Component::SafePointer<juce::Component> constraintOwner;
+  juce::Component::SafePointer<juce::Component> nativeOwner;
+  OwnerBoundsConstrainer ownerConstrainer;
+};
+
 inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {
   return LegacyDesignTokens::Layout::controlHeight(
       lookAndFeel.getUIFontSize());
@@ -133,6 +234,13 @@ inline void constrainDialogToWorkAreaNow(juce::DialogWindow *window) {
   if (window == nullptr)
     return;
 
+  if (auto *ownedWindow = dynamic_cast<FluentDialogWindow *>(window)) {
+    if (ownedWindow->getConstraintOwner() != nullptr) {
+      ownedWindow->constrainToOwner();
+      return;
+    }
+  }
+
   auto &displays = juce::Desktop::getInstance().getDisplays();
   auto *display =
       displays.getDisplayForRect(window->getScreenBounds(), false);
@@ -197,6 +305,10 @@ inline void constrainDialogToWorkArea(juce::DialogWindow *window) {
       refreshDialogMaterial(safeWindow.getComponent());
       Win11Helpers::applyRoundedWindowRegion(
           safeWindow.getComponent(), policy.useWindowRegion);
+      if (auto *ownedWindow =
+              dynamic_cast<FluentDialogWindow *>(safeWindow.getComponent()))
+        Win11Helpers::setOwnedWindow(ownedWindow,
+                                     ownedWindow->getNativeOwner());
       constrainDialogToWorkAreaNow(safeWindow.getComponent());
     }
   });
@@ -205,8 +317,17 @@ inline void constrainDialogToWorkArea(juce::DialogWindow *window) {
 inline juce::DialogWindow *
 launchDialogAsync(juce::DialogWindow::LaunchOptions &options) {
   options.dialogBackgroundColour = juce::Colours::transparentBlack;
-  auto *window = options.create();
+  auto *anchor = options.componentToCentreAround;
+  auto *nativeOwner = anchor != nullptr ? anchor->getTopLevelComponent()
+                                       : nullptr;
+  auto *constraintOwner = anchor;
+  if (auto *parentDialog = dynamic_cast<FluentDialogWindow *>(nativeOwner))
+    constraintOwner = parentDialog->getConstraintOwner();
+
+  auto *window =
+      new FluentDialogWindow(options, constraintOwner, nativeOwner);
   applyDialogWindowStyle(window);
+  Win11Helpers::setOwnedWindow(window, nativeOwner);
   constrainDialogToWorkAreaNow(window);
   window->enterModalState(true, nullptr, true);
   constrainDialogToWorkArea(window);
