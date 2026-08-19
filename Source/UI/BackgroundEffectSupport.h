@@ -34,3 +34,8 @@ inline bool shouldDrawOriginalBackgroundImage(
   return !state.isTransitioning && state.hasOriginalImage &&
          !state.hasProcessedImage && !effectRequiresProcessedImage;
 }
+
+inline bool isBackgroundEffectStrengthEnabled(int selectedEffectId,
+                                              bool hasBackgroundImage) {
+  return hasBackgroundImage && selectedEffectId > 1;
+}

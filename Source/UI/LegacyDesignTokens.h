@@ -14,6 +14,7 @@ constexpr float minimumResolvedSize = 12.0f;
 
 constexpr float caption = 12.0f;
 constexpr float body = 14.0f;
+constexpr float windowTitle = 16.0f;
 constexpr float bodyLarge = 18.0f;
 constexpr float navigation = 18.0f;
 constexpr float subtitle = 20.0f;
@@ -32,6 +33,7 @@ inline int lineHeight(float semanticSize, float configuredBodySize) {
 
 namespace Icon {
 constexpr float overlay = 12.0f;
+constexpr float windowCaption = 12.0f;
 constexpr float small = 16.0f;
 constexpr float paneToggle = 20.0f;
 constexpr float primaryAction = 24.0f;
@@ -46,6 +48,24 @@ constexpr float navigationPressedScale = 0.85f;
 constexpr float navigationHoverScale = 1.15f;
 constexpr float playbackModeInitialScale = 0.8f;
 } // namespace Motion
+
+namespace Slider {
+constexpr float trackThickness = 4.0f;
+constexpr float thumbDiameter = 16.0f;
+constexpr float innerThumbDiameter = 8.0f;
+constexpr float hoverInnerThumbDiameter = 10.0f;
+constexpr float pressedInnerThumbDiameter = 6.0f;
+constexpr int horizontalMinimumWidth = 120;
+constexpr int volumeTrackLength = 120;
+// 控件总宽度等于可视轨道长度；圆点半径由滑块布局从轨道两端内缩。
+constexpr int volumeControlWidth = volumeTrackLength;
+// 普通音乐播放器常用的立方音频渐变：界面百分比保持线性，输出增益取 level^3。
+constexpr float volumeGainExponent = 3.0f;
+constexpr int volumeTooltipGap = 6;
+constexpr int volumeTooltipMinimumHeight = 32;
+constexpr int volumeTooltipHorizontalPadding = 10;
+constexpr double volumeStep = 0.01;
+} // namespace Slider
 
 namespace Layout {
 // 所有尺寸均为逻辑像素；JUCE peer 负责应用当前显示器的 DPI 缩放。
@@ -67,17 +87,26 @@ constexpr int transportHorizontalPadding = 20;
 constexpr int transportVerticalPadding = 8;
 constexpr int transportProgressHeight = 24;
 constexpr int transportProgressGap = 4;
-constexpr int transportVolumeAreaWidth = 200;
+constexpr int transportVolumeAreaWidth =
+    transportButtonSize * 2 + Slider::volumeControlWidth + 8;
 constexpr int transportMinimumTrackWidth = 220;
 constexpr int transportCentrePadding = 40;
 constexpr int contentHorizontalPadding = 24;
 constexpr int contentVerticalPadding = 16;
+constexpr int playlistMinimumRowHeight = 44;
+constexpr int playlistMaximumRowHeight = 96;
+constexpr int playlistRowVerticalPadding = 16;
+constexpr int playlistManualRowVerticalPadding = 8;
 constexpr int pageHeaderMinimumHeight = 56;
 constexpr int pageTitleMinimumWidth = 160;
 constexpr int pageTitleWidth = 240;
 constexpr int pluginSelectorMinimumWidth = 160;
 constexpr int pluginSelectorWidth = 220;
 constexpr int controlGap = 8;
+constexpr int dialogTitleBarHeight = 32;
+constexpr int dialogTitleHorizontalPadding = 16;
+constexpr int dialogCaptionButtonWidth = 46;
+constexpr int dialogCaptionButtonOuterMargin = 0;
 
 inline int navigationItemHeight(float configuredBodySize) {
   return std::max(
@@ -89,6 +118,25 @@ inline int controlHeight(float configuredBodySize) {
   return std::max(
       minimumControlHeight,
       Typography::lineHeight(Typography::body, configuredBodySize) + 12);
+}
+
+inline int playlistRowHeight(float fontHeight) {
+  return std::max(playlistMinimumRowHeight,
+                  static_cast<int>(std::ceil(fontHeight)) +
+                      playlistRowVerticalPadding);
+}
+
+inline int playlistRowHeight(float fontHeight, bool automatic,
+                             int manualRowHeight) {
+  if (automatic)
+    return playlistRowHeight(fontHeight);
+
+  const int contentMinimum =
+      static_cast<int>(std::ceil(fontHeight)) +
+      playlistManualRowVerticalPadding;
+  return std::clamp(manualRowHeight,
+                    std::max(playlistMinimumRowHeight, contentMinimum),
+                    playlistMaximumRowHeight);
 }
 
 inline int pageHeaderHeight(float configuredBodySize) {

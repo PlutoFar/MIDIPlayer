@@ -5,10 +5,12 @@
 
 namespace WindowMaterial {
 
+constexpr int maximumSoftwareBlurRadius = 40;
+
 enum class Type {
   Transparent = 1,
   GaussianBlur = 2,
-  FrostedGlass = 3,
+  Aero = 3,
   Acrylic = 4
 };
 
@@ -28,6 +30,24 @@ inline Config normalise(Config config) {
   return config;
 }
 
+inline int softwareBlurRadius(Config config) {
+  config = normalise(config);
+  switch (config.type) {
+  case Type::Transparent:
+    return 0;
+  case Type::GaussianBlur:
+    return juce::jlimit(2, 32,
+                        juce::roundToInt(config.strength * 0.55f));
+  case Type::Aero:
+    return juce::jlimit(4, 36,
+                        juce::roundToInt(config.strength * 0.65f));
+  case Type::Acrylic:
+    return juce::jlimit(4, maximumSoftwareBlurRadius,
+                        juce::roundToInt(config.strength * 0.70f));
+  }
+  return 0;
+}
+
 inline float surfaceAlpha(Config config) {
   config = normalise(config);
   switch (config.type) {
@@ -35,7 +55,7 @@ inline float surfaceAlpha(Config config) {
     return config.opacity;
   case Type::GaussianBlur:
     return juce::jlimit(0.18f, 0.88f, 0.08f + config.opacity * 0.72f);
-  case Type::FrostedGlass:
+  case Type::Aero:
     return juce::jlimit(0.16f, 0.82f, 0.06f + config.opacity * 0.66f);
   case Type::Acrylic:
     return juce::jlimit(0.12f, 0.72f, 0.03f + config.opacity * 0.58f);
@@ -75,7 +95,7 @@ inline void paintTexture(juce::Graphics &graphics, Config config,
     return;
   }
 
-  if (config.type == Type::FrostedGlass) {
+  if (config.type == Type::Aero) {
     graphics.setColour(
         juce::Colours::white.withAlpha(0.02f + effect * 0.16f));
     graphics.fillRect(clip);

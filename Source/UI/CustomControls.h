@@ -172,7 +172,12 @@ public:
                         .interpolatedWith(closePressed,
                                           destructivePressProgress)
                         .withMultipliedAlpha(destructiveHoverProgress));
-        g.fillRect(bounds);
+        juce::Path closeSurface;
+        closeSurface.addRoundedRectangle(
+            bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(),
+            fluentDialogCornerRadius, fluentDialogCornerRadius, false, true,
+            false, false);
+        g.fillPath(closeSurface);
       } else {
         laf->drawButtonBackground(g, *this, juce::Colours::transparentBlack,
                                   isMouseOver, isButtonDown);
@@ -275,31 +280,51 @@ private:
     直接作为父窗口子组件绘制，不创建原生 TooltipWindow，
     避免独立窗口在圆角和透明区域留下残影。
 */
-class EmbeddedTooltip : public juce::Component, public juce::Timer {
+class EmbeddedTooltip : public juce::Component,
+                        public juce::Timer,
+                        private juce::FocusChangeListener,
+                        private juce::KeyListener {
 public:
   explicit EmbeddedTooltip(FluentLookAndFeel &laf) : lookAndFeel(laf) {
-    setInterceptsMouseClicks(false, false);
+    setInterceptsMouseClicks(true, false);
     setAlwaysOnTop(true);
     setVisible(false);
+    juce::Desktop::getInstance().addFocusChangeListener(this);
+  }
+
+  ~EmbeddedTooltip() override {
+    if (auto *desktop = juce::Desktop::getInstanceWithoutCreating())
+      desktop->removeFocusChangeListener(this);
+    if (auto *parent = keyListenerParent.getComponent())
+      parent->removeKeyListener(this);
+  }
+
+  void setPaintedByParentOverlay(bool shouldDeferPainting) {
+    paintedByParentOverlay = shouldDeferPainting;
+    repaint();
   }
 
   void mouseMove(const juce::MouseEvent &event) override {
-    auto *comp = event.eventComponent;
-    if (comp != nullptr && comp != this && comp != getParentComponent()) {
-      if (auto *tooltipClient = dynamic_cast<juce::TooltipClient *>(comp)) {
-        auto tip = tooltipClient->getTooltip();
-        if (tip.isNotEmpty()) {
-          showForComponent(comp, tip);
-          return;
-        }
+    if (event.eventComponent != this) {
+      if (auto *target = findTooltipTarget(event.eventComponent)) {
+        const auto tip =
+            dynamic_cast<juce::TooltipClient *>(target)->getTooltip();
+        showForComponent(target, tip);
+        return;
       }
     }
+
+    if (isVisible() &&
+        (event.eventComponent == this ||
+         isPointerInInteractionBridge(event.getScreenPosition())))
+      return;
+
     hideTooltip();
   }
 
   void mouseExit(const juce::MouseEvent &event) override {
     juce::ignoreUnused(event);
-    hideTooltip();
+    // 可见提示框由定时状态检查处理退出，保留穿过锚点间隙的指针路径。
   }
 
   void mouseDown(const juce::MouseEvent &) override {
@@ -309,6 +334,8 @@ public:
   void mouseUp(const juce::MouseEvent &) override {
     hideTooltip();
   }
+
+  void parentHierarchyChanged() override { updateKeyListenerParent(); }
 
   // 为特定组件显示 tooltip，需要转换到父组件坐标系。
   void showForComponent(juce::Component *target, const juce::String &text) {
@@ -363,6 +390,12 @@ public:
   }
 
   void paint(juce::Graphics &g) override {
+    if (paintedByParentOverlay)
+      return;
+    paintOverlay(g);
+  }
+
+  void paintOverlay(juce::Graphics &g) {
     lookAndFeel.drawFluentTooltip(g, currentText,
                                   getLocalBounds().toFloat());
   }
@@ -387,6 +420,56 @@ public:
   }
 
 private:
+  void globalFocusChanged(juce::Component *focusedComponent) override {
+    if (auto *target = findTooltipTarget(focusedComponent)) {
+      const auto tip =
+          dynamic_cast<juce::TooltipClient *>(target)->getTooltip();
+      showForComponent(target, tip);
+      return;
+    }
+
+    if (shouldDismissTooltipForCurrentState())
+      hideTooltip();
+  }
+
+  bool keyPressed(const juce::KeyPress &key,
+                  juce::Component *) override {
+    if (key == juce::KeyPress::escapeKey &&
+        (isVisible() || isWaitingToShow)) {
+      hideTooltip();
+      return true;
+    }
+    return false;
+  }
+
+  void updateKeyListenerParent() {
+    auto *newParent = getParentComponent();
+    if (keyListenerParent.getComponent() == newParent)
+      return;
+    if (auto *oldParent = keyListenerParent.getComponent())
+      oldParent->removeKeyListener(this);
+    keyListenerParent =
+        juce::Component::SafePointer<juce::Component>(newParent);
+    if (newParent != nullptr)
+      newParent->addKeyListener(this);
+  }
+
+  juce::Component *findTooltipTarget(juce::Component *component) const {
+    return TooltipPlacement::findAnchorTarget(component, getParentComponent());
+  }
+
+  bool isPointerInInteractionBridge(juce::Point<int> screenPosition) const {
+    auto *target = currentTarget.getComponent();
+    auto *parent = getParentComponent();
+    if (!isVisible() || target == nullptr || parent == nullptr)
+      return false;
+
+    const auto targetBounds =
+        parent->getLocalArea(target, target->getLocalBounds());
+    const auto bridge = targetBounds.getUnion(getBounds()).expanded(2);
+    return bridge.contains(parent->getLocalPoint(nullptr, screenPosition));
+  }
+
   bool shouldDismissTooltipForCurrentState(
       juce::Component *targetOverride = nullptr) const {
     auto *target = targetOverride != nullptr
@@ -394,7 +477,16 @@ private:
                        : currentTarget.getComponent();
     auto *parent = getParentComponent();
     if (target == nullptr || parent == nullptr || !target->isShowing() ||
-        !parent->isShowing() || !target->isMouseOver(true))
+        !parent->isShowing())
+      return true;
+
+    const bool targetIsActive = target->isMouseOver(true) ||
+                                target->hasKeyboardFocus(true);
+    const bool tooltipInteractionActive =
+        isVisible() &&
+        (isMouseOver(false) || isPointerInInteractionBridge(
+                                   juce::Desktop::getMousePosition()));
+    if (!targetIsActive && !tooltipInteractionActive)
       return true;
 
     if (auto *topLevel = dynamic_cast<juce::TopLevelWindow *>(
@@ -410,38 +502,6 @@ private:
 
     return juce::ModifierKeys::getCurrentModifiers()
         .isAnyMouseButtonDown();
-  }
-
-  static bool isTooltipAvoidanceControl(const juce::Component &component) {
-    return dynamic_cast<const juce::Button *>(&component) != nullptr ||
-           dynamic_cast<const juce::ComboBox *>(&component) != nullptr ||
-           dynamic_cast<const juce::Slider *>(&component) != nullptr ||
-           dynamic_cast<const juce::TextEditor *>(&component) != nullptr;
-  }
-
-  void collectTooltipAvoidAreas(juce::Component &component,
-                                juce::Component &topLevel,
-                                juce::Component &target,
-                                juce::Array<juce::Rectangle<int>> &areas) {
-    for (int index = 0; index < component.getNumChildComponents(); ++index) {
-      auto *child = component.getChildComponent(index);
-      if (child == nullptr || child == this || !child->isShowing())
-        continue;
-
-      if (child == &target || target.isParentOf(child) ||
-          child->isParentOf(&target)) {
-        collectTooltipAvoidAreas(*child, topLevel, target, areas);
-        continue;
-      }
-
-      if (isTooltipAvoidanceControl(*child)) {
-        auto bounds = topLevel.getLocalArea(child, child->getLocalBounds());
-        if (!bounds.isEmpty())
-          areas.add(bounds.expanded(4));
-      }
-
-      collectTooltipAvoidAreas(*child, topLevel, target, areas);
-    }
   }
 
   void showTooltipNow() {
@@ -470,12 +530,8 @@ private:
     auto targetBounds = topLevel->getLocalArea(currentTarget.getComponent(),
                                                currentTarget->getLocalBounds());
 
-    juce::Array<juce::Rectangle<int>> avoidAreas;
-    collectTooltipAvoidAreas(*topLevel, *topLevel,
-                             *currentTarget.getComponent(), avoidAreas);
-
     const auto bounds = TooltipPlacement::place(
-        tooltipSize, targetBounds, topLevel->getLocalBounds(), avoidAreas);
+        tooltipSize, targetBounds, topLevel->getLocalBounds());
     if (bounds.isEmpty()) {
       hideTooltip();
       return;
@@ -494,6 +550,8 @@ private:
   juce::String pendingText;
   int delayCounter = 0;
   bool isWaitingToShow = false;
+  bool paintedByParentOverlay = false;
+  juce::Component::SafePointer<juce::Component> keyListenerParent;
 };
 
 class ToastComponent : public juce::Component, public juce::Timer {
@@ -604,7 +662,41 @@ FluentLookAndFeel::createDocumentWindowButton(int buttonType) {
     b->setButtonText(L"\uE922");
   }
 
-  b->setSystemGlyphSize(12.0f);
+  b->setSystemGlyphSize(LegacyDesignTokens::Icon::windowCaption);
 
   return b;
+}
+
+inline void FluentLookAndFeel::positionDocumentWindowButtons(
+    juce::DocumentWindow &window, int titleBarX, int titleBarY, int titleBarW,
+    int titleBarH, juce::Button *minimiseButton, juce::Button *maximiseButton,
+    juce::Button *closeButton, bool positionTitleBarButtonsOnLeft) {
+  const int margin =
+      LegacyDesignTokens::Layout::dialogCaptionButtonOuterMargin;
+  const int buttonHeight = juce::jmax(1, titleBarH);
+  const int buttonWidth =
+      LegacyDesignTokens::Layout::dialogCaptionButtonWidth;
+  const int outerRight = juce::jmax(window.getWidth(), titleBarX + titleBarW);
+  const int rightAlignedY = 0;
+  const int rightAlignedHeight = buttonHeight + juce::jmax(0, titleBarY);
+  int x = positionTitleBarButtonsOnLeft
+              ? titleBarX + margin
+              : outerRight - margin - buttonWidth;
+
+  auto position = [&](juce::Button *button) {
+    if (button == nullptr)
+      return;
+    button->setBounds(x,
+                      positionTitleBarButtonsOnLeft ? titleBarY : rightAlignedY,
+                      buttonWidth,
+                      positionTitleBarButtonsOnLeft ? buttonHeight
+                                                    : rightAlignedHeight);
+    x += positionTitleBarButtonsOnLeft ? buttonWidth : -buttonWidth;
+  };
+
+  position(closeButton);
+  if (positionTitleBarButtonsOnLeft)
+    std::swap(minimiseButton, maximiseButton);
+  position(maximiseButton);
+  position(minimiseButton);
 }

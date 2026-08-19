@@ -1,77 +1,97 @@
 # MIDI Player
 
-[简体中文](README_CN.md) | English
-
-MIDI Player is a Windows desktop player and VST3 instrument host built with C++17, JUCE, and WinUI 3. It provides two front ends over the same playback core: a native WinUI edition and a JUCE-based Legacy edition.
-
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4)
 ![C++](https://img.shields.io/badge/C%2B%2B-17-00599C)
 ![JUCE](https://img.shields.io/badge/JUCE-8.0.15-F28C28)
-![WinUI](https://img.shields.io/badge/WinUI-3-0078D4)
 
-## Editions
+MIDI Player 是一款面向 Windows x64 的 MIDI 播放器和 VST3 乐器宿主。当前维护版本采用 C++17 与 JUCE，VST3 乐器运行在独立工作进程中，插件异常不会直接终止播放器主进程。
 
-| Edition | UI | Recommended use | Runtime requirements |
-| --- | --- | --- | --- |
-| WinUI | Windows App SDK / WinUI 3 | Windows 11-style native interface | Windows App Runtime 2.3.1 x64 or a compatible newer 2.x release; VC++ x64 runtime |
-| Legacy | JUCE desktop UI | Broad compatibility and systems without Windows App Runtime | VC++ x64 runtime |
+## 维护状态
 
-Both editions use `MidiWorker.exe` to host VST3 instruments in a separate process. The worker must remain next to `MidiPlayer.exe`.
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| JUCE 桌面界面 | 持续维护 | 当前功能开发、问题修复和发布均以此实现为准 |
+| 播放核心与 VST3 工作进程 | 持续维护 | 负责播放、列表、导出、音频设备和插件隔离 |
+| WinUI 3 界面 | 停止维护 | 不再接收功能开发和界面问题修复 |
+| WinUI 桥接代码 | 待移除 | 当前主分支仅为迁移保留，后续版本将删除 |
 
-## Features
+WinUI 3 实现将分离到 `archive/winui-unmaintained` 分支，仅用于历史查阅。分支迁移完成后，主分支将移除 `Source/WinUI/`、`MidiWinBridge`、WinUI 设置适配器以及相关构建配置。新功能和问题反馈只覆盖 JUCE 桌面界面。
 
-- VST3 instrument discovery, loading, editor hosting, and crash isolation
-- MIDI file import by picker, shell open, or drag and drop
-- Editable and persistent playlists with sequential, list loop, single loop, and shuffle modes
-- Audio device configuration with Windows audio backends and optional ASIO support
-- Offline export to WAV, FLAC, and Ogg Vorbis with format-aware sample-rate, bit-depth, quality, and tail options
-- Custom backgrounds with Gaussian blur, Aero, Acrylic, overlay, recent-image history, and palette extraction
-- Custom interface and playlist fonts
-- Window pinning and `.mid` / `.midi` file association support
-- Portable mode through `portable.dat`, with local `Settings/` and `VST3/` directories
+## 功能
 
-## Download
+- 扫描、加载和卸载 64 位 VST3 乐器
+- 在独立 `MidiWorker.exe` 进程中运行插件
+- 打开插件编辑器，并在插件进程异常后恢复播放器状态
+- 通过文件选择器、系统文件打开和拖放导入 `.mid`、`.midi` 文件
+- 编辑、排序、保存和加载播放列表
+- 连续播放、列表循环、单曲循环和随机播放
+- 配置 Windows 音频输出设备、采样率、缓冲区和通道
+- 可选 ASIO 支持
+- 导出 WAV、FLAC 和 Ogg Vorbis 音频
+- 配置导出采样率、位深、质量和尾音
+- 自定义背景、高斯模糊、Aero、Acrylic、遮罩和主题色
+- 自定义界面字体、播放列表字体、字号和曲目行间距
+- 支持窗口置顶和 `.mid`、`.midi` 文件关联
+- 支持便携模式
 
-Download the current portable packages from [GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/latest):
+## 系统要求
 
-- `MIDIPlayer-v1.0.0-WinUI-x64.zip`
-- `MIDIPlayer-v1.0.0-Legacy-x64.zip`
+- Windows 10 1809 或更高版本
+- x64 处理器和操作系统
+- Microsoft Visual C++ 2015–2022 x64 运行库
+- 至少一个 64 位 VST3 乐器
+- 支持 WASAPI、DirectSound 或 ASIO 的音频设备
 
-Extract one package to a writable directory and run `MidiPlayer.exe`. Do not run the executable directly from the ZIP archive.
+大型音源通常需要独立安装音色库、许可证管理程序和较大内存。
 
-### WinUI dependencies
+## 下载与运行
 
-Install these x64 runtimes before starting the WinUI edition:
+从 [GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/latest) 下载 JUCE 或 Legacy 标识的 x64 便携包。
 
-- [Windows App Runtime 2.3.1 x64](https://aka.ms/windowsappsdk/2.3/2.3.1/windowsappruntimeinstall-x64.exe), or a compatible newer 2.x release
-- [Microsoft Visual C++ 2015–2022 Redistributable x64](https://aka.ms/vc14/vc_redist.x64.exe)
+1. 将压缩包完整解压到具有写入权限的目录。
+2. 确认 `MidiPlayer.exe` 与 `MidiWorker.exe` 位于同一目录。
+3. 运行 `MidiPlayer.exe`。
+4. 扫描并选择 VST3 乐器。
+5. 添加 MIDI 文件。
+6. 在设置中选择音频输出设备。
+7. 开始播放或导出音频。
 
-The Legacy edition requires only the Visual C++ x64 runtime.
+不要直接在压缩包内运行程序。
 
-## Quick start
+## VST3 插件目录
 
-1. Install a 64-bit VST3 instrument.
-2. Start `MidiPlayer.exe`.
-3. Scan for plugins and select an instrument.
-4. Add a `.mid` or `.midi` file to the playlist.
-5. Select the required audio output in Settings.
-6. Start playback or export the track to audio.
+程序会扫描以下位置：
 
-The scanner checks the system VST3 directory and the package-local `VST3/` directory. Some instruments require separate activation or sample-library installation.
+```text
+C:\Program Files\Common Files\VST3\
+程序目录\VST3\
+```
 
-## Build from source
+部分厂商会使用额外目录。扫描结果取决于插件安装方式和授权状态。
 
-### Requirements
+## 便携模式
 
-- Windows 10 version 1809 or newer, x64
-- Visual Studio 2022 with the MSVC v143 desktop C++ workload
-- CMake 3.27 or newer
+在程序目录创建以下任意文件即可启用便携模式：
+
+```text
+portable.dat
+portable_debug.dat
+```
+
+启用后，用户设置保存在程序目录的 `Settings/` 中，本地 VST3 插件可放入 `VST3/`。程序目录必须具有写入权限。
+
+## 从源码构建
+
+### 环境要求
+
+- Visual Studio 2022
+- MSVC v143 桌面 C++ 工作负载
+- CMake 3.27 或更高版本
 - Windows SDK 10.0.26100.0
-- JUCE at commit `91ad83ae34a81e0833b1a2b0866f54846370ae53` (JUCE 8.0.15 source version)
-- For WinUI: C++/WinRT and Windows App SDK C++ project support in Visual Studio
-- Optional ASIO build: Steinberg ASIO SDK
+- JUCE 8.0.15，对应提交 `91ad83ae34a81e0833b1a2b0866f54846370ae53`
+- 可选：Steinberg ASIO SDK
 
-Clone the repository and the pinned JUCE revision:
+### 获取源码与 JUCE
 
 ```powershell
 git clone https://github.com/PlutoFar/MIDIPlayer.git
@@ -81,87 +101,78 @@ git -C JUCE checkout 91ad83ae34a81e0833b1a2b0866f54846370ae53
 git -C JUCE apply ../patches/juce-child-process-kill.patch
 ```
 
-The JUCE patch ensures that an unresponsive plugin worker is terminated when the coordinator closes. It is required by the current worker lifecycle.
+JUCE 补丁用于在协调进程关闭时终止无响应的插件工作进程。
 
-ASIO is disabled by default so the project builds without the proprietary ASIO SDK. To enable it, download the SDK from Steinberg and place its `common/` directory at `JUCE/modules/juce_audio_devices/native/common/`.
-
-### Configure
+### 配置工程
 
 ```powershell
 cmake --preset windows-vs2022
 ```
 
-For an ASIO-enabled build:
+启用 ASIO：
 
 ```powershell
 cmake --preset windows-vs2022 -DMIDIPLAYER_ENABLE_ASIO=ON
 ```
 
-### Legacy edition
+ASIO 默认关闭。启用前需要从 Steinberg 获取 ASIO SDK，并将其中的 `common/` 目录放到 `JUCE/modules/juce_audio_devices/native/common/`。
+
+### 构建播放器
 
 ```powershell
 cmake --build build --config Release --target MidiLegacy MidiWorker --parallel
 ```
 
-Outputs:
+输出文件：
 
 ```text
 build/MidiLegacy_artefacts/Release/MidiLegacy.exe
-build/MidiWorker_artefacts/Release/MidiWorker.exe
+build/MidiLegacy_artefacts/Release/MidiWorker.exe
 ```
 
-Rename `MidiLegacy.exe` to `MidiPlayer.exe` when assembling a portable package.
+当前 CMake 目标仍使用历史名称 `MidiLegacy`。组装便携包时，将 `MidiLegacy.exe` 重命名为 `MidiPlayer.exe`。
 
-### WinUI edition
-
-Build the shared native libraries and worker first:
-
-```powershell
-cmake --build build --config Release --target MidiCore MidiWinBridge MidiWorker --parallel
-```
-
-Then run the following command from a Visual Studio 2022 developer shell:
-
-```powershell
-msbuild Source\WinUI\MidiPlayer.vcxproj -restore -p:Configuration=Release -p:Platform=x64 -v:minimal -nologo
-```
-
-The framework-dependent WinUI payload is generated under `Source/WinUI/x64/Release/MidiPlayer/`.
-
-### Tests
+### 运行测试
 
 ```powershell
 cmake --build build --config Release --target MidiTests
 .\build\MidiTests_artefacts\Release\MidiTests.exe
 ```
 
-Local batch build helpers are intentionally excluded from the repository. The commands above are the supported source-build entry points.
-
-## Repository layout
+## 仓库结构
 
 ```text
 .
 |-- Source/
-|   |-- AudioEngine/    # Audio graph, device management, and offline export
-|   |-- Core/           # Shared application state and WinUI/Legacy bridges
-|   |-- Midi/           # MIDI sequencing and transport
-|   |-- Playlist/       # Playlist model and persistence
-|   |-- PluginBridge/   # Host/worker protocol and shared audio buffers
-|   |-- UI/             # JUCE Legacy interface
-|   |-- Utils/          # Settings, shell integration, and Windows helpers
-|   |-- WinUI/          # WinUI 3 front end
-|   `-- Worker/         # VST3 worker executable
-|-- Tests/              # Native regression tests
-|-- Resources/          # Application icons
-|-- patches/            # Required third-party source patch
+|   |-- AudioEngine/    # 音频图、设备管理和离线导出
+|   |-- Core/           # 应用核心；暂时包含待移除的 WinUI 桥接
+|   |-- Midi/           # MIDI 时序与播放控制
+|   |-- Playlist/       # 播放列表模型与持久化
+|   |-- PluginBridge/   # 主进程与插件工作进程协议
+|   |-- UI/             # 当前维护的 JUCE 桌面界面
+|   |-- Utils/          # 设置、文件关联和 Windows 工具
+|   |-- WinUI/          # 已停止维护，待迁移至归档分支
+|   `-- Worker/         # VST3 工作进程
+|-- Tests/              # 原生回归测试
+|-- Resources/          # 应用图标
+|-- patches/            # JUCE 补丁
 |-- CMakeLists.txt
 `-- CMakePresets.json
 ```
 
-## Runtime data
+## 运行数据
 
-Build outputs, downloaded dependencies, plugins, settings, logs, playlists, and generated WinUI files are excluded from version control. VST3 plugins and the Steinberg ASIO SDK are not distributed by this repository.
+构建产物、JUCE 源码、插件、用户设置、日志、播放列表和本机开发配置不会进入版本控制。本仓库不分发 VST3 插件、音色库、许可证或 Steinberg ASIO SDK。
 
-## Issue reports
+## 问题反馈
 
-Include the Windows version, selected edition, audio backend, plugin name and version, and reproducible steps. Remove private paths and licensing information from logs before attaching them.
+问题报告应包含：
+
+- Windows 版本
+- 程序版本或提交编号
+- 音频后端与设备名称
+- VST3 插件名称和版本
+- 可重复的操作步骤
+- 已删除私人路径和授权信息的错误日志
+
+WinUI 3 界面已停止维护，相关功能请求和界面问题不再处理。

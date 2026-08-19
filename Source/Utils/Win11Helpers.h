@@ -1,6 +1,5 @@
 #pragma once
 
-#include "WindowMaterial.h"
 #include <cstdint>
 #include <juce_gui_extra/juce_gui_extra.h>
 
@@ -9,7 +8,6 @@
 // 前置声明 Windows 类型，避免引入 windows.h 后污染 JUCE 头文件。
 extern "C" {
 typedef void *HWND;
-typedef void *HRGN;
 typedef long HRESULT;
 typedef unsigned long DWORD;
 typedef int BOOL;
@@ -18,13 +16,7 @@ __declspec(dllimport) HRESULT __stdcall
 DwmSetWindowAttribute(HWND hwnd, DWORD dwAttribute, const void *pvAttribute,
                       DWORD cbAttribute);
 __declspec(dllimport) HRESULT __stdcall DwmFlush();
-__declspec(dllimport) HRGN __stdcall
-CreateRoundRectRgn(int left, int top, int right, int bottom, int width,
-                   int height);
-__declspec(dllimport) BOOL __stdcall SetWindowRgn(HWND hwnd, HRGN region,
-                                                  BOOL redraw);
 __declspec(dllimport) BOOL __stdcall ShowWindow(HWND hwnd, int command);
-__declspec(dllimport) BOOL __stdcall DeleteObject(void *object);
 }
 
 namespace Win11Helpers {
@@ -262,74 +254,6 @@ inline int applyFluentDialogStyle(juce::Component *component,
   return appliedCount;
 }
 
-inline DWORD makeAccentGradientColor(float opacity, int strength,
-                                     WindowMaterial::Type type) {
-  const float effect = juce::jlimit(0.0f, 1.0f, strength / 50.0f);
-  float nativeAlpha = opacity;
-  if (type == WindowMaterial::Type::GaussianBlur)
-    nativeAlpha *= 0.55f + effect * 0.20f;
-  else if (type == WindowMaterial::Type::FrostedGlass)
-    nativeAlpha *= 0.68f + effect * 0.22f;
-  else if (type == WindowMaterial::Type::Acrylic)
-    nativeAlpha *= 0.58f + effect * 0.30f;
-
-  const auto alpha = static_cast<DWORD>(
-      juce::jlimit(0, 255, juce::roundToInt(nativeAlpha * 255.0f)));
-  constexpr DWORD red = 0x20;
-  constexpr DWORD green = 0x20;
-  constexpr DWORD blue = 0x20;
-  return (alpha << 24) | (blue << 16) | (green << 8) | red;
-}
-
-inline int applyDialogMaterial(juce::Component *component,
-                               WindowMaterial::Config config) {
-  if (component == nullptr || component->getPeer() == nullptr)
-    return 0;
-  auto hwnd = static_cast<HWND>(component->getPeer()->getNativeHandle());
-  if (hwnd == nullptr)
-    return 0;
-
-  config = WindowMaterial::normalise(config);
-  const bool usesSystemBackdrop =
-      config.type == WindowMaterial::Type::FrostedGlass ||
-      config.type == WindowMaterial::Type::Acrylic;
-
-  int backdropType = usesSystemBackdrop
-                         ? DwmAttributes::DWMSBT_TRANSIENTWINDOW
-                         : DwmAttributes::DWMSBT_NONE;
-  int appliedCount =
-      DwmSetWindowAttribute(hwnd, DwmAttributes::DWMWA_SYSTEMBACKDROP_TYPE,
-                            &backdropType, sizeof(backdropType)) >= 0
-          ? 1
-          : 0;
-
-  CompositionAttributes::AccentPolicy policy;
-  switch (config.type) {
-  case WindowMaterial::Type::Transparent:
-    policy.state =
-        CompositionAttributes::ACCENT_ENABLE_TRANSPARENTGRADIENT;
-    break;
-  case WindowMaterial::Type::GaussianBlur:
-    policy.state = CompositionAttributes::ACCENT_ENABLE_BLURBEHIND;
-    break;
-  case WindowMaterial::Type::FrostedGlass:
-    policy.state = CompositionAttributes::ACCENT_DISABLED;
-    break;
-  case WindowMaterial::Type::Acrylic:
-    policy.state = CompositionAttributes::ACCENT_DISABLED;
-    break;
-  }
-  policy.gradientColor =
-      makeAccentGradientColor(config.opacity, config.strength, config.type);
-
-  CompositionAttributes::WindowCompositionAttributeData data;
-  data.data = &policy;
-  data.size = sizeof(policy);
-  if (setWindowCompositionAttribute(hwnd, &data) != 0)
-    appliedCount++;
-  return appliedCount;
-}
-
 inline int clearDialogMaterial(juce::Component *component) {
   if (component == nullptr || component->getPeer() == nullptr)
     return 0;
@@ -351,53 +275,6 @@ inline int clearDialogMaterial(juce::Component *component) {
   if (setWindowCompositionAttribute(hwnd, &data) != 0)
     appliedCount++;
   return appliedCount;
-}
-
-/**
-    用窗口区域裁剪自绘圆角，避免 DWM 因接管圆角而重新绘制系统阴影。
-*/
-inline int applyRoundedWindowRegion(juce::Component *component,
-                                    bool useRoundedRegion,
-                                    float cornerRadius = 8.0f) {
-  if (component == nullptr)
-    return 0;
-  auto *peer = component->getPeer();
-  if (peer == nullptr)
-    return 0;
-  HWND hwnd = (HWND)peer->getNativeHandle();
-  if (hwnd == nullptr)
-    return 0;
-
-  if (!useRoundedRegion)
-    return SetWindowRgn(hwnd, nullptr, 1) != 0 ? 1 : 0;
-
-  using GetWindowRectFunction = BOOL(__stdcall *)(HWND, NativeWindowRect *);
-  static juce::DynamicLibrary user32("user32.dll");
-  static auto getWindowRect = reinterpret_cast<GetWindowRectFunction>(
-      user32.getFunction("GetWindowRect"));
-  NativeWindowRect nativeBounds;
-  if (getWindowRect == nullptr || getWindowRect(hwnd, &nativeBounds) == 0)
-    return 0;
-
-  const int width = static_cast<int>(nativeBounds.right - nativeBounds.left);
-  const int height = static_cast<int>(nativeBounds.bottom - nativeBounds.top);
-  if (width <= 0 || height <= 0)
-    return 0;
-
-  const auto scale = peer->getPlatformScaleFactor();
-  const int diameter =
-      juce::jmax(2, juce::roundToInt(cornerRadius * 2.0 * scale));
-  auto region = CreateRoundRectRgn(0, 0, width, height, diameter, diameter);
-  if (region == nullptr)
-    return 0;
-
-  if (SetWindowRgn(hwnd, region, 1) == 0) {
-    DeleteObject(region);
-    return 0;
-  }
-
-  // SetWindowRgn 成功后由系统持有并释放 region。
-  return 1;
 }
 
 inline void updateDarkMode(juce::Component *component, bool useDarkMode) {
@@ -460,12 +337,6 @@ inline bool hideNativeWindowAndFlush(juce::Component *) { return false; }
 inline int applyWin11Style(juce::Component *, bool = true) { return 0; }
 inline int applyFluentDialogStyle(juce::Component *, bool = true,
                                   bool = false) {
-  return 0;
-}
-inline int applyRoundedWindowRegion(juce::Component *, bool, float = 8.0f) {
-  return 0;
-}
-inline int applyDialogMaterial(juce::Component *, WindowMaterial::Config) {
   return 0;
 }
 inline int clearDialogMaterial(juce::Component *) { return 0; }

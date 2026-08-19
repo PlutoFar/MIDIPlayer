@@ -2,8 +2,8 @@
 
 // 纯图像处理函数：高斯/Aero/亚克力模糊 + Monet K-Means 取色 + 大图降采样。
 // 从 Source/UI/BackgroundComponent.h 的 BackgroundWorkerThread 静态实现抽出为
-// 自由函数，供 WinUI 侧的 WinBridge 在后台线程复用（Legacy 仍用其自带实现，
-// 互不影响）。仅依赖 juce 图像；不含任何 UI / WinRT 类型。
+// 自由函数，供 WinUI、对话框软件材质和其他后台图像任务复用。Legacy 背景
+// 保留支持协作取消的实现。仅依赖 juce 图像；不含任何 UI / WinRT 类型。
 
 #include <algorithm>
 #include <cmath>
@@ -102,10 +102,12 @@ inline juce::Image gaussianBlur(const juce::Image &source, int radius) {
   return blurred;
 }
 
-inline juce::Image aero(const juce::Image &source, int radius) {
+inline juce::Image aeroBackdrop(const juce::Image &source, int radius) {
   if (source.isNull())
     return source.createCopy();
   auto blurred = gaussianBlur(source, radius);
+  if (blurred.isNull())
+    return {};
   juce::Image result(juce::Image::ARGB, blurred.getWidth(), blurred.getHeight(), true);
   {
     juce::Graphics g(result);
@@ -115,6 +117,16 @@ inline juce::Image aero(const juce::Image &source, int radius) {
                                (float)result.getHeight() * 0.6f, false);
     g.setGradientFill(shine);
     g.fillRect(result.getBounds());
+  }
+  return result;
+}
+
+inline juce::Image aero(const juce::Image &source, int radius) {
+  auto result = aeroBackdrop(source, radius);
+  if (result.isNull())
+    return {};
+  {
+    juce::Graphics g(result);
     g.setColour(juce::Colours::white.withAlpha(0.4f));
     g.fillRect(0, 0, result.getWidth(), 1);
     g.setColour(juce::Colours::white.withAlpha(0.15f));
@@ -123,13 +135,13 @@ inline juce::Image aero(const juce::Image &source, int radius) {
   return result;
 }
 
-inline juce::Image acrylic(const juce::Image &source, int radius) {
+inline juce::Image acrylicBackdrop(const juce::Image &source, int radius) {
   auto blurred = gaussianBlur(source, radius);
+  if (blurred.isNull())
+    return {};
   juce::Image result = blurred.createCopy();
   juce::Image::BitmapData data(result, 0, 0, result.getWidth(), result.getHeight(),
                                juce::Image::BitmapData::readWrite);
-  uint32_t seed = 123456;
-  auto rand = [&seed]() { seed = seed * 1103515245 + 12345; return (seed / 65536) % 32768; };
   for (int y = 0; y < result.getHeight(); ++y) {
     uint8_t *p = data.getLinePointer(y);
     for (int x = 0; x < result.getWidth(); ++x) {
@@ -143,9 +155,25 @@ inline juce::Image acrylic(const juce::Image &source, int radius) {
         p[1] = (uint8_t)juce::jlimit(0, 255, g);
         p[0] = (uint8_t)juce::jlimit(0, 255, b);
       }
+      p += data.pixelStride;
+    }
+  }
+  return result;
+}
+
+inline juce::Image acrylic(const juce::Image &source, int radius) {
+  auto result = acrylicBackdrop(source, radius);
+  if (result.isNull())
+    return {};
+  juce::Image::BitmapData data(result, 0, 0, result.getWidth(), result.getHeight(),
+                               juce::Image::BitmapData::readWrite);
+  uint32_t seed = 123456;
+  auto rand = [&seed]() { seed = seed * 1103515245 + 12345; return (seed / 65536) % 32768; };
+  for (int y = 0; y < result.getHeight(); ++y) {
+    uint8_t *p = data.getLinePointer(y);
+    for (int x = 0; x < result.getWidth(); ++x) {
       int noise = (rand() % 12) - 6;
-      // 仅对 B/G/R 三个颜色通道加噪点，保持 alpha 不变（索引 3 是 alpha）。
-      int chans = (data.pixelStride >= 3) ? 3 : data.pixelStride;
+      const int chans = juce::jmin(3, data.pixelStride);
       for (int c = 0; c < chans; ++c)
         p[c] = (uint8_t)juce::jlimit(0, 255, p[c] + noise);
       p += data.pixelStride;

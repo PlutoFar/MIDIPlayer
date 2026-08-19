@@ -77,7 +77,7 @@ public:
     addAndMakeVisible(pluginSelector);
     pluginSelector.setTextWhenNothingSelected(L"选择乐器...");
     pluginSelector.addListener(this);
-    pluginSelector.setTooltip(L"选择要加载的 VST3 乐器插件");
+    pluginSelector.setTooltip(L"选择 VST3 插件");
 
     addAndMakeVisible(scanBtn);
     scanBtn.addListener(this);
@@ -85,7 +85,7 @@ public:
 
     addAndMakeVisible(unloadBtn);
     unloadBtn.addListener(this);
-    unloadBtn.setTooltip(L"卸载当前加载的插件");
+    unloadBtn.setTooltip(L"卸载插件");
 
     addAndMakeVisible(openPluginBtn);
     openPluginBtn.addListener(this);
@@ -161,14 +161,14 @@ public:
 
     addAndMakeVisible(volumeSlider);
 
-    volumeSlider.setRange(0.0, 1.0);
     float savedVol = getAppSettings().getMasterVolume();
     volumeSlider.setValue(savedVol, juce::dontSendNotification);
-    core.volume(savedVol);
+    core.volume(volumeLevelToGain((float)volumeSlider.getValue()));
     volumeSlider.addListener(this);
     volumeSlider.addMouseListener(this, false);
     volumeSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
     volumeSlider.setPopupDisplayEnabled(false, false, this);
+    volumeSlider.setScrollWheelEnabled(false);
     volumeSlider.setNumDecimalPlacesToDisplay(0);
     volumeSlider.textFromValueFunction = [](double v) {
       return juce::String(juce::roundToInt(v * 100)) + "%";
@@ -190,7 +190,8 @@ public:
 
     runLater(150, [](MainContentComponent &self) {
       if (auto *topLevel = self.getTopLevelComponent())
-        Win11Helpers::applyWin11Style(topLevel);
+        Win11Helpers::applyWin11Style(
+            topLevel, juce::Desktop::getInstance().isDarkModeActive());
 
       // Shell-open 流程统一处理音频设备错误，避免启动期对话框堆叠。
       if (self.pendingShellOpen)
@@ -222,6 +223,7 @@ public:
 
     addAndMakeVisible(modeToast);
     addChildComponent(tooltipOverlay);
+    tooltipOverlay.setPaintedByParentOverlay(true);
     addMouseListener(&tooltipOverlay, true);
 
     runLater(200, [](MainContentComponent &self) {
@@ -425,8 +427,13 @@ public:
     }
 
     modeToast.toFront(false);
-    if (tooltipOverlay.isVisible())
-      tooltipOverlay.toFront(false);
+    if (tooltipOverlay.isVisible()) {
+      const auto tooltipBounds = tooltipOverlay.getBounds();
+      juce::Graphics::ScopedSaveState saveState(g);
+      g.reduceClipRegion(tooltipBounds);
+      g.setOrigin(tooltipBounds.getPosition());
+      tooltipOverlay.paintOverlay(g);
+    }
   }
 
   void resized() override {
@@ -678,7 +685,9 @@ public:
   void sliderValueChanged(juce::Slider *s) override {
     if (s == &volumeSlider) {
       float vol = (float)s->getValue();
-      core.volume(vol);
+      core.volume(volumeLevelToGain(vol));
+      if (volumeSlider.isThumbDragActive())
+        updateVolumeTooltip();
       repaint();
     } else if (s == &progressSlider) {
       // 点击跳转时记录 seek 时间，避免 timerCallback 立即回写旧位置。
@@ -889,8 +898,8 @@ public:
     repaint();
   }
 
-  void dialogMaterialChanged(bool nativeMaterialChanged) override {
-    refreshDialogMaterials(nativeMaterialChanged);
+  void dialogMaterialChanged(bool backdropChanged) override {
+    refreshDialogMaterials(backdropChanged);
   }
 
   void backgroundSettingsClosed() override {}
@@ -942,20 +951,38 @@ public:
   void mouseMove(const juce::MouseEvent &e) override {
     if (e.eventComponent == &progressSlider)
       updateProgressTimeTooltip(e);
-    else if (e.eventComponent == &volumeSlider)
-      updateVolumeTooltip(e);
+    else if (e.eventComponent == &volumeSlider) {
+      if (volumeSlider.isPointOverThumb(e.position))
+        updateVolumeTooltip();
+      else
+        progressTimeTooltip.hide();
+    }
   }
 
   void mouseDrag(const juce::MouseEvent &e) override {
     if (e.eventComponent == &progressSlider)
       updateProgressTimeTooltip(e);
-    else if (e.eventComponent == &volumeSlider)
-      updateVolumeTooltip(e);
+    else if (e.eventComponent == &volumeSlider) {
+      if (volumeSlider.isThumbDragActive())
+        updateVolumeTooltip();
+      else
+        progressTimeTooltip.hide();
+    }
   }
 
   void mouseExit(const juce::MouseEvent &e) override {
     if (e.eventComponent == &progressSlider ||
         e.eventComponent == &volumeSlider)
+      progressTimeTooltip.hide();
+  }
+
+  void mouseUp(const juce::MouseEvent &e) override {
+    if (e.eventComponent != &volumeSlider)
+      return;
+
+    if (volumeSlider.isPointOverThumb(e.position))
+      updateVolumeTooltip();
+    else
       progressTimeTooltip.hide();
   }
 
@@ -965,7 +992,7 @@ public:
       return;
     }
     if (e.eventComponent == &volumeSlider) {
-      updateVolumeTooltip(e);
+      updateVolumeTooltip();
       return;
     }
 
@@ -1008,36 +1035,20 @@ private:
       return;
     }
 
-    juce::Array<juce::Rectangle<int>> avoidAreas;
-    avoidAreas.add(loopModeBtn.getBounds());
-    avoidAreas.add(volumeBtn.getBounds());
-    progressTimeTooltip.showAt(
+    progressTimeTooltip.showForTarget(
         text, {anchorX, progressSlider.getY(), 1, progressSlider.getHeight()},
-        getLocalBounds(), avoidAreas);
+        *this);
   }
 
-  void updateVolumeTooltip(const juce::MouseEvent &e) {
+  void updateVolumeTooltip() {
     if (!volumeSlider.isEnabled() || volumeSlider.getWidth() <= 0) {
       progressTimeTooltip.hide();
       return;
     }
 
-    const double minPosition = volumeSlider.getPositionOfValue(0.0);
-    const double maxPosition = volumeSlider.getPositionOfValue(1.0);
-    const double span = juce::jmax(0.001, maxPosition - minPosition);
-    const double ratio = juce::jlimit(
-        0.0, 1.0, ((double)e.getPosition().x - minPosition) / span);
-    const int anchorX = volumeSlider.getX() + juce::roundToInt(
-        minPosition + ratio * span);
-    const auto text = juce::String(juce::roundToInt(ratio * 100.0)) + "%";
-
-    juce::Array<juce::Rectangle<int>> avoidAreas;
-    avoidAreas.add(loopModeBtn.getBounds());
-    avoidAreas.add(volumeBtn.getBounds());
-    avoidAreas.add(progressSlider.getBounds());
-    progressTimeTooltip.showAt(
-        text, {anchorX, volumeSlider.getY(), 1, volumeSlider.getHeight()},
-        getLocalBounds(), avoidAreas);
+    const auto info = getVolumeTooltipInfo(volumeSlider);
+    progressTimeTooltip.showValueAt(info.text, info.anchorBounds,
+                                    getLocalBounds());
   }
 
   void showExportDialog() {
@@ -1846,12 +1857,12 @@ public:
     fontSettingsWindow.deleteAndZero();
   }
 
-  void refreshDialogMaterials(bool nativeMaterialChanged) {
-    auto apply = [nativeMaterialChanged](
+  void refreshDialogMaterials(bool backdropChanged) {
+    auto apply = [backdropChanged](
                      juce::Component::SafePointer<juce::DialogWindow> window) {
       if (window == nullptr)
         return;
-      if (nativeMaterialChanged)
+      if (backdropChanged)
         FluentSettingsStyle::refreshDialogMaterial(window.getComponent());
       else
         FluentSettingsStyle::refreshDialogSurface(window.getComponent());
@@ -1917,7 +1928,7 @@ public:
     auto &settings = getAppSettings();
     volumeSlider.setValue(settings.getMasterVolume(),
                           juce::dontSendNotification);
-    core.volume(settings.getMasterVolume());
+    core.volume(volumeLevelToGain((float)volumeSlider.getValue()));
 
     int savedMode = settings.getPlayMode();
     core.setPlayMode(savedMode);
@@ -1942,7 +1953,6 @@ public:
         : engine(e), fluentLookAndFeel(laf),
           deviceManager(e.getDeviceManager()), tooltipOverlay(laf) {
       setLookAndFeel(&fluentLookAndFeel);
-      setSize(660, 350);
       setOpaque(false);
 
       addAndMakeVisible(sectionLabel);
@@ -1962,6 +1972,10 @@ public:
                                           fluentLookAndFeel, true);
       FluentSettingsStyle::configureLabel(statusDetailLabel,
                                           fluentLookAndFeel, false, true);
+      statusDetailLabel.setFont(fluentLookAndFeel.getCaptionFont());
+      statusTitleLabel.setJustificationType(juce::Justification::centredLeft);
+      statusDetailLabel.setJustificationType(
+          juce::Justification::centredLeft);
 
       addAndMakeVisible(controlPanelButton);
       controlPanelButton.setButtonText(L"设备控制面板");
@@ -2048,6 +2062,7 @@ public:
 
       deviceManager.addChangeListener(this);
       refreshControls(true);
+      setSize(660, getPreferredHeight());
 
       addChildComponent(tooltipOverlay);
       addMouseListener(&tooltipOverlay, true);
@@ -2063,7 +2078,8 @@ public:
     }
 
     void paint(juce::Graphics &g) override {
-      FluentSettingsStyle::paintPanel(g, fluentLookAndFeel);
+      FluentSettingsStyle::paintPanel(g, fluentLookAndFeel,
+                                      getLocalBounds());
       FluentSettingsStyle::paintCard(g, fluentLookAndFeel,
                                      deviceCardBounds);
       FluentSettingsStyle::paintCard(g, fluentLookAndFeel,
@@ -2108,8 +2124,8 @@ public:
     void resized() override {
       auto area =
           getLocalBounds().reduced(FluentSettingsStyle::panelMargin);
-      deviceCardBounds = area.removeFromTop(234);
-      area.removeFromTop(12);
+      deviceCardBounds = area.removeFromTop(deviceCardHeight);
+      area.removeFromTop(cardGap);
       statusCardBounds = area;
 
       auto content =
@@ -2131,19 +2147,19 @@ public:
       layoutField(content.removeFromTop(34), channelPairLabel,
                   channelPairBox);
 
-      auto status =
-          statusCardBounds.reduced(FluentSettingsStyle::cardPadding);
-      statusIndicator =
-          juce::Rectangle<int>(status.getX(), status.getCentreY() - 5, 10, 10);
+      auto status = statusCardBounds.reduced(
+          FluentSettingsStyle::cardPadding, statusVerticalPadding);
 
       auto buttons = status;
       auto testBounds = buttons.removeFromRight(112);
-      testBounds = testBounds.withSizeKeepingCentre(112, 34);
+      testBounds =
+          testBounds.withSizeKeepingCentre(112, statusButtonHeight);
       testButton.setBounds(testBounds);
       buttons.removeFromRight(8);
       if (controlPanelButton.isVisible()) {
         auto controlBounds = buttons.removeFromRight(126);
-        controlBounds = controlBounds.withSizeKeepingCentre(126, 34);
+        controlBounds =
+            controlBounds.withSizeKeepingCentre(126, statusButtonHeight);
         controlPanelButton.setBounds(controlBounds);
         buttons.removeFromRight(8);
       } else {
@@ -2152,11 +2168,45 @@ public:
 
       auto statusText = buttons;
       statusText.removeFromLeft(22);
-      statusTitleLabel.setBounds(statusText.removeFromTop(24));
-      statusDetailLabel.setBounds(statusText.removeFromTop(24));
+      const int titleHeight = getStatusTitleHeight();
+      const int detailHeight = getStatusDetailHeight();
+      const int textBlockHeight = titleHeight + statusTextGap + detailHeight;
+      statusText.setY(status.getCentreY() - textBlockHeight / 2);
+      statusText.setHeight(textBlockHeight);
+
+      statusIndicator = juce::Rectangle<int>(
+          status.getX(), statusText.getCentreY() - statusIndicatorSize / 2,
+          statusIndicatorSize, statusIndicatorSize);
+      statusTitleLabel.setBounds(statusText.removeFromTop(titleHeight));
+      statusText.removeFromTop(statusTextGap);
+      statusDetailLabel.setBounds(statusText.removeFromTop(detailHeight));
     }
 
   private:
+    int getStatusTitleHeight() const {
+      return LegacyDesignTokens::Typography::lineHeight(
+          LegacyDesignTokens::Typography::body,
+          fluentLookAndFeel.getUIFontSize());
+    }
+
+    int getStatusDetailHeight() const {
+      return LegacyDesignTokens::Typography::lineHeight(
+          LegacyDesignTokens::Typography::caption,
+          fluentLookAndFeel.getUIFontSize()) +
+             statusDetailVerticalSafetyPadding;
+    }
+
+    int getPreferredHeight() const {
+      const int statusTextHeight =
+          getStatusTitleHeight() + statusTextGap + getStatusDetailHeight();
+      const int statusCardHeight =
+          juce::jmax(statusButtonHeight, statusTextHeight) +
+          statusVerticalPadding * 2;
+      return juce::jmax(
+          350, FluentSettingsStyle::panelMargin * 2 + deviceCardHeight +
+                   cardGap + statusCardHeight);
+    }
+
     void configureField(juce::Label &label, const juce::String &text,
                         juce::ComboBox &box) {
       addAndMakeVisible(label);
@@ -2344,13 +2394,13 @@ public:
         if (!deviceChangePending)
           statusDetailLabel.setText(
               juce::String(device->getCurrentBitDepth()) +
-                  "-bit  |  输出延迟 " + latency,
+                  L"-bit \u00B7 输出延迟 " + latency,
               juce::dontSendNotification);
         statusDetailLabel.setTooltip(
-            device->getName() + "  |  " +
+            device->getName() + L" \u00B7 " +
             formatAudioSampleRate(device->getCurrentSampleRate()) +
-            "  |  " + juce::String(device->getCurrentBitDepth()) +
-            "-bit  |  输出延迟 " + latency);
+            L" \u00B7 " + juce::String(device->getCurrentBitDepth()) +
+            L"-bit \u00B7 输出延迟 " + latency);
       } else if (!deviceChangePending) {
         statusTitleLabel.setText(
             lastError.isNotEmpty() ? L"设备切换失败" : L"未连接输出设备",
@@ -2405,6 +2455,14 @@ public:
     bool deviceChangePending = false;
     AudioStatusAnimation statusAnimation;
 
+    static constexpr int deviceCardHeight = 234;
+    static constexpr int cardGap = 12;
+    static constexpr int statusVerticalPadding = 12;
+    static constexpr int statusTextGap = 2;
+    static constexpr int statusDetailVerticalSafetyPadding = 4;
+    static constexpr int statusButtonHeight = 34;
+    static constexpr int statusIndicatorSize = 10;
+
     juce::Rectangle<int> deviceCardBounds;
     juce::Rectangle<int> statusCardBounds;
     juce::Rectangle<int> statusIndicator;
@@ -2416,7 +2474,7 @@ public:
 
     FontSettingsContent(FluentLookAndFeel &laf) : fluentLookAndFeel(laf) {
       setLookAndFeel(&fluentLookAndFeel);
-      setSize(500, 400);
+      setSize(500, 500);
       setOpaque(false);
 
       availableFonts = juce::Font::findAllTypefaceNames();
@@ -2532,10 +2590,48 @@ public:
           onSettingsChanged();
       };
 
+      addAndMakeVisible(playlistRowSpacingAutoToggle);
+      playlistRowSpacingAutoToggle.setButtonText(L"自动行间距");
+      playlistRowSpacingAutoToggle.setToggleState(
+          getAppSettings().getPlaylistRowSpacingAutomatic(),
+          juce::dontSendNotification);
+      playlistRowSpacingAutoToggle.onClick = [this]() {
+        const bool automatic = playlistRowSpacingAutoToggle.getToggleState();
+        getAppSettings().setPlaylistRowSpacingAutomatic(automatic);
+        playlistRowSpacingSlider.setEnabled(!automatic);
+        if (onSettingsChanged)
+          onSettingsChanged();
+      };
+
+      addAndMakeVisible(playlistRowSpacingLabel);
+      playlistRowSpacingLabel.setText(L"行间距", juce::dontSendNotification);
+      FluentSettingsStyle::configureLabel(playlistRowSpacingLabel,
+                                          fluentLookAndFeel);
+
+      addAndMakeVisible(playlistRowSpacingSlider);
+      playlistRowSpacingSlider.setRange(
+          LegacyDesignTokens::Layout::playlistMinimumRowHeight,
+          LegacyDesignTokens::Layout::playlistMaximumRowHeight, 1.0);
+      playlistRowSpacingSlider.setValue(
+          getAppSettings().getPlaylistManualRowHeight());
+      playlistRowSpacingSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+      playlistRowSpacingSlider.setTextBoxStyle(juce::Slider::TextBoxRight,
+                                               false, 50, 20);
+      playlistRowSpacingSlider.setNumDecimalPlacesToDisplay(0);
+      playlistRowSpacingSlider.setEnabled(
+          !playlistRowSpacingAutoToggle.getToggleState());
+      playlistRowSpacingSlider.onValueChange = [this]() {
+        getAppSettings().setPlaylistManualRowHeight(
+            juce::roundToInt(playlistRowSpacingSlider.getValue()));
+        if (onSettingsChanged)
+          onSettingsChanged();
+      };
+
     }
 
     void paint(juce::Graphics &g) override {
-      FluentSettingsStyle::paintPanel(g, fluentLookAndFeel);
+      FluentSettingsStyle::paintPanel(g, fluentLookAndFeel,
+                                      getLocalBounds());
       FluentSettingsStyle::paintCard(g, fluentLookAndFeel,
                                      interfaceCardBounds);
       FluentSettingsStyle::paintCard(g, fluentLookAndFeel,
@@ -2620,6 +2716,8 @@ public:
                                           fluentLookAndFeel);
       FluentSettingsStyle::configureLabel(playlistFontSizeLabel,
                                           fluentLookAndFeel);
+      FluentSettingsStyle::configureLabel(playlistRowSpacingLabel,
+                                          fluentLookAndFeel);
       resized();
       repaint();
       if (auto *window = getTopLevelComponent())
@@ -2631,7 +2729,7 @@ public:
           getLocalBounds().reduced(FluentSettingsStyle::panelMargin);
       interfaceCardBounds = area.removeFromTop(172);
       area.removeFromTop(12);
-      playlistCardBounds = area.removeFromTop(172);
+      playlistCardBounds = area.removeFromTop(260);
 
       constexpr int labelWidth = 88;
       auto interfaceContent =
@@ -2659,6 +2757,14 @@ public:
       auto sizeRow = playlistContent.removeFromTop(rowHeight);
       playlistFontSizeLabel.setBounds(sizeRow.removeFromLeft(labelWidth));
       playlistFontSizeSlider.setBounds(sizeRow);
+      playlistContent.removeFromTop(FluentSettingsStyle::rowGap);
+      playlistRowSpacingAutoToggle.setBounds(
+          playlistContent.removeFromTop(rowHeight));
+      playlistContent.removeFromTop(FluentSettingsStyle::rowGap);
+      auto spacingRow = playlistContent.removeFromTop(rowHeight);
+      playlistRowSpacingLabel.setBounds(
+          spacingRow.removeFromLeft(labelWidth));
+      playlistRowSpacingSlider.setBounds(spacingRow);
     }
 
     FluentLookAndFeel &fluentLookAndFeel;
@@ -2667,9 +2773,12 @@ public:
     juce::StringArray fontRealNames_Playlist;
 
     juce::Label interfaceSectionLabel, playlistSectionLabel, uiFontLabel,
-        uiFontSizeLabel, playlistFontLabel, playlistFontSizeLabel;
+        uiFontSizeLabel, playlistFontLabel, playlistFontSizeLabel,
+        playlistRowSpacingLabel;
+    juce::ToggleButton playlistRowSpacingAutoToggle;
     juce::ComboBox uiFontCombo, playlistFontCombo;
-    juce::Slider uiFontSizeSlider, playlistFontSizeSlider;
+    juce::Slider uiFontSizeSlider, playlistFontSizeSlider,
+        playlistRowSpacingSlider;
     juce::Rectangle<int> interfaceCardBounds, playlistCardBounds;
   };
 
@@ -2685,7 +2794,7 @@ public:
   juce::ComboBox pluginSelector;
   TransparentButton loopModeBtn;
   TransparentButton exportBtn;
-  juce::Slider volumeSlider;
+  VolumeSlider volumeSlider;
   TransparentButton scanBtn, unloadBtn, openPluginBtn;
 
   juce::Label contentLabel;

@@ -2,16 +2,113 @@
 
 #include "CustomLookAndFeel.h"
 #include "TooltipPlacement.h"
+#include <cmath>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+inline float volumeLevelToGain(float level) {
+  return std::pow(juce::jlimit(0.0f, 1.0f, level),
+                  LegacyDesignTokens::Slider::volumeGainExponent);
+}
+
 inline juce::String getVolumeIconGlyph(float volume) {
-  if (volume <= 0.0f)
-    return L"\uE992";
+  if (volume <= 0.001f)
+    return L"\uE74F";
   if (volume <= 1.0f / 3.0f)
     return L"\uE993";
   if (volume <= 2.0f / 3.0f)
     return L"\uE994";
   return L"\uE995";
+}
+
+class VolumeSlider final : public juce::Slider {
+public:
+  VolumeSlider() {
+    setSliderStyle(juce::Slider::LinearHorizontal);
+    setRange(0.0, 1.0, LegacyDesignTokens::Slider::volumeStep);
+    setSliderSnapsToMousePosition(true);
+    setVelocityBasedMode(false);
+    getProperties().set("fluentPreciseThumbHover", true);
+  }
+
+  bool isPointOverThumb(juce::Point<float> point) const {
+    if (!isEnabled() || getWidth() <= 0 || getHeight() <= 0)
+      return false;
+
+    const auto centre = getThumbCentre();
+    const float radius = LegacyDesignTokens::Slider::thumbDiameter * 0.5f;
+    const auto delta = point - centre;
+    return delta.x * delta.x + delta.y * delta.y <= radius * radius;
+  }
+
+  juce::Rectangle<float> getThumbBounds() const {
+    const auto centre = getThumbCentre();
+    const float diameter = LegacyDesignTokens::Slider::thumbDiameter;
+    const float radius = diameter * 0.5f;
+    return {centre.x - radius, centre.y - radius, diameter, diameter};
+  }
+
+  juce::Rectangle<int> getThumbBoundsInParent() const {
+    return getThumbBounds()
+        .getSmallestIntegerContainer()
+        .translated(getX(), getY());
+  }
+
+  bool isThumbDragActive() const { return thumbDragActive; }
+
+  void mouseDown(const juce::MouseEvent &event) override {
+    thumbDragActive = true;
+    juce::Slider::mouseDown(event);
+    repaint();
+  }
+
+  void mouseDrag(const juce::MouseEvent &event) override {
+    juce::Slider::mouseDrag(event);
+    repaint();
+  }
+
+  void mouseUp(const juce::MouseEvent &event) override {
+    juce::Slider::mouseUp(event);
+    thumbDragActive = false;
+    repaint();
+  }
+
+  void mouseEnter(const juce::MouseEvent &event) override {
+    juce::Slider::mouseEnter(event);
+    repaint();
+  }
+
+  void mouseMove(const juce::MouseEvent &event) override {
+    juce::Slider::mouseMove(event);
+    repaint();
+  }
+
+  void mouseExit(const juce::MouseEvent &event) override {
+    juce::Slider::mouseExit(event);
+    repaint();
+  }
+
+private:
+  juce::Point<float> getThumbCentre() const {
+    return {(float)getPositionOfValue(getValue()), (float)getHeight() * 0.5f};
+  }
+
+  bool thumbDragActive = false;
+};
+
+struct VolumeTooltipInfo {
+  juce::String text;
+  juce::Rectangle<int> anchorBounds;
+};
+
+inline VolumeTooltipInfo getVolumeTooltipInfo(const VolumeSlider &slider) {
+  const auto minimum = slider.getMinimum();
+  const auto maximum = slider.getMaximum();
+  const auto value = juce::jlimit(minimum, maximum, slider.getValue());
+  const auto range = maximum - minimum;
+  const auto normalized =
+      range > 0.0 ? juce::jlimit(0.0, 1.0, (value - minimum) / range) : 0.0;
+  return {juce::String(juce::roundToInt(normalized * 100.0)) + "%",
+          slider.getThumbBoundsInParent()};
 }
 
 class ProgressTimeTooltip final : public juce::Component {
@@ -24,24 +121,21 @@ public:
 
   void showAt(const juce::String &text, juce::Rectangle<int> anchor,
               juce::Rectangle<int> parentArea,
-              const juce::Array<juce::Rectangle<int>> &avoidAreas = {}) {
-    if (text.isEmpty() || parentArea.isEmpty()) {
-      hide();
-      return;
-    }
+              const juce::Array<juce::Rectangle<int>> &hardAvoidAreas = {},
+              const juce::Array<juce::Rectangle<int>> &softAvoidAreas = {}) {
+    showTooltip(text, anchor, parentArea, hardAvoidAreas, softAvoidAreas,
+                Presentation::standard, 8, 4);
+  }
 
-    currentText = text;
-    const auto bounds = TooltipPlacement::place(
-        lookAndFeel.getFluentTooltipSize(currentText), anchor, parentArea,
-        avoidAreas);
-    if (bounds.isEmpty()) {
-      hide();
-      return;
-    }
-    setBounds(bounds);
-    setVisible(true);
-    toFront(false);
-    repaint();
+  void showValueAt(const juce::String &text, juce::Rectangle<int> anchor,
+                   juce::Rectangle<int> parentArea) {
+    showTooltip(text, anchor, parentArea, {}, {}, Presentation::compactValue,
+                LegacyDesignTokens::Slider::volumeTooltipGap, 8);
+  }
+
+  void showForTarget(const juce::String &text, juce::Rectangle<int> anchor,
+                     juce::Component &coordinateSpace) {
+    showAt(text, anchor, coordinateSpace.getLocalBounds());
   }
 
   void hide() {
@@ -51,13 +145,51 @@ public:
   }
 
   void paint(juce::Graphics &graphics) override {
+    if (presentation == Presentation::compactValue) {
+      lookAndFeel.drawFluentValueTooltip(graphics, currentText,
+                                         getLocalBounds().toFloat());
+      return;
+    }
+
     lookAndFeel.drawFluentTooltip(graphics, currentText,
                                   getLocalBounds().toFloat());
   }
 
 private:
+  enum class Presentation { standard, compactValue };
+
+  void showTooltip(
+      const juce::String &text, juce::Rectangle<int> anchor,
+      juce::Rectangle<int> parentArea,
+      const juce::Array<juce::Rectangle<int>> &hardAvoidAreas,
+      const juce::Array<juce::Rectangle<int>> &softAvoidAreas,
+      Presentation requestedPresentation, int gap, int edgeMargin) {
+    if (text.isEmpty() || parentArea.isEmpty()) {
+      hide();
+      return;
+    }
+
+    currentText = text;
+    presentation = requestedPresentation;
+    const auto tooltipSize =
+        presentation == Presentation::compactValue
+            ? lookAndFeel.getFluentValueTooltipSize(currentText)
+            : lookAndFeel.getFluentTooltipSize(currentText);
+    const auto bounds = TooltipPlacement::place(
+        tooltipSize, anchor, parentArea, hardAvoidAreas, softAvoidAreas, gap,
+        edgeMargin);
+    if (bounds.isEmpty()) {
+      hide();
+      return;
+    }
+    setBounds(bounds);
+    setVisible(true);
+    toFront(false);
+    repaint();
+  }
   FluentLookAndFeel &lookAndFeel;
   juce::String currentText;
+  Presentation presentation = Presentation::standard;
 };
 
 class ScrollingLabel final : public juce::Component, private juce::Timer {

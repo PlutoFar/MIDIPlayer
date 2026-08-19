@@ -186,6 +186,22 @@ public:
     settings.setValue("playlistFontSize", juce::jlimit(12.0f, 36.0f, size));
   }
 
+  bool getPlaylistRowSpacingAutomatic() const {
+    return settings.getBoolValue("playlistRowSpacingAutomatic", true);
+  }
+  void setPlaylistRowSpacingAutomatic(bool automatic) {
+    settings.setValue("playlistRowSpacingAutomatic", automatic);
+  }
+
+  int getPlaylistManualRowHeight() const {
+    return juce::jlimit(44, 96,
+                        settings.getIntValue("playlistManualRowHeight", 48));
+  }
+  void setPlaylistManualRowHeight(int rowHeight) {
+    settings.setValue("playlistManualRowHeight",
+                      juce::jlimit(44, 96, rowHeight));
+  }
+
   juce::StringArray getRecentFonts() const {
     juce::StringArray fonts;
     fonts.addTokens(settings.getValue("recentFonts", ""), ";", "");

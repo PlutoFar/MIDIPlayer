@@ -18,7 +18,7 @@ inline juce::String formatAudioBufferSize(int samples, double sampleRate) {
 
   juce::String text = juce::String(samples) + " samples";
   if (sampleRate > 0.0)
-    text += "  |  " +
+    text += L" \u00B7 " +
             juce::String(samples * 1000.0 / sampleRate, 1) + " ms";
   return text;
 }

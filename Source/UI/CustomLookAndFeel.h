@@ -12,6 +12,41 @@ class TransparentButton;
 
 constexpr float fluentAlertCornerRadius = 12.0f;
 
+inline juce::Rectangle<float> getFluentScrollbarThumbBounds(
+    int x, int y, int width, int height, bool isVertical, int thumbStart,
+    int thumbSize, bool isMouseOver) {
+  const auto scrollbarBounds =
+      juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height);
+  if (scrollbarBounds.isEmpty() || thumbSize <= 0)
+    return {};
+
+  constexpr float crossAxisInset = 2.0f;
+  constexpr float movementAxisInset = 1.0f;
+  const float availableCrossAxis =
+      (isVertical ? scrollbarBounds.getWidth() : scrollbarBounds.getHeight()) -
+      crossAxisInset * 2.0f;
+  if (availableCrossAxis <= 0.0f)
+    return {};
+
+  const float barWidth =
+      juce::jmin(isMouseOver ? 8.0f : 4.0f, availableCrossAxis);
+  juce::Rectangle<float> thumb;
+  if (isVertical) {
+    thumb = {scrollbarBounds.getRight() - crossAxisInset - barWidth,
+             (float)y + (float)thumbStart + movementAxisInset, barWidth,
+             juce::jmax(1.0f,
+                        (float)thumbSize - movementAxisInset * 2.0f)};
+  } else {
+    thumb = {(float)x + (float)thumbStart + movementAxisInset,
+             scrollbarBounds.getBottom() - crossAxisInset - barWidth,
+             juce::jmax(1.0f,
+                        (float)thumbSize - movementAxisInset * 2.0f),
+             barWidth};
+  }
+
+  return thumb.getIntersection(scrollbarBounds.reduced(1.0f));
+}
+
 inline juce::Component *
 findFluentAlertConstraintTarget(juce::Component *associatedComponent) {
   if (associatedComponent != nullptr)
@@ -65,6 +100,7 @@ public:
 
     centreOnOwner();
     applyNativeSurface();
+    refreshMaterialBackdrop(true);
     auto safeThis = juce::Component::SafePointer<FluentAlertWindow>(this);
     juce::Timer::callAfterDelay(0, [safeThis]() {
       if (safeThis != nullptr) {
@@ -80,6 +116,16 @@ public:
     applyNativeSurface();
   }
 
+  void paint(juce::Graphics &graphics) override {
+    juce::Graphics::ScopedSaveState saveState(graphics);
+    graphics.reduceClipRegion(createFluentDialogSurfacePath(
+        getLocalBounds().toFloat(), fluentAlertCornerRadius));
+    paintFluentDialogMaterialBackdrop(graphics, materialBackdrop,
+                                      getLocalBounds(),
+                                      fluentAlertCornerRadius);
+    juce::AlertWindow::paint(graphics);
+  }
+
 private:
   void centreOnOwner() {
     if (nativeOwner != nullptr &&
@@ -92,22 +138,53 @@ private:
 
   void applyNativeSurface() {
     const auto config = getAppSettings().getDialogMaterialConfig();
-    getProperties().set("fluentDialogSurfaceAlpha",
-                        (double)WindowMaterial::surfaceAlpha(config));
+    getProperties().set(
+        "fluentDialogSurfaceAlpha",
+        (double)juce::jmin(
+            0.96f, WindowMaterial::surfaceAlpha(config) +
+                       fluentTransientDialogSurfaceAlphaBoost));
     Win11Helpers::applyFluentDialogStyle(this, true, false);
-    const auto regionApplied = Win11Helpers::applyRoundedWindowRegion(
-        this, true, fluentAlertCornerRadius);
-    getProperties().set("fluentRoundedRegionApplied", regionApplied > 0);
-    if (regionApplied > 0)
-      Win11Helpers::applyDialogMaterial(this, config);
-    else
-      Win11Helpers::clearDialogMaterial(this);
+    Win11Helpers::clearDialogMaterial(this);
+    getProperties().set("fluentSoftwareMaterial", true);
     if (nativeOwner != nullptr)
       Win11Helpers::setOwnedWindow(this, nativeOwner.getComponent());
   }
 
+  void refreshMaterialBackdrop(bool recaptureSource = false) {
+    if (recaptureSource || !materialSource.isValid())
+      materialSource = captureFluentDialogMaterialSource(
+          this, nativeOwner.getComponent());
+
+    const auto config = getAppSettings().getDialogMaterialConfig();
+    const auto generation = ++materialRenderGeneration;
+    if (config.type == WindowMaterial::Type::Transparent ||
+        !materialSource.isValid()) {
+      materialBackdrop = {};
+      repaint();
+      return;
+    }
+
+    if (materialBackdrop.isNull())
+      materialBackdrop = createFluentDialogBaseLayer(getLocalBounds());
+    repaint();
+
+    auto safeThis = juce::Component::SafePointer<FluentAlertWindow>(this);
+    renderFluentDialogMaterialBackdropAsync(
+        materialSource, config,
+        [safeThis, generation](juce::Image renderedBackdrop) mutable {
+          if (safeThis == nullptr ||
+              safeThis->materialRenderGeneration != generation)
+            return;
+          safeThis->materialBackdrop = std::move(renderedBackdrop);
+          safeThis->repaint();
+        });
+  }
+
   juce::Component::SafePointer<juce::Component> constraintTarget;
   juce::Component::SafePointer<juce::Component> nativeOwner;
+  FluentDialogMaterialSource materialSource;
+  juce::Image materialBackdrop;
+  juce::uint64 materialRenderGeneration = 0;
 };
 
 class FluentLookAndFeel : public juce::LookAndFeel_V4,
@@ -136,7 +213,7 @@ public:
     juce::Colour navHover{0x08000000};
 
     juce::Colour transportBackground{0xFFFAFAFA};
-    juce::Colour sliderTrack{0xFFE0E0E0};
+    juce::Colour sliderTrack{0xFF8A8A8A};
     juce::Colour sliderProgress{0xFF0078D4};
   };
 
@@ -160,7 +237,7 @@ public:
       colors.navSelected = juce::Colour(0x35FFFFFF);
       colors.navHover = juce::Colour(0x15FFFFFF);
       colors.transportBackground = juce::Colour(0x60000000);
-      colors.sliderTrack = juce::Colour(0x40FFFFFF);
+      colors.sliderTrack = juce::Colour(0xFFB3B3B3);
     }
     applyScheme();
   }
@@ -251,6 +328,11 @@ public:
                           semibold);
   }
 
+  juce::Font getWindowTitleFont(bool semibold = true) const {
+    return getDefaultFont(LegacyDesignTokens::Typography::windowTitle,
+                          semibold);
+  }
+
   juce::Font getCaptionFont(bool semibold = false) const {
     return getDefaultFont(LegacyDesignTokens::Typography::caption, semibold);
   }
@@ -283,7 +365,7 @@ public:
   }
 
   juce::Font getAlertWindowTitleFont() override {
-    return getBodyLargeFont(true);
+    return getSubtitleFont(true);
   }
 
   juce::Font getAlertWindowMessageFont() override {
@@ -461,7 +543,8 @@ public:
   int getSliderThumbRadius(juce::Slider &slider) override {
     if (slider.getSliderStyle() == juce::Slider::LinearHorizontal ||
         slider.getSliderStyle() == juce::Slider::LinearVertical)
-      return scaledInt(7);
+      return scaledInt(juce::roundToInt(
+          LegacyDesignTokens::Slider::thumbDiameter * 0.5f));
     return juce::LookAndFeel_V4::getSliderThumbRadius(slider);
   }
 
@@ -495,9 +578,11 @@ public:
     }
 
     if (slider.getSliderStyle() == juce::Slider::LinearHorizontal) {
-      int radius = getSliderThumbRadius(slider);
-      // 轨道内缩一个 thumb 半径，确保圆点不会越出组件边界。
-      layout.sliderBounds = bounds.reduced(radius, 0);
+      const int radius = getSliderThumbRadius(slider);
+      const int horizontalInset = juce::jmin(
+          radius,
+          juce::jmax(0, (bounds.getWidth() - 1) / 2));
+      layout.sliderBounds = bounds.reduced(horizontalInset, 0);
     } else {
       layout.sliderBounds = bounds;
     }
@@ -515,65 +600,91 @@ public:
     bool isEnabled = slider.isEnabled();
     auto bounds =
         juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height);
-    float trackHeight = scaled(4.0f);
-    float thumbSize = scaled(14.0f);
+    const float trackHeight =
+        scaled(LegacyDesignTokens::Slider::trackThickness);
+    const float thumbSize =
+        scaled(LegacyDesignTokens::Slider::thumbDiameter);
     float thumbRadius = thumbSize / 2.0f;
 
-    auto trackArea =
-        bounds.withSizeKeepingCentre(bounds.getWidth(), trackHeight);
+    // 滑块布局将圆点中心限制在组件内侧；轨道延伸到组件边界，
+    // 使外圆边界在 99% 时仍保留可见余位，100% 时才完全贴合端点。
+    auto trackArea = bounds.expanded(thumbRadius, 0.0f)
+                         .withSizeKeepingCentre(
+                             bounds.getWidth() + thumbRadius * 2.0f,
+                             trackHeight);
 
     auto trackColor =
         isEnabled ? colors.sliderTrack : colors.sliderTrack.withAlpha(0.3f);
+    const float trackStart = trackArea.getX();
+    const float trackEnd = trackArea.getRight();
     g.setColour(trackColor);
+    g.fillRoundedRectangle(trackArea, trackHeight * 0.5f);
 
-    // 背景轨道略微内缩，圆角端点保持在可视边界内。
-    float visualPadding = trackHeight / 2.0f;
-    juce::Path trackPath;
-    trackPath.startNewSubPath(trackArea.getX() + visualPadding,
-                              trackArea.getCentreY());
-    trackPath.lineTo(trackArea.getRight() - visualPadding,
-                     trackArea.getCentreY());
-    g.strokePath(trackPath,
-                 juce::PathStrokeType(trackHeight, juce::PathStrokeType::curved,
-                                      juce::PathStrokeType::rounded));
+    const double minimum = slider.getMinimum();
+    const double maximum = slider.getMaximum();
+    const double value = juce::jlimit(minimum, maximum, slider.getValue());
+    const double tolerance = juce::jmax(1.0e-9, slider.getInterval() * 0.5);
+    const bool atMinimum = value <= minimum + tolerance;
+    const bool atMaximum = value >= maximum - tolerance;
+    const float clampedSliderPos =
+        juce::jlimit(trackStart, trackEnd, sliderPos);
+    const float progressEnd = atMaximum ? trackEnd : clampedSliderPos;
+    const float progressWidth = progressEnd - trackStart;
 
-    if (sliderPos > (trackArea.getX() + visualPadding)) {
+    if (!atMinimum && progressWidth > 0.0f) {
       auto progressColor = isEnabled ? colors.sliderProgress
                                      : colors.sliderProgress.withAlpha(0.3f);
       g.setColour(progressColor);
-
-      juce::Path progressPath;
-      progressPath.startNewSubPath(trackArea.getX() + visualPadding,
-                                   trackArea.getCentreY());
-      progressPath.lineTo(sliderPos, trackArea.getCentreY());
-      g.strokePath(progressPath, juce::PathStrokeType(
-                                     trackHeight, juce::PathStrokeType::curved,
-                                     juce::PathStrokeType::rounded));
+      auto progressArea = trackArea.withWidth(progressWidth);
+      g.fillRoundedRectangle(
+          progressArea,
+          juce::jmin(trackHeight * 0.5f, progressWidth * 0.5f));
     }
 
     float thumbX = sliderPos - thumbRadius;
     float thumbY = bounds.getCentreY() - thumbRadius;
 
-    float innerRatio = 0.45f;
+    float innerSize =
+        scaled(LegacyDesignTokens::Slider::innerThumbDiameter);
+    const bool preciseThumbHover = static_cast<bool>(
+        slider.getProperties().getWithDefault("fluentPreciseThumbHover", false));
+    bool thumbHovered = slider.isMouseOver();
+    if (preciseThumbHover && slider.isMouseOver()) {
+      const auto mousePosition =
+          slider.getLocalPoint(nullptr, juce::Desktop::getMousePosition());
+      const auto thumbCentre =
+          juce::Point<float>(sliderPos, bounds.getCentreY());
+      thumbHovered = mousePosition.toFloat().getDistanceFrom(thumbCentre) <=
+                     thumbRadius;
+    }
     if (isEnabled) {
       if (slider.isMouseButtonDown())
-        innerRatio = 0.35f;
-      else if (slider.isMouseOver())
-        innerRatio = 0.55f;
+        innerSize = scaled(
+            LegacyDesignTokens::Slider::pressedInnerThumbDiameter);
+      else if (thumbHovered)
+        innerSize =
+            scaled(LegacyDesignTokens::Slider::hoverInnerThumbDiameter);
     }
 
-    float innerSize = thumbSize * innerRatio;
     float innerRadius = innerSize / 2.0f;
     float innerX = sliderPos - innerRadius;
     float innerY = bounds.getCentreY() - innerRadius;
 
-    g.setColour(juce::Colours::black.withAlpha(0.3f));
+    g.setColour(juce::Colours::black.withAlpha(0.32f));
     g.fillEllipse(thumbX + 1.0f, thumbY + 2.0f, thumbSize, thumbSize);
 
-    g.setColour(juce::Colour(0xFF3B3B3B));
+    auto thumbSurface = isDarkMode ? colors.cardBackground.brighter(0.08f)
+                                   : colors.controlBackground;
+    if (!isEnabled)
+      thumbSurface = thumbSurface.withMultipliedAlpha(0.55f);
+    g.setColour(thumbSurface);
     g.fillEllipse(thumbX, thumbY, thumbSize, thumbSize);
 
-    g.setColour(juce::Colour(0xFF5A5A5A));
+    auto thumbBorder = isDarkMode ? colors.textSecondary.withAlpha(0.82f)
+                                  : colors.controlBorder;
+    if (!isEnabled)
+      thumbBorder = thumbBorder.withMultipliedAlpha(0.55f);
+    g.setColour(thumbBorder);
     g.drawEllipse(thumbX + 0.5f, thumbY + 0.5f, thumbSize - 1.0f,
                   thumbSize - 1.0f, 1.0f);
 
@@ -581,6 +692,12 @@ public:
         isEnabled ? colors.sliderProgress : juce::Colours::darkgrey;
     g.setColour(innerColor);
     g.fillEllipse(innerX, innerY, innerSize, innerSize);
+
+    if (isEnabled && slider.hasKeyboardFocus(true)) {
+      g.setColour(colors.sliderProgress.withAlpha(0.55f));
+      g.drawEllipse(thumbX - 2.0f, thumbY - 2.0f, thumbSize + 4.0f,
+                    thumbSize + 4.0f, 1.0f);
+    }
   }
 
   void drawComboBox(juce::Graphics &g, int width, int height, bool isButtonDown,
@@ -845,6 +962,19 @@ public:
     return {width, LegacyDesignTokens::Layout::controlHeight(uiFontSize)};
   }
 
+  juce::Point<int> getFluentValueTooltipSize(const juce::String &text) const {
+    const auto font = getCaptionFont();
+    const int width = juce::GlyphArrangement::getStringWidthInt(font, text) +
+                      LegacyDesignTokens::Slider::volumeTooltipHorizontalPadding *
+                          2;
+    const int height = juce::jmax(
+        LegacyDesignTokens::Slider::volumeTooltipMinimumHeight,
+        LegacyDesignTokens::Typography::lineHeight(
+            LegacyDesignTokens::Typography::caption, uiFontSize) +
+            8);
+    return {width, height};
+  }
+
   void drawFluentTooltip(juce::Graphics &g, const juce::String &text,
                          juce::Rectangle<float> bounds) const {
     g.fillAll(juce::Colours::transparentBlack);
@@ -854,6 +984,18 @@ public:
     g.drawRoundedRectangle(bounds.reduced(0.5f), 8.0f, 1.0f);
     g.setColour(juce::Colours::white);
     g.setFont(getBodyFont());
+    g.drawText(text, bounds, juce::Justification::centred, false);
+  }
+
+  void drawFluentValueTooltip(juce::Graphics &g, const juce::String &text,
+                              juce::Rectangle<float> bounds) const {
+    g.fillAll(juce::Colours::transparentBlack);
+    g.setColour(juce::Colour(0xF0202020));
+    g.fillRoundedRectangle(bounds, 6.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.12f));
+    g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
+    g.setColour(juce::Colours::white);
+    g.setFont(getCaptionFont());
     g.drawText(text, bounds, juce::Justification::centred, false);
   }
 
@@ -875,8 +1017,9 @@ public:
       juce::Path surface;
       surface.addRoundedRectangle(bounds, radius);
       g.reduceClipRegion(surface);
-      g.setColour(
-          colors.cardBackground.withAlpha(WindowMaterial::surfaceAlpha(config)));
+      g.setColour(colors.cardBackground.withAlpha(juce::jmin(
+          0.96f, WindowMaterial::surfaceAlpha(config) +
+                     fluentTransientDialogSurfaceAlphaBoost)));
       g.fillRect(alert.getLocalBounds());
       WindowMaterial::paintTexture(g, config, colors.accentPrimary);
     }
@@ -899,20 +1042,14 @@ public:
   void drawScrollbar(juce::Graphics &g, juce::ScrollBar &, int x, int y,
                      int width, int height, bool isVertical, int thumbStart,
                      int thumbSize, bool isMouseOver, bool) override {
-    float barWidth = isMouseOver ? scaled(8.0f) : scaled(4.0f);
-
-    juce::Rectangle<float> thumb;
-    if (isVertical) {
-      thumb = {(float)x + (float)width - barWidth - scaled(2.0f),
-               (float)y + (float)thumbStart, barWidth, (float)thumbSize};
-    } else {
-      thumb = {(float)x + (float)thumbStart,
-               (float)y + (float)height - barWidth - scaled(2.0f),
-               (float)thumbSize, barWidth};
-    }
+    const auto thumb = getFluentScrollbarThumbBounds(
+        x, y, width, height, isVertical, thumbStart, thumbSize, isMouseOver);
+    if (thumb.isEmpty())
+      return;
 
     g.setColour(colors.textSecondary.withAlpha(isMouseOver ? 0.7f : 0.4f));
-    g.fillRoundedRectangle(thumb, barWidth / 2.0f);
+    g.fillRoundedRectangle(
+        thumb, juce::jmin(thumb.getWidth(), thumb.getHeight()) * 0.5f);
   }
 
   void drawDocumentWindowTitleBar(juce::DocumentWindow &window,
@@ -927,13 +1064,26 @@ public:
                                               1.0));
     g.setColour(colors.cardBackground.withAlpha(surfaceAlpha));
     g.fillAll();
+    WindowMaterial::paintTexture(g,
+                                 getAppSettings().getDialogMaterialConfig(),
+                                 colors.accentPrimary);
 
     g.setColour(colors.textPrimary);
-    g.setFont(getBodyFont(true));
+    g.setFont(getWindowTitleFont(true));
 
     auto title = window.getName();
-    g.drawText(title, titleSpaceX, 0, titleSpaceW, h,
-               juce::Justification::centredLeft, true);
+    auto titleBounds = juce::Rectangle<int>(0, 0, w, h).reduced(
+        LegacyDesignTokens::Layout::dialogTitleHorizontalPadding, 0);
+    if (auto *closeButton = window.getCloseButton())
+      titleBounds.setRight(juce::jmin(
+          titleBounds.getRight(),
+          closeButton->getX() -
+              LegacyDesignTokens::Layout::dialogTitleHorizontalPadding));
+    else
+      titleBounds.setRight(juce::jmin(titleBounds.getRight(),
+                                     titleSpaceX + titleSpaceW));
+    g.drawFittedText(title, titleBounds, juce::Justification::centredLeft, 1,
+                     1.0f);
 
     if (icon != nullptr) {
       g.drawImageWithin(*icon, 6, (h - 16) / 2, 16, 16,
@@ -942,6 +1092,11 @@ public:
   }
 
   juce::Button *createDocumentWindowButton(int buttonType) override;
+  void positionDocumentWindowButtons(
+      juce::DocumentWindow &, int titleBarX, int titleBarY, int titleBarW,
+      int titleBarH, juce::Button *minimiseButton,
+      juce::Button *maximiseButton, juce::Button *closeButton,
+      bool positionTitleBarButtonsOnLeft) override;
 
   const FluentColors &getColors() const { return colors; }
   bool isDark() const { return isDarkMode; }

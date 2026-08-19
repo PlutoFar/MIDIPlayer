@@ -133,7 +133,7 @@ void testProductionIconVisualBounds() {
   const std::array<const wchar_t *, 24> productionGlyphs = {
       L"\uE73E", L"\uE71A", L"\uE74D", L"\uE768", L"\uE769",
       L"\uE892", L"\uE893", L"\uE896", L"\uE8A7", L"\uE8B1",
-      L"\uE8ED", L"\uE8EE", L"\uE992", L"\uE994", L"\uE995",
+      L"\uE8ED", L"\uE8EE", L"\uE74F", L"\uE994", L"\uE995",
       L"\uE9A1", L"\uEA42", L"\uE713", L"\uE718", L"\uE840",
       L"\uE8D2", L"\uE8D6", L"\uE90B", L"\uE91B"};
 
@@ -668,9 +668,6 @@ int main(int argc, char *argv[]) {
          "dialog peer styles must be configured before modal ownership starts");
   expect(!customDialogPolicy.useDwmRoundedCorners,
          "material dialogs should avoid competing DWM corner rendering");
-  expect(customDialogPolicy.useWindowRegion,
-         "non-draggable dialogs should clip the native window to one rounded "
-         "region");
   expect(customDialogPolicy.centreOnOwner &&
              customDialogPolicy.useNativeOwner &&
              !customDialogPolicy.allowAlwaysOnTop &&
@@ -703,10 +700,142 @@ int main(int argc, char *argv[]) {
          "all material dialogs should use one clipped native window");
   expect(!nativeDialogPolicy.useDwmRoundedCorners,
          "all custom dialogs should use the same corner implementation");
-  expect(nativeDialogPolicy.useWindowRegion,
-         "all custom dialogs should clip opaque corner pixels");
+
+  const auto topDialogSurface = createFluentDialogSurfacePath(
+      {0.0f, 0.0f, 100.0f, 40.0f}, fluentDialogCornerRadius, true, false);
+  expect(!topDialogSurface.contains(1.0f, 1.0f) &&
+             topDialogSurface.contains(50.0f, 1.0f) &&
+             topDialogSurface.contains(1.0f, 39.0f),
+         "dialog title bars should carry transparent alpha only at the top "
+         "corners");
+  const auto bottomDialogSurface = createFluentDialogSurfacePath(
+      {0.0f, 0.0f, 100.0f, 40.0f}, fluentDialogCornerRadius, false, true);
+  expect(bottomDialogSurface.contains(1.0f, 1.0f) &&
+             bottomDialogSurface.contains(50.0f, 39.0f) &&
+             !bottomDialogSurface.contains(1.0f, 39.0f),
+         "dialog content should carry transparent alpha only at the bottom "
+         "corners");
+  expect(WindowMaterial::softwareBlurRadius(
+             {WindowMaterial::Type::Transparent, 0.78f, 24}) == 0 &&
+             WindowMaterial::softwareBlurRadius(
+                 {WindowMaterial::Type::Acrylic, 0.78f, 50}) >
+                 WindowMaterial::softwareBlurRadius(
+                     {WindowMaterial::Type::Acrylic, 0.78f, 1}),
+         "software dialog materials should map strength to blur radius");
+
+  for (const auto type : {WindowMaterial::Type::GaussianBlur,
+                          WindowMaterial::Type::Aero,
+                          WindowMaterial::Type::Acrylic}) {
+    expect(WindowMaterial::softwareBlurRadius({type, 0.78f, 50}) >
+               WindowMaterial::softwareBlurRadius({type, 0.78f, 1}),
+           "every software material should map strength monotonically");
+    expect(WindowMaterial::surfaceAlpha({type, 0.98f, 24}) >
+               WindowMaterial::surfaceAlpha({type, 0.25f, 24}),
+           "every software material should map opacity monotonically");
+  }
+
+  juce::Image acrylicSource(juce::Image::ARGB, 16, 16, true);
+  acrylicSource.clear(acrylicSource.getBounds(),
+                      juce::Colour::fromRGBA(80, 120, 180, 96));
+  const auto acrylicBackdropOnly =
+      midi::bgfx::acrylicBackdrop(acrylicSource, 0);
+  const auto acrylicComplete = midi::bgfx::acrylic(acrylicSource, 0);
+  expect(acrylicBackdropOnly.getPixelAt(8, 8).getAlpha() == 96 &&
+             acrylicComplete.getPixelAt(8, 8).getAlpha() == 96,
+         "acrylic saturation and noise must preserve the alpha channel");
+
+  FluentDialogMaterialSource materialSource;
+  materialSource.image = juce::Image(juce::Image::ARGB, 48, 40, true);
+  materialSource.image.clear(materialSource.image.getBounds(),
+                             juce::Colour(0xFF406080));
+  materialSource.outputBounds = {8, 8, 32, 24};
+  const auto transparentBackdrop = renderFluentDialogMaterialBackdrop(
+      materialSource, {WindowMaterial::Type::Transparent, 0.78f, 24});
+  const auto gaussianBackdrop = renderFluentDialogMaterialBackdrop(
+      materialSource, {WindowMaterial::Type::GaussianBlur, 0.78f, 8});
+  const auto aeroBackdrop = renderFluentDialogMaterialBackdrop(
+      materialSource, {WindowMaterial::Type::Aero, 0.78f, 8});
+  const auto acrylicBackdrop = renderFluentDialogMaterialBackdrop(
+      materialSource, {WindowMaterial::Type::Acrylic, 0.78f, 8});
+  const auto gaussianReference = midi::bgfx::gaussianBlur(materialSource.image, 5);
+  const auto aeroReference = midi::bgfx::aeroBackdrop(materialSource.image, 5);
+  const auto acrylicReference =
+      midi::bgfx::acrylicBackdrop(materialSource.image, 5);
+  expect(transparentBackdrop.isNull(),
+         "transparent material should use the live per-pixel surface");
+  for (const auto &backdrop :
+       {gaussianBackdrop, aeroBackdrop, acrylicBackdrop}) {
+    expect(backdrop.getBounds() == juce::Rectangle<int>(0, 0, 32, 24) &&
+               backdrop.getPixelAt(16, 12).getAlpha() == 255,
+           "processed dialog backdrops should be cropped and fully opaque");
+  }
+  expect(aeroReference.getPixelAt(24, 20) !=
+             gaussianReference.getPixelAt(24, 20) &&
+             acrylicReference.getPixelAt(24, 20) !=
+                 gaussianReference.getPixelAt(24, 20),
+         "Aero and Acrylic should retain their material-specific image stages");
 
   FluentLookAndFeel interactionLookAndFeel(true);
+  expect(interactionLookAndFeel.getWindowTitleFont().getHeight() >
+             interactionLookAndFeel.getBodyFont(true).getHeight(),
+         "dialog title bars should use a larger semantic title font");
+  expect(interactionLookAndFeel.getAlertWindowTitleFont().getHeight() >
+             interactionLookAndFeel.getAlertWindowMessageFont().getHeight(),
+         "confirmation dialog titles should remain visually distinct");
+
+  juce::TextButton minimiseButton;
+  juce::TextButton maximiseButton;
+  juce::TextButton closeButton;
+  juce::DocumentWindow captionLayoutWindow(
+      "caption-layout", juce::Colours::transparentBlack, 0, false);
+  interactionLookAndFeel.positionDocumentWindowButtons(
+      captionLayoutWindow, 0, 0, 400,
+      LegacyDesignTokens::Layout::dialogTitleBarHeight, &minimiseButton,
+      &maximiseButton, &closeButton, false);
+  expect(closeButton.getBounds() ==
+             juce::Rectangle<int>(
+                 400 - LegacyDesignTokens::Layout::dialogCaptionButtonWidth -
+                     LegacyDesignTokens::Layout::dialogCaptionButtonOuterMargin,
+                 0, LegacyDesignTokens::Layout::dialogCaptionButtonWidth,
+                 LegacyDesignTokens::Layout::dialogTitleBarHeight),
+         "dialog close button should use the standard caption target and inset");
+
+  captionLayoutWindow.setSize(400, 240);
+  interactionLookAndFeel.positionDocumentWindowButtons(
+      captionLayoutWindow, 1, 1, 398,
+      LegacyDesignTokens::Layout::dialogTitleBarHeight, &minimiseButton,
+      &maximiseButton, &closeButton, false);
+  expect(closeButton.getRight() == captionLayoutWindow.getWidth() &&
+             closeButton.getY() == 0 &&
+             closeButton.getBottom() ==
+                 1 + LegacyDesignTokens::Layout::dialogTitleBarHeight,
+         "right-aligned caption buttons should cover the outer window corner");
+
+  juce::Component managedDialogContent;
+  managedDialogContent.setSize(240, 100);
+  juce::DialogWindow::LaunchOptions managedDialogOptions;
+  managedDialogOptions.content.setNonOwned(&managedDialogContent);
+  managedDialogOptions.dialogTitle = L"正在加载";
+  managedDialogOptions.useNativeTitleBar = false;
+  managedDialogOptions.escapeKeyTriggersCloseButton = false;
+  FluentSettingsStyle::FluentDialogWindow managedDialog(
+      managedDialogOptions, nullptr, nullptr,
+      FluentSettingsStyle::DialogCloseMode::programmaticOnly);
+  expect(managedDialog.getCloseButton() == nullptr &&
+             !managedDialog.escapeKeyPressed(),
+         "programmatic and auto-dismiss dialogs must not expose a close "
+         "button or Escape dismissal");
+
+  ToastComponent autoDismissToast;
+  bool toastContainsButton = false;
+  for (int index = 0; index < autoDismissToast.getNumChildComponents(); ++index)
+    toastContainsButton =
+        toastContainsButton ||
+        dynamic_cast<juce::Button *>(autoDismissToast.getChildComponent(index)) !=
+            nullptr;
+  expect(!toastContainsButton,
+         "auto-dismiss toast prompts must remain free of close buttons");
+
   juce::ToggleButton interactionToggle(L"更换原生图标样式");
   interactionToggle.setBounds(0, 0, 420, 40);
   const auto toggleLayout =
@@ -756,48 +885,205 @@ int main(int argc, char *argv[]) {
         alert->getProperties().getWithDefault("fluentDialogSurfaceAlpha", 0.0));
     expect(surfaceAlpha > 0.0 && surfaceAlpha <= 1.0,
            "Fluent alerts should receive the configured material surface");
-#if JUCE_WINDOWS
     expect(static_cast<bool>(alert->getProperties().getWithDefault(
-               "fluentRoundedRegionApplied", false)),
-           "Fluent alerts should establish the native rounded region before "
-           "enabling native material");
-#endif
+               "fluentSoftwareMaterial", false)),
+           "Fluent alerts should use the software material pipeline");
   }
 
-  expect(getVolumeIconGlyph(0.0f) == L"\uE992" &&
+  expect(getVolumeIconGlyph(0.0f) == L"\uE74F" &&
+             getVolumeIconGlyph(0.0005f) == L"\uE74F" &&
              getVolumeIconGlyph(0.2f) == L"\uE993" &&
              getVolumeIconGlyph(0.5f) == L"\uE994" &&
              getVolumeIconGlyph(0.9f) == L"\uE995",
          "volume icons should cover mute, low, medium, and high stages");
+  expect(std::abs(volumeLevelToGain(0.0f)) < 0.0001f &&
+             std::abs(volumeLevelToGain(0.5f) - 0.125f) < 0.0001f &&
+             std::abs(volumeLevelToGain(0.8f) - 0.512f) < 0.0001f &&
+             std::abs(volumeLevelToGain(1.0f) - 1.0f) < 0.0001f,
+         "player volume levels should use a cubic audio taper");
+  FluentLookAndFeel sliderLookAndFeel(true);
+  VolumeSlider volumeTooltipSlider;
+  volumeTooltipSlider.setLookAndFeel(&sliderLookAndFeel);
+  volumeTooltipSlider.setBounds(
+      700, 200, LegacyDesignTokens::Slider::volumeControlWidth, 40);
+  volumeTooltipSlider.setValue(0.86, juce::dontSendNotification);
+  const auto volumeTooltipInfo =
+      getVolumeTooltipInfo(volumeTooltipSlider);
+  expect(volumeTooltipInfo.text == "86%" &&
+             volumeTooltipInfo.anchorBounds ==
+                 volumeTooltipSlider.getThumbBoundsInParent(),
+         "volume tooltips should use the current value and thumb position");
+  const auto volumeTooltipPlacement = TooltipPlacement::place(
+      sliderLookAndFeel.getFluentValueTooltipSize(volumeTooltipInfo.text),
+      volumeTooltipInfo.anchorBounds, {0, 0, 900, 280}, {}, {},
+      LegacyDesignTokens::Slider::volumeTooltipGap, 8);
+  expect(volumeTooltipPlacement.getBottom() ==
+             volumeTooltipInfo.anchorBounds.getY() -
+                 LegacyDesignTokens::Slider::volumeTooltipGap,
+         "volume tooltips should remain close to the visible thumb");
+  const auto volumeThumbBounds = volumeTooltipSlider.getThumbBounds();
+  const auto volumeThumbCentre = volumeThumbBounds.getCentre();
+  expect(volumeTooltipSlider.isPointOverThumb(volumeThumbCentre) &&
+             !volumeTooltipSlider.isPointOverThumb(
+                 volumeThumbCentre.translated(
+                     LegacyDesignTokens::Slider::thumbDiameter * 0.5f + 0.5f,
+                     0.0f)),
+         "volume thumb hover detection should end at the visible circle");
+
+  VolumeSlider highVolumeSlider;
+  highVolumeSlider.setLookAndFeel(&sliderLookAndFeel);
+  highVolumeSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+  highVolumeSlider.setBounds(
+      0, 0, LegacyDesignTokens::Slider::volumeControlWidth, 40);
+  const auto minimumThumbCentre = highVolumeSlider.getPositionOfValue(0.0);
+  const auto maximumThumbCentre = highVolumeSlider.getPositionOfValue(1.0);
+  highVolumeSlider.setValue(0.99, juce::dontSendNotification);
+  const auto highVolumeThumbCentre =
+      highVolumeSlider.getPositionOfValue(highVolumeSlider.getValue());
+  const auto highVolumeThumbRadius =
+      sliderLookAndFeel.getSliderThumbRadius(highVolumeSlider);
+  const auto highVolumeRemainder =
+      maximumThumbCentre - highVolumeThumbCentre;
+  highVolumeSlider.setValue(0.94, juce::dontSendNotification);
+  const auto ninetyFourRemainder =
+      (float)highVolumeSlider.getWidth() -
+      (highVolumeSlider.getPositionOfValue(highVolumeSlider.getValue()) +
+       highVolumeThumbRadius);
+  highVolumeSlider.setValue(1.0, juce::dontSendNotification);
+  expect(LegacyDesignTokens::Layout::transportVolumeAreaWidth -
+                 LegacyDesignTokens::Layout::transportButtonSize * 2 - 8 >=
+             LegacyDesignTokens::Slider::volumeControlWidth &&
+             LegacyDesignTokens::Slider::volumeControlWidth ==
+                 LegacyDesignTokens::Slider::volumeTrackLength &&
+             std::abs(maximumThumbCentre - minimumThumbCentre -
+                      (LegacyDesignTokens::Slider::volumeControlWidth -
+                       LegacyDesignTokens::Slider::thumbDiameter)) <
+                 0.01f &&
+             std::abs(minimumThumbCentre - highVolumeThumbRadius) < 0.01f &&
+             std::abs((maximumThumbCentre + highVolumeThumbRadius) -
+                      highVolumeSlider.getWidth()) < 0.01f &&
+             ninetyFourRemainder > 4.0f &&
+             highVolumeRemainder >= 1.0f &&
+             std::abs(highVolumeSlider.getNormalisableRange().skew -
+                      1.0) < 0.001 &&
+             LegacyDesignTokens::Slider::innerThumbDiameter == 8.0f &&
+             highVolumeSlider.getSliderSnapsToMousePosition(),
+         "volume sliders should preserve a 120-pixel visual track, exact "
+         "endpoints, and absolute pointer tracking");
+  volumeTooltipSlider.setLookAndFeel(nullptr);
+  highVolumeSlider.setLookAndFeel(nullptr);
+  expect(!isBackgroundEffectStrengthEnabled(1, true) &&
+             isBackgroundEffectStrengthEnabled(2, true) &&
+             !isBackgroundEffectStrengthEnabled(4, false),
+         "background effect strength should remain visible but disable when "
+         "the selected effect cannot use it");
 
   const juce::Rectangle<int> tooltipParent(0, 0, 200, 120);
+  juce::Component tooltipBoundary;
+  juce::TextButton outerTooltipTarget;
+  juce::TextButton innerTooltipTarget;
+  outerTooltipTarget.setTooltip("outer");
+  innerTooltipTarget.setTooltip("inner");
+  tooltipBoundary.addAndMakeVisible(outerTooltipTarget);
+  outerTooltipTarget.addAndMakeVisible(innerTooltipTarget);
+  expect(TooltipPlacement::findAnchorTarget(&innerTooltipTarget,
+                                            &tooltipBoundary) ==
+             &outerTooltipTarget,
+         "nested tooltip clients should anchor to the outer interactive "
+         "control");
+
   const juce::Rectangle<int> topAnchor(80, 2, 40, 20);
   const auto topPlacement =
       TooltipPlacement::place({80, 40}, topAnchor, tooltipParent);
-  expect(topPlacement.getY() >= topAnchor.getBottom() &&
-             !topPlacement.intersects(topAnchor),
-         "tooltips near the top edge should automatically move below");
+  expect(topPlacement.getY() == topAnchor.getBottom() + 8 &&
+             topPlacement.getCentreX() == topAnchor.getCentreX() &&
+             TooltipPlacement::anchorGap(topPlacement, topAnchor) == 8 &&
+             TooltipPlacement::hasAnchorProjection(topPlacement, topAnchor),
+         "tooltips near the top edge should remain anchored directly below");
 
-  juce::Array<juce::Rectangle<int>> tooltipAvoidAreas;
-  tooltipAvoidAreas.add({60, 0, 100, 46});
-  const juce::Rectangle<int> centreAnchor(80, 54, 40, 20);
+  const juce::Rectangle<int> bottomAnchor(80, 98, 40, 20);
+  const auto bottomPlacement =
+      TooltipPlacement::place({80, 40}, bottomAnchor, tooltipParent);
+  expect(bottomPlacement.getBottom() == bottomAnchor.getY() - 8 &&
+             TooltipPlacement::anchorGap(bottomPlacement, bottomAnchor) == 8 &&
+             TooltipPlacement::hasAnchorProjection(bottomPlacement,
+                                                    bottomAnchor),
+         "tooltips near the bottom edge should remain anchored directly above");
+
+  juce::Array<juce::Rectangle<int>> blockingOverlay;
+  blockingOverlay.add({80, 108, 180, 40});
+  const juce::Rectangle<int> centreAnchor(120, 70, 40, 30);
   const auto avoidingPlacement = TooltipPlacement::place(
-      {80, 40}, centreAnchor, tooltipParent, tooltipAvoidAreas);
-  expect(!avoidingPlacement.intersects(centreAnchor) &&
-             !avoidingPlacement.intersects(tooltipAvoidAreas[0]),
-         "tooltips should avoid the anchor and registered overlay regions");
+      {100, 40}, centreAnchor, {0, 0, 300, 200}, blockingOverlay);
+  expect(avoidingPlacement.getBottom() == centreAnchor.getY() - 8 &&
+             TooltipPlacement::anchorGap(avoidingPlacement, centreAnchor) == 8 &&
+             !avoidingPlacement.intersects(blockingOverlay[0]),
+         "explicit overlay obstacles should flip placement without detaching "
+         "the tooltip from its anchor");
 
-  juce::Array<juce::Rectangle<int>> toolbarControls;
-  toolbarControls.add({214, 8, 78, 36});
-  toolbarControls.add({348, 8, 48, 36});
   const juce::Rectangle<int> toolbarAnchor(300, 8, 40, 36);
   const auto toolbarPlacement = TooltipPlacement::place(
-      {220, 44}, toolbarAnchor, {0, 0, 420, 180}, toolbarControls);
-  expect(toolbarPlacement.getY() >= toolbarAnchor.getBottom() &&
-             !toolbarPlacement.intersects(toolbarAnchor) &&
-             !toolbarPlacement.intersects(toolbarControls[0]) &&
-             !toolbarPlacement.intersects(toolbarControls[1]),
-         "top toolbar tooltips should move below and avoid adjacent controls");
+      {220, 44}, toolbarAnchor, {0, 0, 420, 180});
+  expect(toolbarPlacement.getY() == toolbarAnchor.getBottom() + 8 &&
+             TooltipPlacement::anchorGap(toolbarPlacement, toolbarAnchor) == 8 &&
+             TooltipPlacement::hasAnchorProjection(toolbarPlacement,
+                                                    toolbarAnchor),
+         "toolbar tooltips should shift within the viewport while preserving "
+         "the requested anchor gap");
+
+  const auto noNearbyPlacement = TooltipPlacement::place(
+      {180, 50}, {80, 44, 40, 32}, tooltipParent);
+  expect(noNearbyPlacement.isEmpty(),
+         "tooltips should hide when no adjacent anchored placement fits");
+
+  juce::Array<juce::Rectangle<int>> bottomTransportHardAreas;
+  bottomTransportHardAreas.add({758, 205, 48, 68});
+  juce::Array<juce::Rectangle<int>> bottomTransportSoftAreas;
+  bottomTransportSoftAreas.add({0, 170, 890, 6});
+  const juce::Rectangle<int> bottomTransportAnchor(701, 205, 48, 68);
+  const auto bottomTransportPlacement = TooltipPlacement::place(
+      {210, 48}, bottomTransportAnchor, {0, 0, 890, 280},
+      bottomTransportHardAreas, bottomTransportSoftAreas);
+  expect(bottomTransportPlacement.getBottom() ==
+             bottomTransportAnchor.getY() - 8 &&
+             TooltipPlacement::intersectionArea(
+                 bottomTransportPlacement,
+                 bottomTransportAnchor.expanded(8)) == 0 &&
+             TooltipPlacement::intersectionArea(
+                 bottomTransportPlacement,
+                 bottomTransportHardAreas[0].expanded(8)) == 0 &&
+             TooltipPlacement::intersectionArea(
+                 bottomTransportPlacement, bottomTransportSoftAreas[0]) > 0,
+         "bottom transport tooltips should stay close to their anchor even "
+         "when they cross the progress track");
+
+  expect(LegacyDesignTokens::Layout::playlistRowHeight(12.0f) == 44 &&
+             LegacyDesignTokens::Layout::playlistRowHeight(16.0f) == 44 &&
+             LegacyDesignTokens::Layout::playlistRowHeight(22.0f) == 44 &&
+             LegacyDesignTokens::Layout::playlistRowHeight(36.0f) == 52 &&
+             LegacyDesignTokens::Layout::playlistRowHeight(16.0f, false, 72) ==
+                 72 &&
+             LegacyDesignTokens::Layout::playlistRowHeight(16.0f, false, 12) ==
+                 44 &&
+             LegacyDesignTokens::Layout::playlistRowHeight(36.0f, false, 120) ==
+                 96,
+         "single-line playlist rows should use measured font height and fixed "
+         "vertical padding while respecting manual row-height limits");
+
+  const auto verticalScrollbarThumb = getFluentScrollbarThumbBounds(
+      0, 0, 12, 100, true, 60, 40, true);
+  const auto horizontalScrollbarThumb = getFluentScrollbarThumbBounds(
+      0, 0, 100, 12, false, 60, 40, true);
+  expect(verticalScrollbarThumb.getX() >= 1.0f &&
+             verticalScrollbarThumb.getRight() <= 11.0f &&
+             verticalScrollbarThumb.getY() >= 1.0f &&
+             verticalScrollbarThumb.getBottom() <= 99.0f &&
+             horizontalScrollbarThumb.getX() >= 1.0f &&
+             horizontalScrollbarThumb.getRight() <= 99.0f &&
+             horizontalScrollbarThumb.getY() >= 1.0f &&
+             horizontalScrollbarThumb.getBottom() <= 11.0f,
+         "hovered scrollbar thumbs should retain an inset on every clipped "
+         "edge");
 
   ComboBoxAnimationState comboMotion;
   comboMotion.setTargets(true, true);
@@ -898,8 +1184,10 @@ int main(int argc, char *argv[]) {
 
   expect(formatAudioSampleRate(48000.0) == "48.0 kHz",
          "audio sample rates should use a compact DAW label");
-  expect(formatAudioBufferSize(480, 48000.0) ==
-             "480 samples  |  10.0 ms",
+  const auto audioBufferLabel = formatAudioBufferSize(480, 48000.0);
+  expect(audioBufferLabel == L"480 samples \u00B7 10.0 ms" &&
+             audioBufferLabel.containsChar(0x00B7) &&
+             !audioBufferLabel.containsChar(0x00C2),
          "audio buffer labels should include round-trip timing context");
 
   const auto stereoMask = makeStereoOutputMask(6, 2);

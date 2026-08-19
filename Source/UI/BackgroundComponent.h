@@ -737,10 +737,9 @@ private:
           // B. 添加单色亮度噪点，避免彩色噪声破坏质感
           int noise = (rand() % 12) - 6; // +/- 6 的细微颗粒
 
-          for (int c = 0; c < 3; ++c) { // R、G、B
-            int val = p[data.pixelStride == 4 ? c + 1 : c] + noise;
-            p[data.pixelStride == 4 ? c + 1 : c] =
-                (uint8_t)juce::jlimit(0, 255, val);
+          const int colourChannels = juce::jmin(3, data.pixelStride);
+          for (int c = 0; c < colourChannels; ++c) {
+            p[c] = (uint8_t)juce::jlimit(0, 255, (int)p[c] + noise);
           }
           p += data.pixelStride;
         }
@@ -1680,7 +1679,7 @@ public:
   public:
     virtual ~Listener() = default;
     virtual void backgroundSettingsChanged(bool reapplyEffects) = 0;
-    virtual void dialogMaterialChanged(bool nativeMaterialChanged) = 0;
+    virtual void dialogMaterialChanged(bool backdropChanged) = 0;
     virtual void backgroundSettingsClosed() = 0;
   };
 
@@ -1714,8 +1713,8 @@ public:
     addAndMakeVisible(dialogMaterialCombo);
     dialogMaterialCombo.addItem(L"纯透明", 1);
     dialogMaterialCombo.addItem(L"高斯模糊", 2);
-    dialogMaterialCombo.addItem(L"磨砂玻璃", 3);
-    dialogMaterialCombo.addItem(L"亚克力", 4);
+    dialogMaterialCombo.addItem(L"Aero (毛玻璃)", 3);
+    dialogMaterialCombo.addItem(L"Acrylic (亚克力)", 4);
     dialogMaterialCombo.setSelectedId(
         static_cast<int>(getAppSettings().getDialogMaterialType()),
         juce::dontSendNotification);
@@ -1764,7 +1763,10 @@ public:
           juce::roundToInt(dialogStrengthSlider.getValue()));
       applyDialogMaterialSettings(false);
     };
-    dialogStrengthSlider.onDragEnd = []() { getAppSettings().save(); };
+    dialogStrengthSlider.onDragEnd = [this]() {
+      getAppSettings().save();
+      applyDialogMaterialSettings(true);
+    };
 
     addAndMakeVisible(imageLabel);
     imageLabel.setText(L"图片", juce::dontSendNotification);
@@ -1973,7 +1975,7 @@ public:
   }
 
   void paint(juce::Graphics &g) override {
-    FluentSettingsStyle::paintPanel(g, fluentLookAndFeel);
+    FluentSettingsStyle::paintPanel(g, fluentLookAndFeel, getLocalBounds());
     FluentSettingsStyle::paintCard(g, fluentLookAndFeel, sourceCardBounds);
     FluentSettingsStyle::paintCard(g, fluentLookAndFeel, effectsCardBounds);
     FluentSettingsStyle::paintCard(g, fluentLookAndFeel, behaviorCardBounds);
@@ -2141,16 +2143,15 @@ private:
     dialogStrengthSlider.setTooltip({});
   }
 
-  void applyDialogMaterialSettings(bool nativeMaterialChanged) {
-    if (auto *window = findParentComponentOfClass<juce::DialogWindow>()) {
-      if (nativeMaterialChanged)
+  void applyDialogMaterialSettings(bool backdropChanged) {
+    if (listener) {
+      listener->dialogMaterialChanged(backdropChanged);
+    } else if (auto *window = findParentComponentOfClass<juce::DialogWindow>()) {
+      if (backdropChanged)
         FluentSettingsStyle::refreshDialogMaterial(window);
       else
         FluentSettingsStyle::refreshDialogSurface(window);
     }
-    if (listener)
-      listener->dialogMaterialChanged(nativeMaterialChanged);
-    repaint();
   }
 
   void selectImage() {
@@ -2519,11 +2520,13 @@ private:
   }
 
   void updateBlurRadiusVisibility() {
-    bool showRadius = blurModeCombo.getSelectedId() > 1;
-    blurRadiusLabel.setVisible(showRadius);
-    blurRadiusSlider.setVisible(showRadius);
-    blurRadiusSlider.setEnabled(showRadius && hasConfiguredBackground());
-    blurRadiusLabel.setEnabled(showRadius && hasConfiguredBackground());
+    const bool canEdit = isBackgroundEffectStrengthEnabled(
+        blurModeCombo.getSelectedId(), hasConfiguredBackground());
+    // 保留强度行的布局和语义。无效果时沿用窗口材质“纯透明”的禁用状态。
+    blurRadiusLabel.setVisible(true);
+    blurRadiusSlider.setVisible(true);
+    blurRadiusSlider.setEnabled(canEdit);
+    blurRadiusLabel.setEnabled(canEdit);
   }
 
   bool hasConfiguredBackground() const {

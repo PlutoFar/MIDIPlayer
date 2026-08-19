@@ -57,7 +57,8 @@ public:
   PlaylistPanel(PlaylistManager &pm) : playlistManager(pm) {
     addAndMakeVisible(listBox);
     listBox.setModel(this);
-    listBox.setRowHeight(48);
+    listBox.setRowHeight(
+        LegacyDesignTokens::Layout::playlistMinimumRowHeight);
     listBox.setColour(juce::ListBox::backgroundColourId,
                       juce::Colours::transparentBlack);
     listBox.setColour(juce::ListBox::outlineColourId,
@@ -100,6 +101,8 @@ public:
     addAndMakeVisible(countLabel);
     countLabel.setColour(juce::Label::textColourId,
                          juce::Colours::white.withAlpha(0.5f));
+    countLabel.setFont(juce::Font(juce::FontOptions(14.0f)));
+    countLabel.setJustificationType(juce::Justification::centredLeft);
     countLabel.setInterceptsMouseClicks(false, false);
     updateCountLabel();
   }
@@ -165,9 +168,14 @@ public:
   }
 
   void updateRowHeight() {
-    float size = getAppSettings().getPlaylistFontSize();
-    // 行高按字体 3 倍计算，避免较大字号时列表项显得拥挤。
-    listBox.setRowHeight((int)(size * 3.0f));
+    const float size = getAppSettings().getPlaylistFontSize();
+    auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel());
+    const auto font = laf != nullptr
+                          ? laf->getPlaylistFont(size)
+                          : juce::Font(juce::FontOptions(size));
+    listBox.setRowHeight(LegacyDesignTokens::Layout::playlistRowHeight(
+        font.getHeight(), getAppSettings().getPlaylistRowSpacingAutomatic(),
+        getAppSettings().getPlaylistManualRowHeight()));
   }
 
   void deselectAllRows() {
@@ -469,15 +477,14 @@ public:
     auto area = getLocalBounds();
 
     auto toolbarArea = area.removeFromTop(48);
-    headerLabel.setBounds(toolbarArea.removeFromLeft(140).reduced(12, 0));
+    auto actions = toolbarArea.removeFromRight(240);
+    loadBtn.setBounds(actions.removeFromRight(60).reduced(4));
+    saveBtn.setBounds(actions.removeFromRight(60).reduced(4));
+    clearBtn.setBounds(actions.removeFromRight(60).reduced(4));
+    addBtn.setBounds(actions.removeFromRight(60).reduced(4));
 
-    loadBtn.setBounds(toolbarArea.removeFromRight(60).reduced(4));
-    saveBtn.setBounds(toolbarArea.removeFromRight(60).reduced(4));
-    clearBtn.setBounds(toolbarArea.removeFromRight(60).reduced(4));
-    addBtn.setBounds(toolbarArea.removeFromRight(60).reduced(4));
-
-    auto footerArea = area.removeFromBottom(32);
-    countLabel.setBounds(footerArea.reduced(12, 0));
+    headerLabel.setBounds(toolbarArea.removeFromLeft(112).reduced(12, 0));
+    countLabel.setBounds(toolbarArea.reduced(4, 0));
 
     listBox.setBounds(area);
   }

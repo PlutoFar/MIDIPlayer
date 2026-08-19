@@ -4,6 +4,7 @@
 #include "UI/MainContentComponent.h"
 #include "Utils/CommandLineMidiFileSupport.h"
 #include "Utils/DebugLogger.h"
+#include "Utils/Win11Helpers.h"
 #include <juce_gui_extra/juce_gui_extra.h>
 
 class ModernMidiPlayerApplication : public juce::JUCEApplication {
@@ -85,7 +86,8 @@ public:
     }
   }
 
-  class MainWindow : public juce::DocumentWindow {
+  class MainWindow : public juce::DocumentWindow,
+                     private juce::DarkModeSettingListener {
   public:
     MainWindow(const juce::String &name, midi::Core &core,
                FluentLookAndFeel &lookAndFeel)
@@ -132,12 +134,18 @@ public:
 #endif
 
       setVisible(true);
+      juce::Desktop::getInstance().addDarkModeSettingListener(this);
+      applySystemTitleBarTheme();
 
       if (settings.getRememberWindowBounds() && settings.getWindowMaximized())
         setFullScreen(true);
 
       if (settings.getAlwaysOnTop())
         setAlwaysOnTop(true);
+    }
+
+    ~MainWindow() override {
+      juce::Desktop::getInstance().removeDarkModeSettingListener(this);
     }
 
     void closeButtonPressed() override {
@@ -181,6 +189,13 @@ public:
     }
 
   private:
+    void darkModeSettingChanged() override { applySystemTitleBarTheme(); }
+
+    void applySystemTitleBarTheme() {
+      Win11Helpers::updateDarkMode(
+          this, juce::Desktop::getInstance().isDarkModeActive());
+    }
+
     bool isClosing = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainWindow)
   };

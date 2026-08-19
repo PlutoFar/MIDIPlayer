@@ -10,28 +10,47 @@ constexpr int panelMargin = 16;
 constexpr int cardPadding = 16;
 constexpr int rowGap = 10;
 
+enum class DialogCloseMode { userDismissible, programmaticOnly };
+
 class FluentDialogWindow final : public juce::DialogWindow,
                                  private juce::Timer {
 public:
   FluentDialogWindow(juce::DialogWindow::LaunchOptions &options,
                      juce::Component *constraintOwner,
-                     juce::Component *nativeOwner)
+                     juce::Component *nativeOwner,
+                     DialogCloseMode closeMode)
       : juce::DialogWindow(
             options.dialogTitle, options.dialogBackgroundColour,
-            options.escapeKeyTriggersCloseButton, true,
+            options.escapeKeyTriggersCloseButton, false,
             options.componentToCentreAround != nullptr
                 ? juce::Component::getApproximateScaleFactorForComponent(
                       options.componentToCentreAround)
                 : 1.0f),
-        constraintOwner(constraintOwner), nativeOwner(nativeOwner) {
+        constraintOwner(constraintOwner), nativeOwner(nativeOwner),
+        closeMode(closeMode),
+        escapeKeyTriggersCloseButton(options.escapeKeyTriggersCloseButton) {
     if (options.content.willDeleteObject())
       setContentOwned(options.content.release(), true);
     else
       setContentNonOwned(options.content.release(), true);
 
+    // JUCE chooses the Windows per-pixel layered peer from the component's
+    // opacity when addToDesktop() runs. Configure the complete transparent
+    // surface before creating the peer so the rounded corner alpha is native
+    // to the peer from its first frame.
+    setOpaque(false);
+    setDropShadowEnabled(false);
     setResizable(false, false);
     setUsingNativeTitleBar(options.useNativeTitleBar);
+    setTitleBarButtonsRequired(
+        closeMode == DialogCloseMode::userDismissible
+            ? juce::DocumentWindow::closeButton
+            : 0,
+        false);
+    setTitleBarHeight(LegacyDesignTokens::Layout::dialogTitleBarHeight);
+    setTitleBarTextCentred(false);
     setDraggable(false);
+    addToDesktop();
     // JUCE's Windows peer blocks client and non-client owner input while this
     // component is modal. Disabling the owner HWND separately breaks focus and
     // Z-order restoration when the dialog is destroyed.
@@ -44,6 +63,9 @@ public:
   }
 
   void closeButtonPressed() override {
+    if (closeMode != DialogCloseMode::userDismissible)
+      return;
+
     if (closing)
       return;
     closing = true;
@@ -54,6 +76,10 @@ public:
   }
 
   bool escapeKeyPressed() override {
+    if (closeMode != DialogCloseMode::userDismissible ||
+        !escapeKeyTriggersCloseButton)
+      return false;
+
     closeButtonPressed();
     return true;
   }
@@ -81,6 +107,46 @@ public:
     if (constraintOwner != nullptr)
       centreAroundComponent(constraintOwner.getComponent(), getWidth(),
                             getHeight());
+  }
+
+  void refreshMaterialBackdrop(bool recaptureSource = false) {
+    if (recaptureSource || !materialSource.isValid())
+      materialSource = captureFluentDialogMaterialSource(
+          this, nativeOwner.getComponent());
+
+    const auto config = getAppSettings().getDialogMaterialConfig();
+    const auto generation = ++materialRenderGeneration;
+    if (config.type == WindowMaterial::Type::Transparent ||
+        !materialSource.isValid()) {
+      materialBackdrop = {};
+      repaint();
+      return;
+    }
+
+    if (materialBackdrop.isNull())
+      materialBackdrop = createFluentDialogBaseLayer(getLocalBounds());
+    repaint();
+
+    auto safeThis = juce::Component::SafePointer<FluentDialogWindow>(this);
+    renderFluentDialogMaterialBackdropAsync(
+        materialSource, config,
+        [safeThis, generation](juce::Image renderedBackdrop) mutable {
+          if (safeThis == nullptr ||
+              safeThis->materialRenderGeneration != generation)
+            return;
+          safeThis->materialBackdrop = std::move(renderedBackdrop);
+          safeThis->repaint();
+        });
+  }
+
+  void paint(juce::Graphics &graphics) override {
+    juce::Graphics::ScopedSaveState saveState(graphics);
+    graphics.reduceClipRegion(createFluentDialogSurfacePath(
+        getLocalBounds().toFloat(), fluentDialogCornerRadius));
+    paintFluentDialogMaterialBackdrop(graphics, materialBackdrop,
+                                      getLocalBounds(),
+                                      fluentDialogCornerRadius);
+    juce::DialogWindow::paint(graphics);
   }
 
 private:
@@ -123,6 +189,11 @@ private:
 
   juce::Component::SafePointer<juce::Component> constraintOwner;
   juce::Component::SafePointer<juce::Component> nativeOwner;
+  DialogCloseMode closeMode;
+  bool escapeKeyTriggersCloseButton = true;
+  FluentDialogMaterialSource materialSource;
+  juce::Image materialBackdrop;
+  juce::uint64 materialRenderGeneration = 0;
   bool closing = false;
   bool nativeWindowHidden = false;
   AnimationPhase animationPhase = AnimationPhase::idle;
@@ -167,11 +238,17 @@ inline void configureLabel(juce::Label &label, FluentLookAndFeel &lookAndFeel,
   label.setMinimumHorizontalScale(1.0f);
 }
 
-inline void paintPanel(juce::Graphics &g, FluentLookAndFeel &lookAndFeel) {
-  g.fillAll(juce::Colours::transparentBlack);
-  g.setColour(lookAndFeel.getColors().cardBackground.withAlpha(
-      dialogSurfaceAlpha()));
-  g.fillRect(g.getClipBounds());
+inline void paintPanel(juce::Graphics &g, FluentLookAndFeel &lookAndFeel,
+                       juce::Rectangle<int> bounds,
+                       float surfaceAlphaBoost = 0.0f) {
+  juce::Graphics::ScopedSaveState saveState(g);
+  g.reduceClipRegion(createFluentDialogSurfacePath(
+      bounds.toFloat(), fluentDialogCornerRadius, false, true));
+  const float surfaceAlpha =
+      juce::jmin(0.96f, dialogSurfaceAlpha() + surfaceAlphaBoost);
+  g.setColour(
+      lookAndFeel.getColors().cardBackground.withAlpha(surfaceAlpha));
+  g.fillRect(bounds);
   paintMaterialTexture(g, lookAndFeel);
 }
 
@@ -181,7 +258,9 @@ inline void paintCard(juce::Graphics &g, FluentLookAndFeel &lookAndFeel,
   const auto card = bounds.toFloat();
   const auto surface =
       colors.cardBackground.interpolatedWith(colors.textPrimary, 0.025f)
-          .withAlpha(juce::jmin(0.96f, dialogSurfaceAlpha() + 0.18f));
+          .withAlpha(juce::jmin(
+              0.96f, dialogSurfaceAlpha() +
+                         fluentTransientDialogSurfaceAlphaBoost));
   g.setColour(surface);
   g.fillRoundedRectangle(card, 8.0f);
   g.setColour(colors.cardBorder.withMultipliedAlpha(0.55f));
@@ -211,7 +290,8 @@ public:
   ~FluentMessageDialogContent() override { setLookAndFeel(nullptr); }
 
   void paint(juce::Graphics &graphics) override {
-    paintPanel(graphics, fluentLookAndFeel);
+    paintPanel(graphics, fluentLookAndFeel, getLocalBounds(),
+               fluentTransientDialogSurfaceAlphaBoost);
     graphics.setColour(fluentLookAndFeel.getColors().textPrimary);
     graphics.setFont(fluentLookAndFeel.getBodyLargeFont());
     graphics.drawFittedText(
@@ -272,21 +352,24 @@ inline void centreDialogNow(juce::DialogWindow *window) {
 inline void refreshDialogSurface(juce::DialogWindow *window) {
   if (window == nullptr)
     return;
-  window->getProperties().set("fluentDialogSurfaceAlpha",
-                              (double)dialogSurfaceAlpha());
+  const float surfaceAlphaBoost = static_cast<float>((double)
+      window->getProperties().getWithDefault(
+          "fluentDialogSurfaceAlphaBoost", 0.0));
+  window->getProperties().set(
+      "fluentDialogSurfaceAlpha",
+      (double)juce::jmin(0.96f,
+                         dialogSurfaceAlpha() + surfaceAlphaBoost));
   window->repaint();
-  if (auto *content = window->getContentComponent())
-    content->repaint();
 }
 
 inline void refreshDialogMaterial(juce::DialogWindow *window) {
   if (window == nullptr)
     return;
 
-  const auto config = getAppSettings().getDialogMaterialConfig();
   window->setColour(juce::ResizableWindow::backgroundColourId,
                     juce::Colours::transparentBlack);
-  Win11Helpers::applyDialogMaterial(window, config);
+  if (auto *fluentWindow = dynamic_cast<FluentDialogWindow *>(window))
+    fluentWindow->refreshMaterialBackdrop();
   refreshDialogSurface(window);
 }
 
@@ -304,14 +387,9 @@ inline void applyDialogWindowStyle(juce::DialogWindow *window) {
 
   Win11Helpers::applyFluentDialogStyle(window, true,
                                        policy.useDwmRoundedCorners);
-  const auto regionApplied =
-      Win11Helpers::applyRoundedWindowRegion(window, policy.useWindowRegion);
-  window->getProperties().set("fluentRoundedRegionApplied",
-                              regionApplied > 0);
-  if (regionApplied > 0)
-    refreshDialogMaterial(window);
-  else
-    Win11Helpers::clearDialogMaterial(window);
+  Win11Helpers::clearDialogMaterial(window);
+  window->getProperties().set("fluentSoftwareMaterial", true);
+  refreshDialogSurface(window);
 }
 
 inline void refreshDialogNativeStyleLater(juce::DialogWindow *window) {
@@ -322,14 +400,8 @@ inline void refreshDialogNativeStyleLater(juce::DialogWindow *window) {
           safeWindow->isUsingNativeTitleBar());
       Win11Helpers::applyFluentDialogStyle(
           safeWindow.getComponent(), true, policy.useDwmRoundedCorners);
-      const auto regionApplied = Win11Helpers::applyRoundedWindowRegion(
-          safeWindow.getComponent(), policy.useWindowRegion);
-      safeWindow->getProperties().set("fluentRoundedRegionApplied",
-                                      regionApplied > 0);
-      if (regionApplied > 0)
-        refreshDialogMaterial(safeWindow.getComponent());
-      else
-        Win11Helpers::clearDialogMaterial(safeWindow.getComponent());
+      Win11Helpers::clearDialogMaterial(safeWindow.getComponent());
+      refreshDialogSurface(safeWindow.getComponent());
       if (auto *ownedWindow =
               dynamic_cast<FluentDialogWindow *>(safeWindow.getComponent()))
         Win11Helpers::setOwnedWindow(ownedWindow,
@@ -340,7 +412,10 @@ inline void refreshDialogNativeStyleLater(juce::DialogWindow *window) {
 
 inline juce::DialogWindow *
 launchDialogAsync(juce::DialogWindow::LaunchOptions &options,
-                  bool animateWindow = true) {
+                  bool animateWindow = true,
+                  float surfaceAlphaBoost = 0.0f,
+                  DialogCloseMode closeMode =
+                      DialogCloseMode::userDismissible) {
   options.dialogBackgroundColour = juce::Colours::transparentBlack;
   auto *anchor = options.componentToCentreAround;
   auto *nativeOwner = anchor != nullptr ? anchor->getTopLevelComponent()
@@ -350,10 +425,13 @@ launchDialogAsync(juce::DialogWindow::LaunchOptions &options,
     constraintOwner = parentDialog->getConstraintOwner();
 
   auto *window =
-      new FluentDialogWindow(options, constraintOwner, nativeOwner);
+      new FluentDialogWindow(options, constraintOwner, nativeOwner, closeMode);
+  window->getProperties().set("fluentDialogSurfaceAlphaBoost",
+                              (double)surfaceAlphaBoost);
   applyDialogWindowStyle(window);
   Win11Helpers::setOwnedWindow(window, nativeOwner);
   centreDialogNow(window);
+  window->refreshMaterialBackdrop(true);
   window->setAlpha(animateWindow ? dialogTransitionAlphaFloor : 1.0f);
   window->enterModalState(true, nullptr, true);
   if (animateWindow)
@@ -374,10 +452,15 @@ showMessageDialogAsync(const juce::String &title, const juce::String &message,
   options.content.setOwned(content);
   options.dialogTitle = title;
   options.dialogBackgroundColour = juce::Colours::transparentBlack;
-  options.escapeKeyTriggersCloseButton = true;
+  const auto closeMode = buttonText.isEmpty()
+                             ? DialogCloseMode::programmaticOnly
+                             : DialogCloseMode::userDismissible;
+  options.escapeKeyTriggersCloseButton =
+      closeMode == DialogCloseMode::userDismissible;
   options.useNativeTitleBar = false;
   options.resizable = false;
   options.componentToCentreAround = anchor;
-  return launchDialogAsync(options, animateWindow);
+  return launchDialogAsync(options, animateWindow,
+                           fluentTransientDialogSurfaceAlphaBoost, closeMode);
 }
 } // namespace FluentSettingsStyle
