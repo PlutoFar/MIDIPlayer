@@ -13,7 +13,7 @@ public:
 
   const juce::String getApplicationName() override { return L"MIDI 播放器"; }
 
-  const juce::String getApplicationVersion() override { return "1.0.0"; }
+  const juce::String getApplicationVersion() override { return "1.1.0"; }
 
   bool moreThanOneInstanceAllowed() override {
     const auto commandLine =

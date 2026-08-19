@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.27)
 
-project(ModernMidiPlayer VERSION 1.0.0 LANGUAGES C CXX)
+project(ModernMidiPlayer VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -97,7 +97,7 @@ endif()
 # ============================================================================
 juce_add_gui_app(MidiLegacy
     PRODUCT_NAME "MidiLegacy"
-    VERSION "1.0.0"
+    VERSION "1.1.0"
     COMPANY_NAME "AntigravityAudio"
     BUNDLE_ID "com.antigravity.modernmidiplayer"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"
@@ -139,7 +139,7 @@ endif()
 # ============================================================================
 juce_add_gui_app(MidiWorker
     PRODUCT_NAME "MidiWorker"
-    VERSION "1.0.0"
+    VERSION "1.1.0"
     COMPANY_NAME "AntigravityAudio"
     BUNDLE_ID "com.antigravity.midiworker"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/worker-icon.png"
