@@ -87,14 +87,14 @@ C:\Program Files\Common Files\VST3\
 
 ## 便携运行与故障诊断
 
-程序通过程序目录中的标记文件选择运行模式。
+标记文件与 `MidiPlayer.exe` 放在同一目录。配置数据保存在该目录下的 `Settings/`。
 
-| 标记文件 | 运行模式 | 设置位置 | 日志行为 |
-| --- | --- | --- | --- |
-| `portable.dat` | 普通便携模式 | 程序目录 `Settings/` | 保持正常运行日志级别 |
-| `portable_debug.dat` | 诊断便携模式 | 程序目录 `Settings/` | 启用 `debug_log.txt` 详细日志记录 |
+| 标记文件 | 标记文件位置 | 运行模式 | 配置数据目录 | 调试日志 |
+| --- | --- | --- | --- | --- |
+| `portable.dat` | 与 `MidiPlayer.exe` 同级 | 普通便携模式 | `程序目录\Settings\` | 不创建 `debug_log.txt` |
+| `portable_debug.dat` | 与 `MidiPlayer.exe` 同级 | 诊断便携模式 | `程序目录\Settings\` | 在程序目录创建 `debug_log.txt` |
 
-日常使用创建 `portable.dat`。故障定位期间创建 `portable_debug.dat`，复现问题后提交程序目录中的 `debug_log.txt`。诊断完成后保留普通便携模式标记 `portable.dat`。
+日常使用仅创建 `portable.dat`。故障定位期间改用 `portable_debug.dat`，复现问题后提交程序目录中的 `debug_log.txt`。诊断完成后恢复为 `portable.dat`。
 
 本地 VST3 插件可放入程序目录的 `VST3/`。
 
