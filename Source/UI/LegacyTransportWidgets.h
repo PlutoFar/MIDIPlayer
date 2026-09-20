@@ -1,5 +1,9 @@
 #pragma once
 
+// Contract: 音量滑块值为 [0,1] 界面比例，`volumeLevelToGain` 只在发送引擎增益前转换。
+// Concurrency: 控件、提示和滚动标签均由消息线程访问；锚点与可用区域须使用同一坐标空间。
+// Ownership: 提示组件借用外观对象，不拥有目标组件；显示请求只改变视觉状态。
+
 #include "CustomLookAndFeel.h"
 #include "TooltipPlacement.h"
 #include <cmath>

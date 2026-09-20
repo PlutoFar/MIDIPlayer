@@ -32,8 +32,7 @@ bool PluginLibrary::replacePluginList(const juce::KnownPluginList &source) {
     setError(L"无法保存插件目录缓存: " + file.getFullPathName());
     return false;
   }
-  // Publish only after the cache replacement succeeds, keeping disk and UI
-  // consistent.
+  // Ordering: 缓存替换成功后再发布内存目录；文件失败不会提前改变界面可见列表。
   pluginList.recreateFromXml(*xml);
   setError({});
   return true;
@@ -54,8 +53,7 @@ void PluginLibrary::loadKnownPluginList() {
 }
 
 void PluginLibrary::quarantineCorruptPluginCache(const juce::File &file) {
-  // Preserve every corrupt cache rather than replacing an earlier recovery
-  // file.
+  // Ownership: 隔离文件保留原始内容；每次隔离采用独立文件名，不覆盖已存在的恢复文件。
   const auto result = UserSettings::quarantineCorruptSettingsFile(file);
   if (result.failed())
     juce::Logger::writeToLog(result.getErrorMessage());

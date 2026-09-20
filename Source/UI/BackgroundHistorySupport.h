@@ -1,5 +1,9 @@
 #pragma once
 
+// Contract: 布局长度为逻辑像素，间距非负；分页位置应处于当前滚动范围。
+// Preconditions: 去重输入为候选本地文件且 `maximumFiles` 为正；内容比较可能同步读取磁盘。
+// Postconditions: 删除许可函数只判断归属和文件名，实际删除仍由调用方执行。
+
 #include <juce_core/juce_core.h>
 
 struct BackgroundHistoryLayout {

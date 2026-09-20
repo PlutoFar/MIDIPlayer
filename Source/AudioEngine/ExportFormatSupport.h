@@ -1,5 +1,8 @@
 #pragma once
 
+// Responsibilities: 当前 JUCE 构建的编码能力查询、参数校验和 writer 选项构造。
+// Trust Boundary: `validateExportFormatSettings` 检查实际编码能力；界面预设不能替代该校验。
+
 #include <juce_audio_formats/juce_audio_formats.h>
 
 struct ExportFormatCapabilities {
@@ -21,6 +24,7 @@ inline bool exportFormatNameMatches(const juce::String &requested,
   return false;
 }
 
+// Ownership: 返回格式管理器持有的借用指针；管理器销毁后失效，不支持时返回 nullptr。
 inline juce::AudioFormat *
 findExportAudioFormat(juce::AudioFormatManager &manager,
                       const juce::String &formatName) {
@@ -33,6 +37,7 @@ findExportAudioFormat(juce::AudioFormatManager &manager,
   return nullptr;
 }
 
+// Postconditions: 返回自有能力列表，编码器不存在时 `available=false`。
 inline ExportFormatCapabilities
 getExportFormatCapabilities(const juce::String &formatName) {
   juce::AudioFormatManager manager;
@@ -48,6 +53,8 @@ getExportFormatCapabilities(const juce::String &formatName) {
   return result;
 }
 
+// Preconditions: 采样率和数值参数为有限值；采样率单位为 Hz，质量索引从 0 起。
+// Failures: 不支持的格式、采样率、位深、浮点组合或质量索引返回带诊断的失败结果。
 inline juce::Result validateExportFormatSettings(
     const juce::String &formatName, double sampleRate, int bitDepth,
     bool useFloatingPoint, int qualityIndex) {
@@ -92,6 +99,7 @@ inline juce::Result validateExportFormatSettings(
   return juce::Result::ok();
 }
 
+// Preconditions: 参数已通过格式校验；仅构造双通道 writer 选项，不打开文件。
 inline juce::AudioFormatWriterOptions createExportWriterOptions(
     double sampleRate, int bitDepth, bool useFloatingPoint, int qualityIndex,
     const juce::String &title) {

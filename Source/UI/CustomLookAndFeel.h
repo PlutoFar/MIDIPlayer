@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 共享的颜色、字体和控件绘制；JUCE 绘制回调遵循基类契约。
+// Concurrency: 字体、强调色及控件外观修改在消息线程执行；对象须存活至所有使用组件解除绑定。
+// Units: JUCE 组件几何和字体高度为逻辑单位，显示器 DPI 由 peer 处理。
+
 #include "ComboBoxAnimationSupport.h"
 #include "LegacyDesignTokens.h"
 #include "../Utils/UserSettings.h"

@@ -7,7 +7,7 @@
 
 namespace midi {
 
-/// Stable plugin identifier (AudioPluginFormat::createIdentifierString()).
+/// Contract: 插件 ID 使用 `AudioPluginFormat::createIdentifierString()`，不以显示名称匹配实例。
 using PluginId = std::wstring;
 
 struct PluginInfo {
@@ -45,7 +45,7 @@ struct PlaylistSummary {
   int playMode = 1;
 };
 
-// Track collections are read on list changes, outside the transport refresh.
+// Invariant: 两个曲目数组按相同索引对应；列表变更后读取，禁止加入高频播放刷新。
 struct PlaylistState : PlaylistSummary {
   std::vector<std::wstring> trackNames;
   std::vector<bool> trackAvailable;
@@ -67,7 +67,7 @@ struct TaskState {
   std::wstring exportError;
 };
 
-/// Application state snapshot consumed by the desktop interface.
+/// Ownership: 界面持有的值快照；跨多次查询的结果不保证属于同一时刻。
 struct AppState {
   PluginState plugin;
   TransportState transport;

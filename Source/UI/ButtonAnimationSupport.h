@@ -1,5 +1,7 @@
 #pragma once
 
+// Contract: 输入缩放和透明度使用有限数值；返回是否仍需定时器，不修改动画状态。
+
 #include <cmath>
 
 inline bool shouldRunButtonAnimationTimer(bool interactionActive,

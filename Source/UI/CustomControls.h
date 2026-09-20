@@ -1,5 +1,9 @@
 #pragma once
 
+// Contract: 控件公开方法及 JUCE 回调均在消息线程执行；位置、字号和动画偏移使用逻辑像素。
+// Ownership: 控件拥有内部绘制对象和定时器；外观对象覆盖控件寿命，提示目标通过安全引用观察。
+// Ordering: 父组件接管提示绘制时，必须在自身覆盖层调用提示组件的绘制入口。
+
 #include "ButtonAnimationSupport.h"
 #include "CustomLookAndFeel.h"
 #include "TooltipPlacement.h"

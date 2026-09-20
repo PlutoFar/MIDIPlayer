@@ -207,7 +207,7 @@ bool MainContentComponent::savePlaylistAs() {
           .getChildFile("playlist.json"),
       "*.json");
 
-  // 关闭窗口路径需要同步得到保存结果。
+  // Ordering: 关闭流程必须得到保存/取消结果后才能决定是否退出，文件选择使用同步入口。
   if (fileChooser->browseForFileToSave(true)) {
     auto targetFile = fileChooser->getResult().withFileExtension(".json");
     const bool saved = core.saveList(

@@ -1,7 +1,7 @@
 #include "CoreImpl.h"
 
-// Playlist commands own index updates, persistence and delayed-play
-// invalidation.
+// Responsibilities: 列表变更、当前曲目索引及文件路径同步；磁盘格式由 `PlaylistManager` 处理。
+// Invariant: 删除当前项或清空列表同时清空 MIDI 序列，并使旧延迟播放请求失效。
 
 namespace midi {
 

@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: Windows 命名文件映射、请求/响应事件及固定容量音频块布局。
+// Ownership: 每个进程独立持有句柄；映射引用不得超过 `SharedBlockOwner` 的寿命。
+// Invariant: 两端使用相同布局；同时最多一项渲染请求，事件通知前写完对应数据和序列号。
+
 #include <juce_core/juce_core.h>
 
 #include <cstdint>
@@ -61,6 +65,7 @@ struct SharedBlockLayout {
   static constexpr int maxMidiBytes = 8192;
 };
 
+// Preconditions: 宿主块长度可用 int 安全执行向上取整；非正长度返回 0。
 inline int getSharedBlockChunkCount(int totalSamples) {
   return totalSamples > 0
              ? (totalSamples + SharedBlockLayout::maxSamples - 1) /
@@ -68,6 +73,7 @@ inline int getSharedBlockChunkCount(int totalSamples) {
              : 0;
 }
 
+// Postconditions: 返回从 `startSample` 开始的受容量限制长度；区间无效时返回 0。
 inline int getSharedBlockChunkSize(int totalSamples, int startSample) {
   if (totalSamples <= 0 || startSample < 0 || startSample >= totalSamples)
     return 0;
@@ -75,6 +81,7 @@ inline int getSharedBlockChunkSize(int totalSamples, int startSample) {
                     totalSamples - startSample);
 }
 
+// Ordering: 主进程写请求序列号/参数/MIDI 后通知；工作进程写音频/结果/响应序列号后通知。
 struct SharedBlockHeader {
   double sampleRate = 44100.0;
   std::uint64_t requestSequence = 0;
@@ -90,10 +97,12 @@ struct SharedBlock {
   unsigned char midi[SharedBlockLayout::maxMidiBytes]{};
 };
 
+// Contract: 工作进程为插件保留完整输出通道；共享块仅回传前两个通道。
 inline int getWorkerProcessChannelCount(int pluginOutputChannels) {
   return juce::jmax(SharedBlockLayout::maxChannels, pluginOutputChannels);
 }
 
+// Reason: 只有最多双输出的插件使用显式立体声配置，多输出插件保留原总线布局。
 inline bool shouldUseExplicitStereoHostConfig(int pluginOutputChannels) {
   return pluginOutputChannels <= SharedBlockLayout::maxChannels;
 }
@@ -102,6 +111,8 @@ enum class WaitResult { signalled, timedOut, failed };
 
 class SharedBlockOwner {
 public:
+  // Preconditions: 两端使用相同的非空会话名，且不与其他插件会话共享名称。
+  // Failures: 构造后必须检查 `isOpen`；系统调用失败保存在 `getLastErrorMessage`，析构回收部分句柄。
   explicit SharedBlockOwner(const juce::String &name) : mappingName(name) {
 #if JUCE_WINDOWS
     openWindowsHandles();
@@ -110,6 +121,7 @@ public:
 #endif
   }
 
+  // Preconditions: 本进程的渲染与等待已结束，不再持有 `block()` 的借用引用。
   ~SharedBlockOwner() {
 #if JUCE_WINDOWS
     if (mappedBlock != nullptr)
@@ -128,11 +140,14 @@ public:
 
   bool isOpen() const { return mappedBlock != nullptr && requestEvent != nullptr && responseEvent != nullptr; }
 
+  // Preconditions: `isOpen()` 为真；访问时遵循请求/响应的写入所有权，不提供额外数据锁。
+  // Failures: 未映射时触发调试断言；发布构建仍要求调用方满足前置条件。
   SharedBlock &block() {
     jassert(mappedBlock != nullptr);
     return *mappedBlock;
   }
 
+  // Contract: const 访问具有与可修改访问相同的映射寿命和跨进程同步要求。
   const SharedBlock &block() const {
     jassert(mappedBlock != nullptr);
     return *mappedBlock;
@@ -141,9 +156,12 @@ public:
   juce::String getName() const { return mappingName; }
   juce::String getLastErrorMessage() const { return lastError; }
 
+  // Ordering: 先写完整共享块，再发送对应事件；失败返回 `false` 并记录系统诊断。
   bool signalRequest() { return signal(requestEvent, "request"); }
   bool signalResponse() { return signal(responseEvent, "response"); }
 
+  // Contract: `timeoutMs` 为毫秒，负值表示无限等待；调用方必须安排终止唤醒。
+  // Failures: 超时和句柄/系统错误通过不同的 `WaitResult` 值返回，不自动重试。
   WaitResult waitForRequest(int timeoutMs) {
     return wait(requestEvent, timeoutMs);
   }

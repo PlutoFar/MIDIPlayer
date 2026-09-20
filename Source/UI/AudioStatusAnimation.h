@@ -1,5 +1,8 @@
 #pragma once
 
+// Contract: 消息线程独占动画状态；先设置忙碌或完成状态，再逐帧调用 `tick`。
+// Postconditions: `tick` 返回是否仍需动画；进度是帧推进值，抖动偏移使用逻辑像素。
+
 #include <algorithm>
 #include <cmath>
 

@@ -1,5 +1,8 @@
 #pragma once
 
+// Contract: 只维护行的视觉过渡，不修改播放列表；索引由调用方按已接受的业务变更提供。
+// Concurrency: 消息线程独占；行高使用逻辑像素，`tick` 按界面帧率推进并返回动画活跃状态。
+
 #include <algorithm>
 #include <cmath>
 

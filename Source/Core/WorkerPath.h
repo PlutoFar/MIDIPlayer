@@ -5,12 +5,9 @@
 namespace midi {
 
 /**
-    解析 VST3 插件 worker 子进程要启动的可执行文件。
-
-    优先返回与当前可执行文件同目录下的 `MidiWorker.exe`（便携发布布局）；
-    若不存在，则重启当前可执行文件自身作为 worker（单 exe 布局）。
-    两种布局都通过命令行 UID
-    (`PluginBridge::workerCommandLineUid`) 进入 worker 分支。
+    Contract: 优先选择与主程序同目录的 `MidiWorker.exe`，否则选择当前可执行文件。
+    Preconditions: 两种目标都必须实现 `PluginBridge::workerCommandLineUid` 对应入口。
+    Postconditions: 只解析路径，不启动进程；文件存在不证明版本匹配或可成功连接。
 */
 struct WorkerPath {
   static juce::File resolve() {

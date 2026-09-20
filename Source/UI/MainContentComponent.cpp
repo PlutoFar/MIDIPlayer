@@ -149,7 +149,7 @@ MainContentComponent::MainContentComponent(
       Win11Helpers::applyWin11Style(
           topLevel, juce::Desktop::getInstance().isDarkModeActive());
 
-    // Shell-open 流程统一处理音频设备错误，避免启动期对话框堆叠。
+    // Ordering: 已安排 Shell 打开时，设备提示由该流程负责，避免重复模态窗口。
     if (self.pendingShellOpen)
       return;
 
@@ -262,7 +262,7 @@ void MainContentComponent::timerCallback() {
 
   auto tcEndTime = juce::Time::getMillisecondCounter();
   auto tcDuration = tcEndTime - now;
-  if (tcDuration > 20) { // 超过 20ms 视为慢速执行。
+  if (tcDuration > 20) {
     LOG_DEBUG("[FREEZE_DIAG] TC completed (slow: " + juce::String(tcDuration) +
               "ms)");
   }
@@ -633,7 +633,7 @@ void MainContentComponent::updateLoopButtonTooltip() {
 void MainContentComponent::sliderValueChanged(juce::Slider *s) {
   if (s == &volumeSlider) {
     float vol = (float)s->getValue();
-    // Persist the slider level; Core receives the converted audio gain only.
+    // Invariant: 设置存储滑块比例，只有发送 `Core::volume` 时转换为音频增益。
     getAppSettings().setMasterVolume(vol);
     core.volume(volumeLevelToGain(vol));
     if (vol > 0.0f) {
@@ -672,7 +672,7 @@ void MainContentComponent::sliderDragEnded(juce::Slider *s) {
     isUserDraggingProgress = false;
     lastSeekRequestTime.store(juce::Time::getMillisecondCounter());
 
-    // 使用 AsyncUpdater 把 seek 移出拖动事件栈。
+    // Ordering: `triggerSeekUpdate` 用消息队列将实际 seek 移出拖动事件栈。
     triggerSeekUpdate(s->getValue());
   }
 }

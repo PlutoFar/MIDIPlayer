@@ -1,5 +1,9 @@
 #pragma once
 
+// Contract: 只记录窗口请求代次与实例身份，不创建或销毁原生插件窗口；由消息线程独占。
+// Ownership: 请求中的指针只用于身份比较，不被解引用，也不延长插件实例寿命。
+// Ordering: `beginSwitch` 递增请求代次；`closeWindow` 仅清除窗口记录，不使请求代次失效。
+
 #include <juce_core/juce_core.h>
 
 inline int getPluginEditorOpenDelayMs(const juce::String &) { return 300; }

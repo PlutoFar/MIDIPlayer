@@ -1,5 +1,9 @@
 #pragma once
 
+// Contract: 导出格式已经过编码能力校验；增益为线性值，缓冲区由调用方独占。
+// Side effect: 输出处理和抖动原地修改采样；抖动还推进调用方的随机数状态。
+// Ordering: 先应用主增益/软限幅，再对整数无损输出添加 TPDF 抖动；尾音测量返回峰值。
+
 #include <juce_audio_basics/juce_audio_basics.h>
 
 inline constexpr int exportOfflineBlockSize = 1024;

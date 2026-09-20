@@ -1,9 +1,13 @@
 #include "CoreImpl.h"
 
+// Responsibilities: 插件任务受理、后台控制命令及消息线程结果交付。
+// Invariant: 同时最多一个内部插件任务；线程结束通过 `join` 与结果读取建立同步。
+
 namespace midi {
 
 Core::Impl::~Impl() {
-  // Joining holds no state/message lock. IPC work never waits for UI callbacks.
+  // Ordering: 等待任务前撤销延迟回调；`join` 期间不持有核心锁或消息管理器锁。
+  // Concurrency: 工作线程只能等待 IPC，禁止依赖主程序消息线程完成操作。
   life.reset();
   cancelPendingUpdate();
   engine.cancelPendingPluginOperation();
@@ -37,6 +41,7 @@ bool Core::Impl::startPluginTask(std::function<bool()> operation,
 }
 
 void Core::Impl::handleAsyncUpdate() {
+  // Ordering: 先等待线程退出，再读取结果、清除任务标记并交付回调。
   pluginTask.join();
   auto completion = std::move(pluginCompletion);
   const bool succeeded = pluginTaskSucceeded;

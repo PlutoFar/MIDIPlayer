@@ -5,6 +5,9 @@
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+// Responsibilities: 曲目顺序、可用性、未保存变更及 JSON 持久化；不控制音频播放。
+// Ownership: 持有曲目记录；返回的指针/引用只在下一次列表修改前有效。
+// Concurrency: 调用方串行化所有访问；应用运行时由 `Core::stateMutex` 提供保护。
 class PlaylistManager {
 public:
   struct Track {
@@ -15,7 +18,7 @@ public:
   };
 
   struct ChangeLog {
-    // 只记录本次会话尚未保存的增删/排序状态，不作为完整审计日志。
+    // Contract: 只表示尚未保存的增删/排序摘要，成功保存或加载后归零。
     int added = 0;
     int removed = 0;
     bool reordered = false;
@@ -29,6 +32,7 @@ public:
 
   PlaylistManager() = default;
 
+  // Postconditions: 按文件路径身份查询；不验证 MIDI 内容，未命中的索引查询返回 -1。
   bool contains(const juce::File &file) const {
     for (const auto &t : tracks) {
       if (t.file == file)
@@ -37,6 +41,8 @@ public:
     return false;
   }
 
+  // Preconditions: 输入本机文件；只校验存在性和 .mid/.midi 扩展名，内容解析由播放器执行。
+  // Postconditions: 接受后追加记录并更新变更计数；拒绝文件或重复项返回 `false`。
   bool addFile(const juce::File &file, bool allowDuplicates = false) {
     if (!file.existsAsFile())
       return false;
@@ -53,6 +59,8 @@ public:
     return true;
   }
 
+  // Postconditions: 接受的删除/移动更新变更摘要；无效索引或原位移动返回 `false`。
+  // 播放索引和 MIDI 清理由 `Core` 同步处理，本模型不持有这些状态。
   bool removeTrack(int index) {
     if (index < 0 || index >= tracks.size())
       return false;
@@ -82,6 +90,7 @@ public:
     }
   }
 
+  // Ownership: 查询返回借用列表或元素指针，禁止跨列表修改保存它们；无效元素索引返回 nullptr。
   const juce::Array<Track> &getTracks() const { return tracks; }
 
   int size() const { return tracks.size(); }
@@ -100,6 +109,7 @@ public:
     return -1;
   }
 
+  // Side effect: 重新检查文件存在性并更新记录；返回 `false` 仍可能已将条目标记为不可用。
   bool refreshTrack(int index) {
     if (index < 0 || index >= tracks.size())
       return false;
@@ -112,7 +122,9 @@ public:
     return true;
   }
 
-  // JSON 写入使用临时文件替换目标文件，避免半写入文件被加载。
+  // Preconditions: 调用方独占列表，目标目录可创建/写入；路径中的中文使用 JUCE 文件接口处理。
+  // Ordering: JSON 完整写入并关闭临时文件后替换目标；成功后才清除变更摘要。
+  // Failures: `saveDetailed` 返回具体诊断，`save` 只返回布尔结果。
   juce::Result saveDetailed(const juce::File &file) const {
     try {
       juce::DynamicObject::Ptr root = new juce::DynamicObject();
@@ -170,7 +182,8 @@ public:
 
   bool save(const juce::File &file) const { return saveDetailed(file).wasOk(); }
 
-  // 缺失曲目仍保留原始路径和顺序；全部条目验证通过后一次性替换列表。
+  // Trust Boundary: 验证 JSON 根结构、曲目数组及全部条目类型后才替换内存列表；当前未校验版本字段。
+  // Postconditions: 缺失文件保留原始路径/顺序并标记不可用；加载失败保留原列表。
   juce::Result loadDetailed(const juce::File &file) {
     if (!file.existsAsFile())
       return juce::Result::fail("Playlist file does not exist: " +
@@ -223,9 +236,11 @@ public:
 
   bool load(const juce::File &file) { return loadDetailed(file).wasOk(); }
 
+  // Preconditions: `mode` 已由核心入口约束为有效持久化枚举；本模型不负责归一化或保存设置。
   void setPlaybackMode(midi::PlaybackMode mode) { currentMode = mode; }
   midi::PlaybackMode getPlaybackMode() const { return currentMode; }
 
+  // Postconditions: 空列表或连续播放到末尾返回 -1；随机模式在多曲目时排除当前有效索引。
   int getNextIndex(int currentIndex) const {
     if (tracks.isEmpty())
       return -1;
@@ -257,7 +272,7 @@ public:
     }
   }
 
-  // 上一曲不维护随机历史；Shuffle 与 Sequential 都按列表前一项处理。
+  // Contract: 上一曲不维护随机历史；`Shuffle` 与 `Sequential` 按列表前一项处理。
   int getPreviousIndex(int currentIndex) const {
     if (tracks.isEmpty())
       return -1;
@@ -279,7 +294,7 @@ public:
 private:
   juce::Array<Track> tracks;
   midi::PlaybackMode currentMode = midi::PlaybackMode::Sequential;
-  mutable ChangeLog changeLog; // save() 为 const，保存成功后仍需清零变更记录。
+  mutable ChangeLog changeLog; // Side effect: const 保存操作成功后也会清零变更摘要。
 
 public:
   const ChangeLog &getChangeLog() const { return changeLog; }

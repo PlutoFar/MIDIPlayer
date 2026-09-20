@@ -22,11 +22,10 @@
 #include <random>
 
 /**
-    BackgroundComponent: 全窗口背景组件，负责背景图片、Monet 取色和
-    GaussianBlur/Aero/Acrylic 等背景材质效果。
-
-    图像加载、缩放、效果计算和主题色提取交给 BackgroundWorkerThread，
-    避免大图处理阻塞 UI 线程。
+    Responsibilities: 背景图像、材质和强调色过渡；文件解码及图像计算交给后台任务。
+    Ownership: 持有图像与工作线程；析构请求工作线程停止，异步界面回调使用 `SafePointer`。
+    Concurrency: 公开组件接口及监听器回调在消息线程执行；`imageLock` 保护共享图像状态。
+    Failures: 图像加载或处理可返回空图；组件根据可用图像状态决定绘制，不承诺所有请求都完成。
 */
 class BackgroundComponent : public juce::Component,
                             public juce::ChangeBroadcaster,
@@ -189,7 +188,7 @@ public:
 
   void timerCallback() override {
     if (isTransitioningImage) {
-      transitionAlpha += 0.08f; // 60fps 下约 300ms
+      transitionAlpha += 0.08f; // Units: 每次定时回调增加的透明度。
       if (transitionAlpha >= 1.0f) {
         transitionAlpha = 1.0f;
         checkTimerState();
@@ -301,14 +300,10 @@ private:
 
 private:
   /**
-      后台工作线程，用于图像加载、缩放、效果计算和主题色提取。
-
-      处理策略：
-      1. 原图超过 2560x1440 时降采样，减少后续模糊计算量。
-      2. K-Means 在 150x150 缩略图上运行；内部使用 8 个聚类中心，
-         最终返回调用方请求的颜色数量。
-      3. abortCurrentTask 是协作取消标记；耗时循环定期检查它，发现新任务后
-         尽快放弃当前结果并处理最新请求。
+      Responsibilities: 文件解码、背景材质和取色，提交结果前检查任务取消状态。
+      Concurrency: 队列字段在 `taskLock` 内交换，耗时计算在锁外执行。
+      Ordering: 新任务替换待处理任务并设置 `abortCurrentTask`；消息线程负责应用返回图像。
+      Invariant: 像素访问使用明确的图像格式和步长；降采样发生在大半径卷积及取色之前。
   */
   class BackgroundWorkerThread : public juce::Thread {
   public:
@@ -387,7 +382,7 @@ private:
 
   private:
     juce::String
-        lastExtractedPath; // 记录上次取色路径，用于跳过重复取色
+        lastExtractedPath; // Contract: 同一路径的重新取色须显式使用 `forceExtraction`。
 
     void processLoadTask(const juce::String &path,
                          const LoadSettingsSnapshot &settingsSnapshot) {
@@ -422,7 +417,7 @@ private:
                                                juce::dontSendNotification);
             });
 
-            // 请求返回 6 个代表色；K-Means 内部使用 8 个聚类中心
+            // Contract: 最多使用 8 个聚类中心，向界面请求交付 6 个代表色。
             auto palette = extractPaletteKMeans(img, 6, [this]() {
               return threadShouldExit() || abortCurrentTask;
             });
@@ -704,7 +699,6 @@ private:
                                    result.getHeight(),
                                    juce::Image::BitmapData::readWrite);
 
-      // 简单伪随机生成器
       uint32_t seed = 123456;
       auto rand = [&seed]() {
         seed = seed * 1103515245 + 12345;
@@ -717,7 +711,7 @@ private:
 
         uint8_t *p = data.getLinePointer(y);
         for (int x = 0; x < result.getWidth(); ++x) {
-          // A. 增强饱和度：让颜色远离灰阶
+          // Reason: 各 RGB 分量相对灰阶扩大差值，以增强材质饱和度。
           if (data.pixelStride >= 3) {
             int b = p[0];
             int g = p[1];
@@ -735,7 +729,7 @@ private:
           }
 
           // B. 添加单色亮度噪点，避免彩色噪声破坏质感
-          int noise = (rand() % 12) - 6; // +/- 6 的细微颗粒
+          int noise = (rand() % 12) - 6; // Units: [-6,5] 的单色亮度扰动。
 
           const int colourChannels = juce::jmin(3, data.pixelStride);
           for (int c = 0; c < colourChannels; ++c) {
@@ -981,8 +975,7 @@ private:
 
   void loadSettings() {
     int mode = getAppSettings().getBackgroundBlurMode();
-    // MaterialType 编号会持久化到设置：None=1、GaussianBlur=2、Aero=3、Acrylic=4
-    // 非法编号统一回退到 None，避免读取旧配置或损坏配置后产生未定义模式
+    // Trust Boundary: 配置编号映射为 `MaterialType`；范围外值归一为 None=1 并回写设置。
     if (mode < 1 || mode > 4) {
       mode = static_cast<int>(MaterialType::None);
       getAppSettings().setBackgroundBlurMode(mode);
@@ -1053,7 +1046,7 @@ private:
     }
   }
 
-  // 后台线程回调在消息线程执行。
+  // Concurrency: 图像发布入口只在消息线程调用；后台结果通过消息队列交付。
   void onImageLoaded(const juce::Image &img) {
     LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - start");
     {
@@ -1121,6 +1114,8 @@ private:
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BackgroundComponent)
 };
 
+// Contract: 消息线程维护裁剪交互；`cropRegion` 为原图归一化坐标，外部设置须提供有效区域。
+// Ownership: 保存 JUCE 图像引用，裁剪结果可能共享源图像存储；空源图返回空结果。
 class ImageCropperComponent : public juce::Component {
 public:
   ImageCropperComponent() { setInterceptsMouseClicks(true, true); }
@@ -1329,6 +1324,7 @@ private:
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ImageCropperComponent)
 };
 
+// Contract: 消息线程维护缩略图按钮及 hover 动画；图像和动画状态只影响预览，不修改背景配置。
 class ImagePreviewButton : public juce::Button, private juce::Timer {
 public:
   std::function<void()> onRemoveRequested;
@@ -1459,6 +1455,8 @@ private:
   }
 };
 
+// Contract: 消息线程设置调色板及选择；只在用户选色时调用 `onColorSelected`。
+// Postconditions: 更换调色板清除旧索引，空输入使用默认颜色；颜色未匹配时保留当前选择。
 class PaletteSelector : public juce::Component {
 public:
   std::function<void(juce::Colour)> onColorSelected;
@@ -1565,6 +1563,9 @@ private:
   std::vector<juce::Colour> palette;
 };
 
+// Responsibilities: 背景文件选择、裁剪、缓存和材质设置；缩略图任务持有独立输入。
+// Ownership: 借用背景组件、外观和监听器，宿主保证其覆盖对话框寿命。
+// Concurrency: 公开控件接口及监听器回调仅在消息线程执行；后台结果用安全组件引用交付。
 class BackgroundSettingsDialog : public juce::Component,
                                  public juce::ChangeListener {
 public:
@@ -1966,8 +1967,7 @@ public:
     updateImageDependentControls();
     updateDialogMaterialControlState();
 
-    // ToggleButton widths depend on their final text, so perform the initial
-    // layout only after every control has been configured.
+    // Ordering: 完成所有控件文本设置后再布局，ToggleButton 宽度依赖最终文案。
     setSize(640, getPreferredHeight());
 
     addChildComponent(tooltipOverlay);

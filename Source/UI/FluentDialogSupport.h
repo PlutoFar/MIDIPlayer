@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 对话框材质快照、后台图像处理和绘制策略，不持有原生窗口。
+// Concurrency: 捕获组件图像与绘制在消息线程，材质处理使用自有快照；异步结果回到消息线程。
+// Ownership: 线程池持有提交的任务；完成回调须使用安全组件引用并拒绝已过期结果。
+
 #include "../Core/BackgroundEffects.h"
 #include "../Utils/WindowMaterial.h"
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -153,6 +157,8 @@ inline juce::ThreadPool &fluentDialogMaterialThreadPool() {
   return pool;
 }
 
+// Preconditions: `source` 已在消息线程完成捕获；完成回调须自行检查窗口寿命和请求代次。
+// Postconditions: 任务由线程池回收，成功处理后在消息线程回调；退出中的任务可不交付结果。
 inline void renderFluentDialogMaterialBackdropAsync(
     FluentDialogMaterialSource source, WindowMaterial::Config config,
     FluentDialogMaterialRenderJob::Completion completion) {

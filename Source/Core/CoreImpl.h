@@ -18,10 +18,9 @@
 
 namespace midi {
 
-// Shared private state for midi::Core. The Core facade forwards to this; the
-// per-module implementations (Library/Player/Playlist/ExportTask/Startup) are
-// methods on Impl, split across their own .cpp files. Impl owns the single
-// AudioEngine and PlaylistManager instances for the whole application.
+// Ownership: `Impl` 独占服务对象、播放状态及插件任务；外部只使用 `Core` 契约。
+// Concurrency: `stateMutex` 保护播放/列表元数据及互斥任务的受理过程，渲染和 IPC 不持有此锁。
+// Ordering: 成员逆序析构使 `audio` 先解除设备回调，之后才销毁 `engine`。
 struct Core::Impl : private juce::AsyncUpdater {
   using StateLock = std::lock_guard<std::recursive_mutex>;
 
@@ -31,27 +30,27 @@ struct Core::Impl : private juce::AsyncUpdater {
   OfflineRenderer renderer{engine};
   PlaylistManager playlist;
   mutable std::recursive_mutex stateMutex;
+  // Ordering: 导出先取得 `exportMutex`，再短暂取得 `stateMutex`；禁止反向等待。
   std::mutex exportMutex;
   std::atomic<bool> pluginScanActive{false};
   std::atomic<bool> pluginTaskActive{false};
   std::atomic<bool> pluginChangesAudio{false};
   std::atomic<bool> audioConfigurationActive{false};
   juce::String pluginErrorText;
-  // Liveness token for delayed (juce::Timer) callbacks: expires on destruction
-  // so stale scheduled lambdas become no-ops, mirroring the Component
-  // SafePointer guard the Legacy UI used.
+  // Concurrency: 消息线程销毁令牌后，尚未执行的 `Timer` 回调不得解引用 `this`。
   std::shared_ptr<int> life{std::make_shared<int>(0)};
 
-  // Playback / track-switch business state (moved out of MainContentComponent).
+  // Invariant: 文件、名称和列表索引共同描述当前曲目；-1 表示未绑定列表项。
   int currentTrackIndex = -1;
   juce::File currentMidiFile;
   juce::String currentMidiName;
   juce::File currentPlaylistFile;
   juce::String playlistErrorText;
+  // Invariant: 延迟播放只接受当前代次；暂停、停止及曲目替换递增此值使旧请求失效。
   int trackSwitchGeneration = 0;
   bool isHandlingTrackEnd = false;
 
-  // Export task state (Core/ExportTask).
+  // Concurrency: 导出标记/进度可独立读取，取消结果和错误文本由 `stateMutex` 保护。
   std::atomic<bool> exportActiveFlag{false};
   std::atomic<float> exportProgressValue{0.0f};
   bool exportCancelledFlag = false;
@@ -59,22 +58,28 @@ struct Core::Impl : private juce::AsyncUpdater {
 
   ~Impl();
 
-  // ---- shared helpers (Core.cpp) ----
+  // Postconditions: 快照方法取得 `stateMutex` 后复制状态，不返回内部可修改引用。
   AppState buildState();
   PlaylistState buildPlaylistState();
+  // Preconditions: 消息线程调用，操作及回调不得抛出异常；`operation` 不得等待界面回调。
+  // Postconditions: 忙时返回 `false`；受理后由工作线程执行，再由消息线程交付结果。
+  // Ordering: `changesAudio` 只控制播放互斥；所有插件任务仍共享同一命令执行顺序。
   bool startPluginTask(std::function<bool()> operation,
                        std::function<void(bool)> completion,
                        bool changesAudio = true);
   void handleAsyncUpdate() override;
+  // Concurrency: 读取 `pluginTaskSucceeded` 前必须完成 `join`；回调和延迟关闭标记仅由消息线程访问。
   std::thread pluginTask;
   std::function<void(bool)> pluginCompletion;
   bool pluginTaskSucceeded = false;
   bool closeEditorWhenIdle = false;
+  // Ordering: 在锁内受理设备操作，释放锁后执行原生调用，结束时清除互斥标记。
   juce::String configureAudio(std::function<juce::String()> operation);
+  // Preconditions: 消息线程调度；`fn` 在消息线程且持有 `stateMutex` 时执行，不得等待插件线程。
   void scheduleAfter(int ms, std::function<void(Impl &)> fn);
   double sampleRate() const;
 
-  // ---- Library (Library.cpp) ----
+  // Concurrency: 插件入口遵循 `Core` 的消息线程/扫描线程约定；目录引用访问由 `stateMutex` 串行化。
   bool scan(std::function<bool()> shouldCancel);
   bool findById(const PluginId &id, juce::PluginDescription &out);
   bool loadAsync(const PluginId &id, std::function<void(bool)> completion);
@@ -83,7 +88,8 @@ struct Core::Impl : private juce::AsyncUpdater {
   void closeEditor();
   void terminateCrashedWorker();
 
-  // ---- Player (Player.cpp) ----
+  // Preconditions: 播放入口使用已选定的本机路径和列表索引；`loadMidi` 负责验证 MIDI 内容。
+  // Concurrency: 播放方法内部取得 `stateMutex`；导出调用 `loadMidi` 时必须已独占导出状态。
   bool canStartPlayback();
   bool loadMidi(const juce::File &file);
   void play();
@@ -99,7 +105,7 @@ struct Core::Impl : private juce::AsyncUpdater {
   void handleTrackEnd();
   void tick(bool uiSuppressTrackAdvance);
 
-  // ---- Playlist (Playlist.cpp) ----
+  // Postconditions: 列表命令在 `stateMutex` 内维护索引、路径及错误；失败以返回值报告。
   bool addToPlaylist(const juce::File &file);
   int addFilesToPlaylist(const std::vector<juce::File> &files);
   bool removeTrack(int index);
@@ -111,11 +117,8 @@ struct Core::Impl : private juce::AsyncUpdater {
   bool saveList(const juce::File &file);
   bool loadList(const juce::File &file);
 
-  // ---- ExportTask (ExportTask.cpp) ----
-  // Runs the offline export synchronously on the calling (worker) thread,
-  // driving AudioEngine and reporting progress / honouring cancel. The modal
-  // progress window stays in the UI layer, which supplies the callbacks. The
-  // playback state capture/restore around the render is handled here.
+  // Preconditions: 捕获和恢复由独占导出流程调用；位置以秒保存，避免设备采样率变化导致偏移。
+  // Postconditions: 恢复失败清空当前 MIDI 并返回诊断；已经失效的延迟切曲状态不被恢复。
   struct ExportPlaybackState {
     int trackIndex = -1;
     juce::File file;

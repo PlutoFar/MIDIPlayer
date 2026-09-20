@@ -4,7 +4,7 @@ void MainContentComponent::startPluginScan() {
   if (isScanningPlugins)
     return;
 
-  // 插件扫描目前不提供单插件进度，进度窗口以不确定状态显示。
+  // Contract: 扫描接口不提供逐插件进度；模态进度窗口使用不确定进度和协作取消。
   class ScanThread : public juce::ThreadWithProgressWindow {
   public:
     ScanThread(midi::Core &c, juce::Component *ownerComponent)

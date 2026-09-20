@@ -1,5 +1,8 @@
 #pragma once
 
+// Trust Boundary: Shell 命令行只在这里按文件存在性和扩展名筛选；MIDI 内容由核心解析。
+// Postconditions: 找不到支持的文件时返回空 `File`；字符串处理不打开或执行命令。
+
 #include <juce_core/juce_core.h>
 
 inline bool isSupportedMidiPath(const juce::File &file) {

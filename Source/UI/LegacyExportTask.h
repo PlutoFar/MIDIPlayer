@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 将导出参数和进度窗口转换为 `Core::runExport` 调用。
+// Ownership: 借用 `Core` 与窗口所有者；调用方必须等待任务结束后再销毁它们。
+// Concurrency: `run` 在工作线程写结果，界面只在 `runThread` 返回后读取结果字段。
+
 #include "../AudioEngine/ExportSettings.h"
 #include "../Core/Core.h"
 

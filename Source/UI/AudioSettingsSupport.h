@@ -1,5 +1,8 @@
 #pragma once
 
+// Contract: 采样率为 Hz，缓冲/延迟长度为采样；不可用数值以占位文本呈现。
+// Postconditions: 通道掩码只选择有效输出位；单通道设备选择通道 0，无通道时返回空掩码。
+
 #include <juce_core/juce_core.h>
 
 inline juce::String formatAudioSampleRate(double sampleRate) {

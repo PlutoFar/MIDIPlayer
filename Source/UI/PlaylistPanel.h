@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 显示曲目快照、拖放排序和行动画；列表修改由宿主监听器转交 `Core`。
+// Ownership: 借用 `Core`，内部持有列表快照；监听器必须是消息线程中的存活组件。
+// Ordering: 业务操作被接受后刷新快照及动画；未绑定监听器时不直接修改列表。
+
 #include "../Core/Core.h"
 #include "../Utils/UserSettings.h"
 #include "CustomLookAndFeel.h"

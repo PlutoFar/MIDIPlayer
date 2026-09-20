@@ -1,5 +1,7 @@
 #pragma once
 
+// Contract: 绘制和布局共用的逻辑尺寸、字体及动画参数；使用方不得再次应用显示器 DPI 缩放。
+
 #include <algorithm>
 #include <cmath>
 
@@ -59,7 +61,7 @@ constexpr int horizontalMinimumWidth = 120;
 constexpr int volumeTrackLength = 120;
 // 控件总宽度等于可视轨道长度；圆点半径由滑块布局从轨道两端内缩。
 constexpr int volumeControlWidth = volumeTrackLength;
-// 普通音乐播放器常用的立方音频渐变：界面百分比保持线性，输出增益取 level^3。
+// Invariant: 界面比例保持线性，发送给音频引擎的增益为 `level^3`；持久化保存转换前比例。
 constexpr float volumeGainExponent = 3.0f;
 constexpr int volumeTooltipGap = 6;
 constexpr int volumeTooltipMinimumHeight = 32;

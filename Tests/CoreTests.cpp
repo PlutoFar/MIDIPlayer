@@ -31,8 +31,8 @@ juce::File makeTestMidiFile(const juce::File &dir, const juce::String &name) {
 
 } // namespace
 
-// midi::Core facade behaviour: lifecycle, state defaults, playback guards,
-// playlist persistence, notifications, and error propagation.
+// Coverage: 核心默认状态、无插件播放拒绝、列表命令及并发快照一致性。
+// Boundary: 这些检查不加载真实插件，也不验证窗口交互。
 int runCoreTests() {
   int failures = 0;
 

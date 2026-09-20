@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 子进程内的插件实例、编辑器和共享块渲染；不持有主程序音频设备。
+// Ownership: `workerInstance` 管理实例，实例必须存活至消息循环结束以覆盖已排队的回调。
+// Concurrency: 连接线程只分发命令；消息线程加载/准备/卸载插件，渲染线程在 `pluginLock` 内处理音频。
+
 #include "PluginBridgeProtocol.h"
 #include "PluginBridgeSharedBlock.h"
 
@@ -23,6 +27,7 @@ public:
 
   ~PluginWorkerProcess() override { unloadPlugin(); }
 
+  // Postconditions: 使用约定 UID 建立 JUCE 父子连接；失败返回 `false`，入口负责退出进程。
   bool initialiseFromCommandLine(const juce::String &commandLine) {
     return juce::ChildProcessWorker::initialiseFromCommandLine(
         commandLine, workerCommandLineUid, workerConnectionTimeoutMs);
@@ -258,10 +263,8 @@ private:
       plugin->setPlayConfigDetails(0, SharedBlockLayout::maxChannels,
                                    request.sampleRate, request.blockSize);
     } else {
-      // Match AudioProcessorGraph hosting for multi-output instruments: keep
-      // the plugin's default bus layout and only update the running
-      // sample-rate/block-size. Re-declaring all outputs as one large main bus
-      // can crash plugins such as Vienna Synchron Pianos during prepareToPlay().
+      // Invariant: 多输出插件保留原总线布局，只更新采样率和块大小。
+      // Reason: 将全部输出重声明为单一主总线会破坏 Vienna Synchron Pianos 等插件的通道配置。
       plugin->setRateAndBufferSizeDetails(request.sampleRate,
                                           request.blockSize);
     }
@@ -369,6 +372,8 @@ private:
     shared.header.resultCode = static_cast<int>(StatusCode::ok);
   }
 
+  // Ordering: 发出退出请求并唤醒共享块等待，线程停止后才允许销毁插件及映射。
+  // Failures: 停止失败直接终止本工作进程，禁止继续析构仍被渲染线程使用的资源。
   void stopBlockThread() {
     if (!blockThread.isThreadRunning())
       return;
@@ -398,11 +403,13 @@ private:
   BlockProcessingThread blockThread;
 };
 
+// Ownership: 仅应用入口在消息线程建立/销毁此实例；禁止界面或其他线程替换它。
 inline std::unique_ptr<PluginWorkerProcess> &workerInstance() {
   static std::unique_ptr<PluginWorkerProcess> instance;
   return instance;
 }
 
+// Postconditions: 命中 worker UID 即返回 `true`；初始化失败安排退出，成功后转移所有权到全局实例。
 inline bool runWorkerIfRequested(const juce::String &commandLine) {
   if (!isPluginWorkerCommandLine(commandLine))
     return false;

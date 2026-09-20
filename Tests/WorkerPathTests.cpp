@@ -7,7 +7,7 @@
 
 namespace miditest {
 
-// Worker executable path resolution, fallback, and scanner crash containment.
+// Coverage: 工作进程路径选择及扫描子进程异常诊断；目录中的同名 worker 会改变路径选择分支。
 int runWorkerPathTests() {
   int failures = 0;
 

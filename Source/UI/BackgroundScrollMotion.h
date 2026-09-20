@@ -1,5 +1,8 @@
 #pragma once
 
+// Contract: 调用方以一致帧率推进 `tick`，位置、边界和速度均使用视口逻辑坐标。
+// Postconditions: 设置位置会清除目标及速度；位置始终限制在边界，静止时 `tick` 返回 `false`。
+
 #include <algorithm>
 #include <cmath>
 

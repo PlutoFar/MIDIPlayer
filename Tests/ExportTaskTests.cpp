@@ -6,8 +6,8 @@
 
 namespace miditest {
 
-// Core/ExportTask state: progress, cancellation, result, and visible errors.
-// Encoder and format coverage remains in ExportAndHintTests.cpp.
+// Coverage: 缺少待导出曲目时的失败结果、进度和错误状态。
+// Boundary: 编码格式由 `ExportAndHintTests.cpp` 检查；本用例不完成真实音频导出。
 int runExportTaskTests() {
   int failures = 0;
 

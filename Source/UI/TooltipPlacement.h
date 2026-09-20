@@ -1,5 +1,9 @@
 #pragma once
 
+// Contract: 尺寸、锚点和避让区须使用相同父组件逻辑坐标；查找锚点只在消息线程执行。
+// Ownership: 锚点为借用指针；尺寸/区域无效时返回空布局，组件范围不匹配时返回空指针。
+// Postconditions: 布局按遮挡代价选择候选区域；空间不足时不能保证避开全部避让区。
+
 #include <cmath>
 #include <cstdint>
 #include <limits>

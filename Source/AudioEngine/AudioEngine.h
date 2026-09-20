@@ -6,16 +6,24 @@
 #include <atomic>
 #include <juce_audio_processors/juce_audio_processors.h>
 
-// Realtime MIDI/audio processing and plugin hosting. Device ownership, catalog
-// persistence and file encoding belong to separate services.
+// Responsibilities: 生成 MIDI 事件、驱动插件渲染并应用实时输出处理。
+// Ownership: 持有 `MidiPlayer` 和进程桥接客户端；设备与文件编码由外部服务持有。
+// Concurrency: `Core` 串行化插件命令与导出；JUCE 在设备回调线程调用处理器接口。
+// Ordering: 所有设备回调和导出必须先结束，再析构引擎及共享内存。
 class AudioEngine final : public juce::AudioProcessor {
 public:
   AudioEngine();
   ~AudioEngine() override;
+  // Preconditions: 描述来自已扫描目录；调用方已独占插件任务，禁止与导出并发。
+  // Ordering: 暂停实时处理，卸载旧实例，再加载并配置新实例；替换失败不恢复旧插件。
+  // Failures: 加载返回 `false` 并记录 `getLastPluginError`；卸载异常由进程状态报告。
   bool loadPlugin(const juce::PluginDescription &description);
   void unloadPlugin();
+  // Preconditions: 已加载插件，命令线程独占桥接控制通道；窗口归工作进程所有。
+  // Failures: 打开返回 `false` 并记录诊断；关闭错误通过进程状态查询。
   bool openPluginEditor();
   void closePluginEditor() { bridge.closeEditor(); }
+  // Concurrency: 插件状态、名称及进程错误查询使用原子状态或内部锁，可与命令线程并发。
   bool hasPluginLoaded() const { return bridge.isPluginLoaded(); }
   juce::String getLoadedPluginName() const {
     return bridge.getLoadedPluginName();
@@ -24,19 +32,29 @@ public:
     return bridge.getStatus() == PluginBridge::BridgeStatus::crashed;
   }
   juce::String getPluginWorkerError() const { return bridge.getLastError(); }
+  // Preconditions: 命令线程独占且工作进程已崩溃；暂停实时处理后释放进程和映射。
   void terminateCrashedPluginWorker();
+  // Concurrency: 取消可从其他线程发起；重置仅用于受理下一项任务、启动其线程之前。
   void cancelPendingPluginOperation() { bridge.cancelPendingOperation(); }
   void resetPluginCancellation() { bridge.resetCancellation(); }
+  // Ordering: 捕获设备配置及修订号，暂停实时处理后发出 `prepare`，恢复调用前的暂停状态。
+  // Failures: 返回 `false` 并记录插件诊断；失败不发布新的已配置修订号。
   bool preparePlugin();
+  // Postconditions: 采样率单位为 Hz；修订号不一致时，实时输出等待重配置完成。
   double liveSampleRate() const { return deviceSampleRate.load(); }
   bool requiresPrepare() const {
     return hasPluginLoaded() &&
            preparedRevision.load() != deviceRevision.load();
   }
+  // Concurrency: 设备回调只发布原子配置；MIDI 快照更新及阻塞 IPC 由核心调度。
   void prepareToPlay(double sampleRate, int samplesPerBlock) override;
   void releaseResources() override {}
+  // Preconditions: JUCE 串行调用并持有处理器回调锁；导出不得同时消费 MIDI 或渲染共享块。
+  // Postconditions: 覆盖音频/MIDI 缓冲区；离线期间、配置未就绪或渲染失败时清空本块输出。
   void processBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &) override;
+  // Ownership: 返回借用引用；只供核心编排，序列生产和消费必须遵循 `MidiPlayer` 并发契约。
   MidiPlayer &getMidiPlayer() { return midiPlayer; }
+  // Postconditions: 原子保存 [0,1] 线性增益；不修改界面百分比或持久化配置。
   void setMasterVolume(float value) {
     masterVolume.store(juce::jlimit(0.0f, 1.0f, value));
   }
@@ -45,13 +63,20 @@ public:
     const juce::ScopedLock lock(errorLock);
     return lastPluginError;
   }
+  // Concurrency: 导出诊断由独占导出线程访问；其他线程通过 `Core` 的同步快照读取结果。
   juce::String getLastExportError() const { return lastExportError; }
   bool wasLastExportCancelled() const { return lastExportCancelled; }
+  // Preconditions: 核心已取得导出所有权，插件已加载，设置随后由编码边界校验。
+  // Ordering: 先阻止实时消费，再切换插件采样率和离线模式；恢复阶段重新配置实时设备参数。
+  // Failures: 返回 `false` 时读取导出错误；调用方仍负责恢复曲目和播放位置。
   bool prepareForOfflineExport(const ExportSettings &settings);
   bool restoreFromOfflineExport();
   bool isOfflineExportActive() const {
     return offlineExportActive.load(std::memory_order_acquire);
   }
+  // Ownership: 借用引擎，不能复制；`finish` 只执行一次恢复，析构处理尚未结束的会话。
+  // Preconditions: 调用方保证引擎存活并独占导出；须检查 `isActive` 后才渲染。
+  // Failures: 显式检查 `finish` 的结果；仅依赖析构无法取得恢复失败信息。
   class OfflineExportSession {
   public:
     OfflineExportSession(AudioEngine &owner, const ExportSettings &settings)
@@ -77,6 +102,8 @@ public:
     AudioEngine &engine;
     bool active = false;
   };
+  // Contract: 以下 JUCE 元数据接口描述固定的 MIDI 输入、立体声音频输出处理器。
+  // 插件窗口和插件状态位于子进程，因此本处理器不提供本地编辑器或状态序列化。
   const juce::String getName() const override {
     return "ModernMidiPlayerEngine";
   }
@@ -99,6 +126,8 @@ private:
     const juce::ScopedLock lock(errorLock);
     lastPluginError = message;
   }
+  // Preconditions: 实时回调或独占导出中的唯一渲染调用；不得与桥接资源释放并发。
+  // Ordering: MIDI 按宿主块生成，再按共享块容量切分；任一分块失败即返回 `false`。
   bool renderPluginBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &,
                          double sampleRate);
   void flushPluginStateBeforeUnload();
@@ -111,15 +140,14 @@ private:
 
   std::atomic<float> masterVolume{0.8f};
   std::atomic<bool> offlineExportActive{false};
-  // 停止播放时的音频淡出，用于避免爆音（44.1 kHz 下约 50 ms）
+  // Reason: 停止先淡出再释放音符；计数单位为采样，不随设备采样率重算。
   int fadeOutDuration = 2048;
   int fadeOutSamples = 2048;
   bool stopCleanupDone = false;
   int tailSamplesRendered = 0;
   int tailSilentSamples = 0;
 
-  // seek/切曲交叉淡入：静音包含 allSoundOff 瞬态的 buffer，
-  // 下一块干净 buffer 执行淡入。阶段值：0=空闲，2=淡入。
+  // Ordering: seek 清理块先静音，后续音频按剩余采样数淡入；阶段 0 为结束，2 为淡入。
   int seekCrossfadeDuration = 128;
   int seekCrossfadeSamples = 0;
   int seekCrossfadePhase = 0;

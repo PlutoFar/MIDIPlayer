@@ -1,5 +1,8 @@
 #pragma once
 
+// Contract: 消息线程更新目标并逐帧推进；展开和悬停进度保持在 [0,1]。
+// Postconditions: 读取接口只返回当前动画状态；`tick` 返回是否仍需刷新。
+
 #include <algorithm>
 #include <cmath>
 

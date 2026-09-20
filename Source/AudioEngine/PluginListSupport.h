@@ -1,5 +1,8 @@
 #pragma once
 
+// Contract: 调用方独占插件目录，格式管理器已注册相关格式。
+// Postconditions: 删除格式管理器判定已不存在的条目并返回数量；不写缓存文件。
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 inline int

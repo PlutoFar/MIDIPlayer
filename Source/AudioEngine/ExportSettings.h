@@ -2,6 +2,8 @@
 
 #include <juce_core/juce_core.h>
 
+// Contract: 界面与编码器共用的导出参数；写文件前必须经过 `validateExportFormatSettings`。
+// Units: 采样率为 Hz，尾音长度为秒；质量索引属于对应编码器的选项列表。
 struct ExportSettings {
   juce::String formatName = "WAV"; // 编码格式："WAV"、"FLAC" 或 "Ogg Vorbis"
   double sampleRate = 96000.0;     // 导出采样率，必须由目标编码器支持

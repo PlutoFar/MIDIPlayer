@@ -1,16 +1,14 @@
 #include "CoreImpl.h"
 
-// Core/ExportTask —— 离线导出编排：进入前保存播放现场、可选切到目标曲目、
-// 通过 AudioEngine::OfflineExportSession 渲染、结束后恢复播放现场。渲染本身
-// 由 OfflineRenderer 执行；模态进度窗口留在 UI 层，由调用方
-// 提供 onProgress / shouldCancel 回调。runExport 在调用方的工作线程上同步执行。
+// Responsibilities: 独占导出、曲目切换及播放现场恢复；文件编码交给 `OfflineRenderer`。
+// Concurrency: `runExport` 在调用线程同步执行，界面只通过进度/取消回调交换任务状态。
+// Ordering: 持有 `exportMutex` 至恢复结束；`stateMutex` 仅覆盖元数据访问，不覆盖编码过程。
 
 namespace midi {
 
 Core::Impl::ExportPlaybackState Core::Impl::captureExportPlaybackState() {
   StateLock lock(stateMutex);
-  // 导出可能切换到其他曲目；进入导出前保存播放现场并终止待恢复播放。
-  // trackSwitchGeneration 同步递增，防止旧的延迟播放回调在导出期间误触发。
+  // Ordering: 在切换导出曲目前保存秒级位置，并递增 `trackSwitchGeneration` 取消旧播放请求。
   ExportPlaybackState state;
   state.trackIndex = currentTrackIndex;
   state.file = currentMidiFile;
@@ -27,8 +25,7 @@ Core::Impl::ExportPlaybackState Core::Impl::captureExportPlaybackState() {
 juce::Result
 Core::Impl::restoreExportPlaybackState(const ExportPlaybackState &state) {
   StateLock lock(stateMutex);
-  // 导出结束后恢复用户原本的曲目、位置和播放状态。trackSwitchGeneration
-  // 递增后，导出过程中排队的旧回调全部过期。
+  // Ordering: 恢复曲目之前再次递增代次；恢复完成不重新启用已经失效的切曲回调。
   ++trackSwitchGeneration;
   engine.getMidiPlayer().setPlaying(false);
 
@@ -72,8 +69,7 @@ Core::ExportResult Core::Impl::runExport(int trackIndex,
     return ExportResult::Failed;
   }
 
-  // 整个导出期间置位 exportActiveFlag：tick() 据此抑制曲目推进与 seek 写入，
-  // 避免与捕获/恢复播放现场竞争。
+  // Invariant: `exportActiveFlag` 覆盖捕获、渲染和恢复整个区间，禁止实时控制修改导出现场。
   {
     StateLock lock(self.stateMutex);
     if (self.pluginTaskActive.load() || self.pluginScanActive.load() ||

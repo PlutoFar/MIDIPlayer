@@ -7,6 +7,7 @@
 
 namespace midi {
 
+// Postconditions: 优先保留调色板中精确匹配的保存色，其次选择首色；空调色板保留保存色。
 inline juce::Colour
 selectPaletteAccent(const std::vector<juce::Colour> &palette,
                     juce::Colour savedAccent) {

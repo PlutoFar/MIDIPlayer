@@ -7,6 +7,9 @@
 #include "Utils/Win11Helpers.h"
 #include <juce_gui_extra/juce_gui_extra.h>
 
+// Responsibilities: 在扫描、插件工作进程和桌面应用入口之间分流，并持有应用级对象。
+// Ordering: 工作进程参数优先于桌面初始化；关闭时先销毁窗口，再销毁核心，最后释放外观及日志。
+// Concurrency: 生命周期和 Shell 打开回调由 JUCE 消息线程调用。
 class ModernMidiPlayerApplication : public juce::JUCEApplication {
 public:
   ModernMidiPlayerApplication() = default;

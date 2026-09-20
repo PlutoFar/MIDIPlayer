@@ -22,6 +22,10 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <map>
 
+// Responsibilities: 播放主界面、对话框所有权及用户操作编排；业务状态由 `Core` 持有。
+// Ownership: 借用 `Core` 和应用外观，两者必须覆盖本组件及其对话框寿命。
+// Concurrency: 公开接口、JUCE 回调和监听器入口在消息线程执行；异步结果使用 `SafePointer`。
+// Ordering: 析构停止界面回调、取消插件操作并关闭对话框，之后宿主才销毁 `Core`。
 class MainContentComponent : public juce::Component,
                              public juce::Button::Listener,
                              public juce::ComboBox::Listener,
@@ -166,14 +170,17 @@ private:
   void confirmUnloadPlugin();
 
 public:
+  // Postconditions: 从核心读取当前列表的修改摘要；该检查不保存文件。
   bool hasUnsavedChanges() const;
 
   juce::String getPlaylistChangeSummary() const;
 
+  // Side effect: 保存已有列表或同步选择目标；取消/文件错误返回 `false`，用于决定能否继续关闭窗口。
   bool savePlaylist();
 
   bool savePlaylistAs();
 
+  // Preconditions: 文件已通过命令行入口筛选；核心仍验证 MIDI 内容，界面负责缺少插件时的交互。
   void openMidiFileFromShell(const juce::File &file);
   void setPendingShellOpen(bool pending);
 
@@ -224,7 +231,7 @@ private:
 
   void showFileAssociationPrompt();
 
-  // 自动插件加载只打开插件窗口，不自动播放；部分乐器插件需要先加载音色。
+  // Ordering: 自动加载完成后只按插件策略打开编辑器；首次音色选择后的播放由用户发起。
   void tryLoadLastPluginWithDialog();
 
   void showAudioSettings();

@@ -1,5 +1,9 @@
 #pragma once
 
+// Contract: 材质编号与持久化配置一致；数值归一化只约束透明度和强度，不验证枚举值。
+// Ownership: 纹理为静态共享图像，调用方不得修改；绘制使用调用方的 Graphics 状态及裁剪区域。
+// Side effect: `paintTexture` 修改绘制颜色和不透明度；需要隔离绘制状态时由调用方保存/恢复。
+
 #include <algorithm>
 #include <juce_graphics/juce_graphics.h>
 

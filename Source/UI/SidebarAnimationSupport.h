@@ -1,5 +1,8 @@
 #pragma once
 
+// Contract: 消息线程独占；图标缩放和宽度/文字透明度由调用方逐帧推进。
+// Ordering: 折叠先隐藏文字再收缩宽度，展开先扩展宽度再显示文字；宽度为逻辑像素。
+
 #include "LegacyDesignTokens.h"
 #include <algorithm>
 #include <cmath>

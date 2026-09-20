@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 设置对话框的材质、布局、原生所有者关系及关闭交互。
+// Concurrency: 组件与窗口操作仅在消息线程调用；传入的外观对象必须覆盖窗口寿命。
+// Ownership: `launchDialogAsync` 将窗口交给 JUCE 模态生命周期管理，返回值仅用于受控观察。
+
 #include "../Utils/UserSettings.h"
 #include "../Utils/Win11Helpers.h"
 #include "CustomLookAndFeel.h"
@@ -34,10 +38,7 @@ public:
     else
       setContentNonOwned(options.content.release(), true);
 
-    // JUCE chooses the Windows per-pixel layered peer from the component's
-    // opacity when addToDesktop() runs. Configure the complete transparent
-    // surface before creating the peer so the rounded corner alpha is native
-    // to the peer from its first frame.
+    // Ordering: `addToDesktop` 前完成透明表面设置，JUCE 在创建 peer 时据此选择逐像素透明窗口。
     setOpaque(false);
     setDropShadowEnabled(false);
     setResizable(false, false);
@@ -51,9 +52,7 @@ public:
     setTitleBarTextCentred(false);
     setDraggable(false);
     addToDesktop();
-    // JUCE's Windows peer blocks client and non-client owner input while this
-    // component is modal. Disabling the owner HWND separately breaks focus and
-    // Z-order restoration when the dialog is destroyed.
+    // Invariant: 所有者输入屏蔽由 JUCE 模态机制负责；额外禁用 HWND 会破坏关闭后的焦点和层级恢复。
   }
 
   ~FluentDialogWindow() override {
@@ -410,6 +409,9 @@ inline void refreshDialogNativeStyleLater(juce::DialogWindow *window) {
   });
 }
 
+// Preconditions: 消息线程调用；内容组件的 owned/borrowed 规则由 `options.content` 决定。
+// Ownership: 新窗口进入自动删除的模态状态；调用方通过 `SafePointer` 观察，避免保留裸指针。
+// Ordering: 先完成 peer 样式、所有者及位置，再进入模态状态和启动动画。
 inline juce::DialogWindow *
 launchDialogAsync(juce::DialogWindow::LaunchOptions &options,
                   bool animateWindow = true,
@@ -440,6 +442,7 @@ launchDialogAsync(juce::DialogWindow::LaunchOptions &options,
   return window;
 }
 
+// Contract: 空按钮文本创建只允许程序关闭的提示；调用方必须在对应任务结束或取消时关闭它。
 inline juce::DialogWindow *
 showMessageDialogAsync(const juce::String &title, const juce::String &message,
                        juce::Component *anchor,

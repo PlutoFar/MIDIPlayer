@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 本机构建间的控制消息、插件描述和 MIDI 字节编解码；不持有进程或共享内存。
+// Invariant: 两端必须使用一致的命令编号、字段含义和 `workerCommandLineUid`。
+// Trust Boundary: `ValueTree` 解码只恢复字段，不等同于完整请求校验；执行端仍负责业务有效性检查。
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <cmath>
@@ -14,6 +18,7 @@ inline constexpr int workerCommandTimeoutMs = 30000;
 inline constexpr int workerShutdownTimeoutMs = 2000;
 inline constexpr int workerRenderHangTimeoutMs = 2000;
 
+// Postconditions: 返回毫秒等待预算，至少 10 ms；基于音频块时长，供实时渲染等待使用。
 inline int getWorkerRenderTimeoutMs(int blockSize, double sampleRate) {
   const double validSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
   const double blockPeriodMs =
@@ -66,6 +71,7 @@ struct StatusReply {
   juce::String message;
 };
 
+// Ownership: 编码返回自有字节副本；解码只在调用期间借用输入，失败由无效树表示。
 inline juce::MemoryBlock valueTreeToBlock(const juce::ValueTree &tree) {
   juce::MemoryOutputStream out;
   tree.writeToStream(out);
@@ -77,6 +83,7 @@ inline juce::ValueTree blockToValueTree(const juce::MemoryBlock &block) {
   return juce::ValueTree::readFromStream(in);
 }
 
+// Preconditions: 请求字段由插件目录生成；下面的值树/字节转换不验证插件路径或通道能力。
 inline juce::ValueTree toValueTree(const PluginLoadRequest &request) {
   juce::ValueTree tree("PluginLoadRequest");
   tree.setProperty("name", request.name, nullptr);
@@ -119,6 +126,7 @@ inline PluginLoadRequest loadRequestFromMemoryBlock(
   return loadRequestFromValueTree(blockToValueTree(block));
 }
 
+// Postconditions: 同时携带 JUCE 插件 XML 与显式字段，保留描述中的插件身份信息。
 inline PluginLoadRequest makeLoadRequest(const juce::PluginDescription &desc,
                                          const juce::String &sharedBlockName) {
   PluginLoadRequest request;
@@ -138,6 +146,7 @@ inline PluginLoadRequest makeLoadRequest(const juce::PluginDescription &desc,
   return request;
 }
 
+// Ordering: 可解析的插件 XML 优先；否则使用请求的显式描述字段，实例能力由工作进程检查。
 inline juce::PluginDescription toPluginDescription(
     const PluginLoadRequest &request) {
   juce::PluginDescription desc;
@@ -159,12 +168,14 @@ inline juce::PluginDescription toPluginDescription(
   return desc;
 }
 
+// Contract: 命令封装、准备参数和简单命令函数只构造本协议字段，不发送消息。
 inline juce::ValueTree makeCommandTree(Command command) {
   juce::ValueTree tree("PluginBridgeCommand");
   tree.setProperty("command", static_cast<int>(command), nullptr);
   return tree;
 }
 
+// Failures: 根类型不匹配返回 `Command::none`；数值命令的支持情况由分发端判断。
 inline Command commandFromValueTree(const juce::ValueTree &tree) {
   if (!tree.hasType("PluginBridgeCommand"))
     return Command::none;
@@ -200,6 +211,7 @@ inline juce::MemoryBlock makeSimpleCommand(Command command) {
   return valueTreeToBlock(makeCommandTree(command));
 }
 
+// Invariant: 回复携带对应 `Command`；控制端依赖命令串行化匹配回复，协议没有独立请求 ID。
 inline juce::MemoryBlock makeStatusReply(StatusCode code,
                                          const juce::String &message,
                                          Command command = Command::none) {
@@ -210,6 +222,7 @@ inline juce::MemoryBlock makeStatusReply(StatusCode code,
   return valueTreeToBlock(tree);
 }
 
+// Failures: 回复根类型错误产生 `invalidCommand`；字段枚举仍按协议约定解释。
 inline StatusReply statusReplyFromMemoryBlock(const juce::MemoryBlock &block) {
   const auto tree = blockToValueTree(block);
   StatusReply reply;
@@ -226,10 +239,13 @@ inline StatusReply statusReplyFromMemoryBlock(const juce::MemoryBlock &block) {
   return reply;
 }
 
+// Postconditions: 仅识别命令行是否包含 worker UID；连接参数由 JUCE 初始化入口解析。
 inline bool isPluginWorkerCommandLine(const juce::String &commandLine) {
   return commandLine.contains(workerCommandLineUid);
 }
 
+// Preconditions: `dest` 至少有 `maxBytes` 可写字节，容量非负；事件时间戳为采样偏移。
+// Postconditions: 返回已编码字节数；容量不足返回 -1，此时缓冲区可能含前缀，调用方必须丢弃整包。
 inline int writeMidiBuffer(const juce::MidiBuffer &source,
                            unsigned char *dest, int maxBytes) {
   juce::MemoryOutputStream out(dest, static_cast<size_t>(maxBytes));
@@ -250,6 +266,8 @@ inline int writeMidiBuffer(const juce::MidiBuffer &source,
   return static_cast<int>(out.getPosition());
 }
 
+// Preconditions: 遵循完整编码的缓冲区契约，区间加法不得溢出。
+// Postconditions: 只编码 [startSample, startSample + numSamples) 内事件，并将偏移归零到分块起点。
 inline int writeMidiBufferRange(const juce::MidiBuffer &source,
                                 unsigned char *dest, int maxBytes,
                                 int startSample, int numSamples) {
@@ -277,6 +295,9 @@ inline int writeMidiBufferRange(const juce::MidiBuffer &source,
   return static_cast<int>(out.getPosition());
 }
 
+// Preconditions: `source` 的可读长度覆盖非负 `numBytes`；共享块容量必须由上游约束。
+// Postconditions: 向 `dest` 追加完整记录；截断或非正消息长度时停止，已追加的前缀保留。
+// Failures: 本接口没有解析结果返回值，不能用正常返回证明整包有效。
 inline void readMidiBuffer(const unsigned char *source, int numBytes,
                            juce::MidiBuffer &dest) {
   juce::MemoryInputStream in(source, static_cast<size_t>(numBytes), false);

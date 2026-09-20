@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 当前用户级 MIDI 文件关联；注册表修改仅限 `HKCU\\Software\\Classes`。
+// Side effect: 注册与移除通知 Shell 刷新关联；路径命令显式引用可执行文件和文件参数。
+// Failures: 注册返回各项写入的合并结果，失败可能已经产生部分写入，不构成事务。
+
 #include <juce_core/juce_core.h>
 
 inline juce::String getMidiFileProgId() {
@@ -65,6 +69,7 @@ __declspec(dllimport) void __stdcall SHChangeNotify(long wEventId,
                                                     const void *dwItem2);
 }
 
+// Postconditions: 只检查当前用户 .mid 注册项及本程序打开命令；不证明系统 UserChoice 的最终默认应用。
 inline bool isMidiFileAssociatedToSelf() {
   HKEY hKey = nullptr;
   if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Classes\\.mid", 0,
@@ -103,6 +108,7 @@ inline bool isMidiFileAssociatedToSelf() {
   return result;
 }
 
+// Preconditions: `subKey` 是预定义的当前用户 Classes 路径；写入默认 REG_SZ，失败返回 `false`。
 inline bool setFileAssociationRegistryValue(const wchar_t *subKey,
                                             const juce::String &value) {
   HKEY hKey = nullptr;
@@ -145,6 +151,8 @@ inline bool registerMidiFileAssociation() {
   return ok;
 }
 
+// Preconditions: 调用方已确认解除本程序关联；此函数直接删除两个扩展名默认值及本程序 ProgID。
+// Failures: void 接口不返回单项删除错误，正常返回不证明所有注册项均已移除。
 inline void removeMidiFileAssociation() {
   auto deleteRegValue = [](const wchar_t *subKey) {
     HKEY hKey = nullptr;

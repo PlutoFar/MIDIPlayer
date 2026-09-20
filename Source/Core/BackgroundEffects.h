@@ -1,8 +1,8 @@
 #pragma once
 
-// 纯图像处理函数：高斯/Aero/亚克力模糊 + Monet K-Means 取色 + 大图降采样。
-// 供对话框软件材质和后台图像任务复用，仅依赖 JUCE 图像类型。
-// BackgroundComponent 的后台处理另有支持协作取消的实现。
+// Responsibilities: 对话框材质的图像缩放、模糊及取色；不访问组件或应用状态。
+// Preconditions: 输入图像在处理期间不得并发写入；颜色分析和模糊不在实时音频线程运行。
+// Ownership: 返回 JUCE 图像/颜色值；无效果分支可能共享输入图像存储，调用方须按只读结果使用。
 
 #include <algorithm>
 #include <cmath>
@@ -24,8 +24,7 @@ inline juce::Image prepareLoaded(juce::Image img) {
                        std::max(1, (int)(img.getHeight() * scale)),
                        juce::Graphics::highResamplingQuality);
   }
-  // 关键：统一转 ARGB（4 字节/像素）。否则 RGB 源（JPG）在 box blur 里按
-  // 4 字节读 p[3] 会越界错位，导致整图洗白/损坏。
+  // Invariant: 后续像素处理要求 ARGB 四字节布局；转换发生在任何固定步长访问之前。
   return img.convertedToFormat(juce::Image::ARGB);
 }
 
@@ -76,7 +75,7 @@ inline juce::Image boxBlur(const juce::Image &source, int radius) {
 inline juce::Image gaussianBlur(const juce::Image &source, int radius) {
   if (source.isNull() || radius < 1)
     return source.createCopy();
-  // 高半径时先降采样，降低卷积开销。
+  // Reason: 大半径模糊先降采样，以限制卷积工作量。
   int scale = 1;
   if (radius > 16) scale = 2;
   if (radius > 32) scale = 4;
@@ -88,7 +87,7 @@ inline juce::Image gaussianBlur(const juce::Image &source, int radius) {
           : source.createCopy();
 
   int er = std::max(1, radius / scale);
-  // 用 JUCE 内置高斯卷积核（正确、不会洗白）。
+  // Ordering: 卷积读取缩放后的源图像，输出写入独立图像。
   juce::ImageConvolutionKernel kernel(er * 2 + 1);
   kernel.createGaussianBlur((float)er);
   juce::Image blurred(juce::Image::ARGB, small.getWidth(), small.getHeight(),
@@ -181,7 +180,7 @@ inline juce::Image acrylic(const juce::Image &source, int radius) {
   return result;
 }
 
-// type: 1=None 2=GaussianBlur 3=Aero 4=Acrylic
+// Preconditions: `type` 使用材质持久化编号 1..4；未知编号按无效果分支返回。
 inline juce::Image applyMaterial(const juce::Image &source, int type, int radius) {
   switch (type) {
   case 2: return gaussianBlur(source, radius);

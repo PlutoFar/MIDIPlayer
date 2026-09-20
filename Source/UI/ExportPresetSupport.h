@@ -1,5 +1,8 @@
 #pragma once
 
+// Contract: 预设 ID 1..3 为固定参数，4 为自定义；预设选择仍须经过编码器能力校验。
+// Invariant: 编码器质量索引从 0 起，下拉选项 ID 从 1 起；转换函数统一两者边界。
+
 #include <juce_core/juce_core.h>
 
 struct ExportPresetSpec {

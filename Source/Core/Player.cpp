@@ -1,8 +1,8 @@
 #include "CoreImpl.h"
 
-// Core/Player —— 播放、暂停、停止、seek、切曲、曲目结束、命令行/Shell 打开。
-// 从 MainContentComponent 抽出，保留原有代际守卫与延迟恢复语义；UI 相关的
-// 标签/列表高亮改由前端读取 state() 同步，不在这里触碰。
+// Responsibilities: MIDI 解析、播放位置和切曲编排；界面通过 `Core` 快照更新显示。
+// Concurrency: 可变曲目状态和序列生产由 `stateMutex` 串行化；实时消费只读取已发布快照。
+// Ordering: 显式播放控制递增代次，延迟回调必须同时匹配代次和当前可播放条件。
 
 namespace midi {
 
@@ -251,7 +251,7 @@ bool Core::Impl::openMidi(const juce::File &file, bool autoLoadPluginIfMissing,
 
   getAppSettings().setLastMidiDirectory(
       file.getParentDirectory().getFullPathName());
-  // UI callbacks may create modal windows; no core lock crosses that boundary.
+  // Ordering: 先释放 `stateMutex` 再调用界面回调，防止嵌套消息循环持有核心锁。
   lock.unlock();
   if (requestPlugin && onPluginMissing)
     onPluginMissing();

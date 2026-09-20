@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 显示设备快照并提交配置命令；不持有可修改的设备管理器。
+// Ownership: `Core` 与外观对象必须存活至面板析构；析构先移除设备监听。
+// Concurrency: 所有接口及 JUCE 回调在消息线程执行；原生控制面板返回后须重新检查面板寿命。
+
 #include "../Core/Core.h"
 #include "AudioSettingsSupport.h"
 #include "AudioStatusAnimation.h"

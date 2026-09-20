@@ -2,9 +2,8 @@
 
 #include <iostream>
 
-// Shared, minimal test harness for suites split out of ExportAndHintTests.cpp.
-// Each suite owns its own failure counter, prints "FAIL: ..." lines, and
-// returns the count; the main runner in ExportAndHintTests.cpp sums them.
+// Contract: 每个测试组持有独立失败计数，失败输出诊断并返回数量。
+// Ordering: `ExportAndHintTests.cpp` 汇总各组计数并设置进程退出码，失败不得被后续组覆盖。
 namespace miditest {
 
 inline void expect(int &failures, bool condition, const char *message) {
@@ -14,7 +13,7 @@ inline void expect(int &failures, bool condition, const char *message) {
   }
 }
 
-// Per-area suites. Implemented in their own .cpp files.
+// Preconditions: JUCE 消息管理器已初始化；各组自行管理其临时文件和进程。
 int runWorkerPathTests();
 int runCoreTests();
 int runExportTaskTests();

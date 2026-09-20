@@ -1,11 +1,15 @@
 #pragma once
 
+// Responsibilities: JUCE peer 的 Windows 所有者关系、原生位置和 DWM 外观操作。
+// Preconditions: 消息线程调用组件接口；组件及 peer 在调用期间存活，几何转换使用原生窗口坐标。
+// Failures: 属性应用接口按各自返回值报告调用结果，不保证操作系统采用全部请求的视觉效果。
+
 #include <cstdint>
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #if JUCE_WINDOWS
 
-// 前置声明 Windows 类型，避免引入 windows.h 后污染 JUCE 头文件。
+// Reason: 局部声明 Windows 类型，避免 `windows.h` 宏进入 JUCE 头文件。
 extern "C" {
 typedef void *HWND;
 typedef long HRESULT;
@@ -76,6 +80,7 @@ inline BOOL setWindowCompositionAttribute(HWND hwnd, void *data) {
   return function != nullptr ? function(hwnd, data) : 0;
 }
 
+// Postconditions: 具备有效句柄和入口时设置原生所有者；返回 `true` 表示已调用入口，不验证最终层级。
 inline bool setOwnedWindow(juce::Component *window, juce::Component *owner) {
   if (window == nullptr || owner == nullptr || window->getPeer() == nullptr ||
       owner->getPeer() == nullptr)
@@ -100,6 +105,7 @@ inline bool setOwnedWindow(juce::Component *window, juce::Component *owner) {
   return true;
 }
 
+// Postconditions: 按原生窗口矩形居中，保持大小、Z-order 和激活状态；系统定位失败返回 `false`。
 inline bool centreWindowOnOwner(juce::Component *window,
                                 juce::Component *owner) {
   if (window == nullptr || owner == nullptr || window->getPeer() == nullptr ||
@@ -145,6 +151,7 @@ inline bool centreWindowOnOwner(juce::Component *window,
                       noSize | noZOrder | noActivate | noOwnerZOrder) != 0;
 }
 
+// Ordering: 先请求 DWM 隐藏，再隐藏 HWND 并刷新合成；返回值只确认 peer/句柄可用。
 inline bool hideNativeWindowAndFlush(juce::Component *component) {
   if (component == nullptr || component->getPeer() == nullptr)
     return false;

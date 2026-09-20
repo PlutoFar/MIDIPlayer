@@ -33,12 +33,17 @@ struct BridgeState {
   }
 };
 
+// Responsibilities: 插件控制命令、进程状态与音频共享块通信。
+// Ownership: 控制线程持有进程和共享内存寿命；JUCE 连接回调只发布回复或状态。
+// Concurrency: 控制命令互相串行；加载、卸载、准备和回收前必须停止渲染调用。
+// `processBlock` 只有一个渲染调用方，可与不更改共享块的编辑器命令并行。
 class PluginBridgeClient final : private juce::ChildProcessCoordinator {
 public:
   PluginBridgeClient() = default;
 
   ~PluginBridgeClient() override { stop(); }
 
+  // Postconditions: 启动子进程并等待 ready 回复；失败返回 `false` 并记录进程诊断。
   bool start() {
     {
       const juce::ScopedLock lock(stateLock);
@@ -79,6 +84,7 @@ public:
     return true;
   }
 
+  // Preconditions: 已结束渲染与其他控制命令；释放映射、关闭子进程并清空会话状态。
   void stop() {
     if (isPluginLoaded())
       unloadPlugin();
@@ -95,6 +101,8 @@ public:
     storeStatus(BridgeStatus::stopped);
   }
 
+  // Preconditions: 描述来自扫描目录，旧实例已卸载；控制线程独占调用。
+  // Postconditions: 建立共享块并收到成功回复后才发布已加载状态；失败须读取 `getLastError`。
   bool loadPlugin(const juce::PluginDescription &description) {
     pluginReady.store(false, std::memory_order_release);
     nonRealtimeMode.store(false, std::memory_order_release);
@@ -135,6 +143,8 @@ public:
     return true;
   }
 
+  // Ordering: 先撤销可渲染状态，再等待卸载确认，最后释放映射和正常关闭进程。
+  // Failures: 超时/断连保留崩溃状态；调用方通过 `getStatus` 识别异常。
   void unloadPlugin() {
     pluginReady.store(false, std::memory_order_release);
     nonRealtimeMode.store(false, std::memory_order_release);
@@ -160,6 +170,8 @@ public:
     }
   }
 
+  // Preconditions: 插件已加载且渲染已暂停；采样率单位为 Hz，块大小单位为采样。
+  // Postconditions: 成功回复后切换实时/离线等待策略；失败返回 `false` 并保留诊断。
   bool prepare(double sampleRate, int blockSize, bool nonRealtime = false) {
     if (!isPluginLoaded())
       return false;
@@ -188,6 +200,10 @@ public:
     return true;
   }
 
+  // Preconditions: 块大小不超过 `SharedBlockLayout::maxSamples`，MIDI 时间戳为宿主块采样偏移。
+  // Ordering: 同时最多一个未完成渲染请求；晚到回复必须核对并消费后才能复用共享块。
+  // Postconditions: `true` 表示已复制该请求的音频；`false` 不保证进程已崩溃，调用方须静音失败块。
+  // Failures: 实时超时保留未完成请求；离线超时、序列不符和传输失败记录崩溃状态。
   bool processBlock(const juce::MidiBuffer &midi,
                     juce::AudioBuffer<float> &buffer, double sampleRate,
                     int midiStartSample = 0) {
@@ -287,6 +303,8 @@ public:
     return true;
   }
 
+  // Preconditions: 已加载插件；阻塞等待工作进程在消息线程创建窗口，调用方不得为主界面线程。
+  // Failures: 打开返回 `false`；关闭失败通过 `getStatus`/`getLastError` 查询。
   bool openEditor() {
     if (!isPluginLoaded())
       return false;
@@ -326,6 +344,7 @@ public:
       handleCommandFailure(reply);
   }
 
+  // Concurrency: 以下状态查询返回原子值或加锁副本，不借用共享内存。
   bool isPluginLoaded() const {
     return pluginReady.load(std::memory_order_acquire) &&
            getStatus() == BridgeStatus::ready;
@@ -351,6 +370,7 @@ public:
     return state.message;
   }
 
+  // Preconditions: 控制线程独占，渲染已停止；只回收崩溃会话，并保留崩溃诊断供界面读取。
   void terminateCrashedWorker() {
     if (getStatus() != BridgeStatus::crashed)
       return;
@@ -377,12 +397,12 @@ public:
   }
 
   void cancelPendingOperation() {
-    // The command thread owns process and shared-memory lifetime. Cancellation
-    // only wakes its wait, so it cannot race a concurrent launch or render.
+    // Concurrency: 可跨线程置位并唤醒等待；进程和映射仍由控制线程回收。
     cancellationRequested.store(true, std::memory_order_release);
     responseEvent.signal();
   }
 
+  // Ordering: 仅在受理新控制任务、启动任务线程之前清除上一任务的取消标记。
   void resetCancellation() {
     cancellationRequested.store(false, std::memory_order_release);
   }
@@ -454,6 +474,8 @@ private:
     responseEvent.signal();
   }
 
+  // Concurrency: 仅控制线程等待；连接线程在 `responseLock` 内发布回复并唤醒。
+  // Invariant: 命令串行化保证按 `Command` 匹配回复时不会与另一同类命令混淆。
   StatusReply waitForReply(Command command, int timeoutMs) {
     const auto start = juce::Time::getMillisecondCounter();
     const auto timeout = static_cast<uint32_t>(juce::jmax(1, timeoutMs));

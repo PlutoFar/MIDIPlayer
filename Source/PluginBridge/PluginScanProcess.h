@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 在独立子进程发现 VST3 插件，通过临时 XML 交付目录。
+// Ownership: 父进程持有子进程与临时文件；成功校验结果后才替换调用方目录。
+// Concurrency: 扫描同步阻塞调用线程；取消回调在父进程等待期间轮询。
+
 #include "../AudioEngine/PluginListSupport.h"
 #include "../Core/WorkerPath.h"
 
@@ -11,6 +15,7 @@ namespace PluginBridge {
 inline constexpr const char *pluginScanCommandLineFlag =
     "--midi-plugin-scan";
 
+// Postconditions: 汇总系统、用户及便携目录；只枚举路径，不创建目录或加载插件。
 inline juce::FileSearchPath getVst3SearchPaths() {
   juce::FileSearchPath searchPath;
 
@@ -48,6 +53,8 @@ inline juce::FileSearchPath getVst3SearchPaths() {
   return searchPath;
 }
 
+// Preconditions: 只在扫描子进程使用；插件发现可能执行第三方代码。
+// Failures: 输入根类型错误或输出写入失败返回 `false`；缺失/不可解析的输入按空目录扫描。
 inline bool scanPluginListInCurrentProcess(const juce::File &inputFile,
                                            const juce::File &outputFile) {
   juce::KnownPluginList list;
@@ -78,12 +85,14 @@ inline bool scanPluginListInCurrentProcess(const juce::File &inputFile,
   return output != nullptr && output->writeTo(outputFile);
 }
 
+// Contract: 识别扫描标志只决定入口分流，不证明后续路径参数有效。
 inline bool isPluginScanCommandLine(const juce::String &commandLine) {
   juce::StringArray args;
   args.addTokens(commandLine, true);
   return args.contains(pluginScanCommandLineFlag);
 }
 
+// Postconditions: 命中扫描标志即返回 `true` 并安排退出；执行成败通过进程退出码报告。
 inline bool runPluginScanIfRequested(const juce::String &commandLine) {
   juce::StringArray args;
   args.addTokens(commandLine, true);
@@ -107,6 +116,9 @@ inline bool runPluginScanIfRequested(const juce::String &commandLine) {
   return true;
 }
 
+// Preconditions: 调用方独占 `destination`，回调不抛异常；`source` 可与 `destination` 相同。
+// Postconditions: 退出码和输出根类型都有效后发布目录并清空 `error`。
+// Failures: 取消、子进程异常或无效结果返回 `false`，保留原目标目录并填写 `error`。
 inline bool scanPluginListInChildProcess(
     const juce::KnownPluginList &source, juce::KnownPluginList &destination,
     const std::function<bool()> &shouldCancel, juce::String &error,

@@ -9,6 +9,10 @@
 #include <juce_core/juce_core.h>
 #include <memory>
 
+// Responsibilities: 发布不可变 MIDI 序列，按采样位置生成事件并重建 seek 后的控制器/音符状态。
+// Concurrency: `setSequence`、`setSampleRate`、`seekTo` 只有一个串行生产方；
+// 消息线程与独占导出线程的生产权由 `Core` 协调。`processBlock` 同时只能有一个消费方。
+// Ownership: 序列和 seek 消息归本对象持有；析构前必须停止生产方与实时/离线消费方。
 class MidiPlayer {
 public:
   MidiPlayer() = default;
@@ -20,8 +24,9 @@ public:
       slot.snapshot.reset();
   }
 
-  // newSequence 的时间戳必须是秒。快照分配、时间戳换算和旧快照回收都留在
-  // 消息线程完成，音频线程只读取已发布的不可变快照。
+  // Preconditions: `newSequence` 事件时间戳为秒；空指针表示清空序列。
+  // Postconditions: 生产方创建采样时间快照并发布，后续消费块切换到新序列；播放状态归为暂停。
+  // Failures: 槽位不可用时记录日志并保留旧快照；此 void 接口不报告发布失败。
   void setSequence(std::unique_ptr<juce::MidiMessageSequence> newSequence,
                    double newSampleRate) {
     if (hasSequence()) {
@@ -34,6 +39,8 @@ public:
     publishSnapshot(std::move(snapshot), false);
   }
 
+  // Preconditions: 与其他序列生产操作串行；`newSampleRate` 单位为 Hz。
+  // Postconditions: 有序列且采样率变化时按时间位置重新发布快照，保留播放状态。
   void setSampleRate(double newSampleRate) {
     const double rate = sanitiseSampleRate(newSampleRate);
     const double oldRate = cachedSampleRate.load();
@@ -53,11 +60,12 @@ public:
     publishSnapshot(std::move(snapshot), true);
   }
 
+  // Preconditions: 唯一消费方调用；`buffer` 由调用方持有，本方法追加事件且不负责预先清空。
+  // Postconditions: 追加本块事件并推进采样位置；先消费快照和 seek，再处理普通序列事件。
   void processBlock(juce::MidiBuffer &buffer, int numSamples) {
     applyPublishedSequence();
 
-    // 清理消息只在音频已静音时发送：停止播放由 AudioEngine 淡出后触发，
-    // 切曲由 setSequence 搭配交叉淡入静音块触发。
+    // Ordering: 停止清理由 `AudioEngine` 淡出后触发；seek 清理块由引擎静音并接续淡入。
     if (pendingAllNotesOff.exchange(false)) {
       addStateResetMessages(buffer, false);
       cleanupOccurred.store(true, std::memory_order_release);
@@ -100,12 +108,12 @@ public:
       sequenceEnded.store(true, std::memory_order_release);
   }
 
+  // Postconditions: 原子改变播放标记；无序列时拒绝开始，停止不重置采样位置。
   void setPlaying(bool play) {
     if (play && !hasSequence())
       return;
-    // 暂停只停止序列推进，不重置 MIDI；AudioEngine 淡出输出后触发 MIDI 状态清理。
-    // 恢复播放前 UI 应调用 seekTo(currentPos, true)，
-    // 用 MIDI chase 重建 CC、Program、PitchWheel 和活跃音符状态。
+    // Ordering: 暂停后由引擎淡出并清理声部；核心恢复前调用 `seekTo(currentPos, true)`
+    // 重建控制器、音色选择、弯音及活跃音符状态。
     if (!play)
       sequenceEnded.store(false, std::memory_order_release);
     else
@@ -115,6 +123,9 @@ public:
 
   bool getPlaying() const { return isPlaying.load(); }
 
+  // Preconditions: 序列生产方调用，位置单位为当前序列采样；与快照替换串行。
+  // Postconditions: 位置限制在序列范围后入队，消费方只应用当前代次的最新请求。
+  // Failures: 无序列时无操作；队列满时记录日志并丢弃本次请求，调用返回不表示已完成定位。
   void seekTo(double positionInSamples, bool forceChaseWhilePaused = false) {
     auto *currentSequence = getMessageThreadSnapshot();
     if (currentSequence == nullptr)
@@ -141,12 +152,14 @@ public:
     enqueueSeekRequest(std::move(request));
   }
 
+  // Postconditions: `hasFinished` 一次性消费尾音结束标记；其他状态/位置查询读取原子缓存。
   bool hasFinished() { return finishedFlag.exchange(false); }
 
   bool isWaitingForTail() const {
     return sequenceEnded.load(std::memory_order_acquire);
   }
 
+  // Preconditions: 仅消费方在尾音达到结束条件后调用；将结束状态转为待核心消费的完成事件。
   void finishTail() {
     if (!sequenceEnded.exchange(false, std::memory_order_acq_rel))
       return;
@@ -166,17 +179,17 @@ public:
 
   bool hasSequence() const { return sequenceLoaded.load(); }
 
-  // seek/reset 在音频线程真正应用后只返回一次 true，供 AudioEngine 触发交叉淡入。
+  // Ordering: seek 实际应用后返回一次 `true`；只由引擎消费，用于清理块静音及后续淡入。
   bool consumeSeekOccurred() {
     return seekOccurred.exchange(false, std::memory_order_acquire);
   }
 
-  // 停止清理应用后只返回一次 true，供 AudioEngine 精确静音清理块。
+  // Ordering: 清理事件已写入当前块后返回一次 `true`；引擎据此静音当前块。
   bool consumeCleanupOccurred() {
     return cleanupOccurred.exchange(false, std::memory_order_acquire);
   }
 
-  // AudioEngine 淡出到静音后调用；下一次 processBlock 释放 VST3 按键和踏板状态。
+  // Preconditions: 引擎已完成停止淡出；下一次 `processBlock` 写入音符和踏板释放事件。
   void triggerStopCleanup() {
     pendingAllNotesOff.store(true);
   }
@@ -216,8 +229,8 @@ private:
     std::atomic<SlotState> state{SlotState::Free};
   };
 
-  // 实时线程快照模型：消息线程独占创建/销毁 SequenceSnapshot，并通过固定槽位发布；
-  // 音频线程只切换槽位状态和读取当前活动的不可变对象，避免在 processBlock 分配或加锁。
+  // Concurrency: 生产方独占创建/回收 `SequenceSnapshot`，消费方只切换槽位并读取快照。
+  // Invariant: 只有 `Retired` 槽位可回收；消费阶段不创建或销毁序列快照。
   std::array<SequenceSlot, sequenceSlotCount> sequenceSlots;
   std::atomic<int> publishedSlot{-1};
   std::atomic<int> audioActiveSlot{-1};
@@ -230,8 +243,8 @@ private:
   std::atomic<bool> seekOccurred{false};
   std::atomic<bool> cleanupOccurred{false};
 
-  // seek FIFO 是消息线程到音频线程的有界队列。UI 连续拖动时可能写入多个请求，
-  // 音频线程每块只取同 generation 标记的最新请求，丢弃过期 seek，保持实时路径有界。
+  // Concurrency: `pendingSeekFifo` 为单生产方、单消费方队列；消费后才归还已读槽位。
+  // Invariant: 只应用与当前序列 `generation` 相同的最后一个已入队请求。
   std::array<SeekRequest, seekQueueCapacity> pendingSeekRequests;
   juce::AbstractFifo pendingSeekFifo{seekQueueCapacity};
 
@@ -367,7 +380,7 @@ private:
   }
 
   void applyPublishedSequence() {
-    // 槽位状态转换只能在音频线程消费，消息线程只负责发布 Ready 槽位。
+    // Ordering: 消费方将 `Ready` 改为 `Active` 并替换活动槽位，再将旧槽位置为 `Retired`。
     const int nextSlot = publishedSlot.exchange(-1, std::memory_order_acq_rel);
     if (nextSlot < 0)
       return;
@@ -444,7 +457,7 @@ private:
 
     LOG_DEBUG("MidiPlayer::seekTo - dropping seek request because the queue is "
               "full");
-    // 拖动 seek 时允许丢弃过密请求；实时路径保持有界比完整保留每次拖动更重要。
+    // Failures: 队列满时未取得写槽位，本次请求没有发布给消费方。
     return false;
   }
 
@@ -489,9 +502,8 @@ private:
     return latestRequest != nullptr;
   }
 
-  // CC/Program/PitchWheel chase
-  // 从第 0 个事件扫描到 seek 点，记录每个通道最后出现的 controller、
-  // program-change 和 pitch-wheel 值，用于重建目标位置应当生效的 MIDI 状态。
+  // Preconditions: 事件已按采样时间排序，`nextIndex` 指向首个不早于定位点的事件。
+  // Postconditions: 收集定位点之前每通道最后的控制器、音色选择和弯音值。
   void restoreControllersState(const juce::MidiMessageSequence *seq,
                                double timeInSamples, int nextIndex,
                                juce::MidiBuffer &buffer) {
@@ -533,8 +545,7 @@ private:
       }
     }
 
-    // 按乐器重置顺序发出 chase 状态：
-    //   bank-select -> program-change -> 其他 CC -> pitch-wheel
+    // Ordering: 先发送 bank-select，再发送 program-change、其他 CC 和 pitch-wheel。
     for (int channel = 1; channel <= 16; ++channel) {
       for (int cc : {0, 32}) {
         if (ccValues[channel][cc] != -1) {
@@ -569,9 +580,8 @@ private:
     }
   }
 
-  // Note chase
-  // 重新触发所有跨过 seek 点的 [note-on .. note-off) 音符。原始 note-off 仍留在
-  // 未来序列中按原时间发送，从而保持目标位置之后的实际音符长度。
+  // Preconditions: 序列已执行 `updateMatchedPairs`，`nextIndex` 指向首个不早于定位点的事件。
+  // Postconditions: 每通道/音高选择最近的已开始音符；结束时间等于定位点时也重新触发。
   static void restoreActiveNotes(const juce::MidiMessageSequence *seq,
                                  double timeInSamples, int nextIndex,
                                  juce::MidiBuffer &buffer) {
@@ -600,9 +610,7 @@ private:
       noteSeen[channel][noteNum] = true;
 
       auto *noteOff = event->noteOffObject;
-      // 严格早于 seek 点结束的音符跳过。note-off 正好等于 seek 时间时，
-      // 落点瞬间仍视为发声，因此重触发；下一音频块中 offset 0 的 note-off
-      // 会立即释放它，不会产生可听见的延长。
+      // Ordering: 原始 note-off 保留在序列；等于定位点的释放事件在后续消费块处理。
       if (noteOff == nullptr ||
           noteOff->message.getTimeStamp() < timeInSamples)
         continue;

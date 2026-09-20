@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 导出参数选择、编码能力校验和确认回调；不执行文件渲染。
+// Concurrency: 所有公开方法、绘制和控件回调在消息线程执行。
+// Ownership: 借用外观对象；确认回调接收所选参数，文件选择与覆盖许可由宿主负责。
+
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "../AudioEngine/ExportSettings.h"
 #include "../AudioEngine/ExportFormatSupport.h"

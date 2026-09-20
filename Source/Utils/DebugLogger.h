@@ -1,5 +1,9 @@
 #pragma once
 
+// Contract: 启动时根据 `portable_debug.dat` 配置进程全局日志，工作线程结束后再关闭日志。
+// Concurrency: 日志开关在工作线程启动前确定；`init`/`shutdown` 不得与日志调用并发修改配置。
+// Side effect: 诊断模式写入程序目录日志；`ScopedTimer` 的阈值单位为毫秒。
+
 #include <juce_core/juce_core.h>
 
 class DebugLogger {

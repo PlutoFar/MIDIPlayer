@@ -8,7 +8,7 @@ FontSettingsContent::FontSettingsContent(FluentLookAndFeel &laf)
 
   availableFonts = juce::Font::findAllTypefaceNames();
 
-  // 尽量把保存的播放列表字体解析到当前系统已安装字体。
+  // Reason: 保存的字体可能未安装；字体选择以本机字体列表为准。
   juce::String currentPlaylistFont = getAppSettings().getPlaylistFontName();
   bool fontExists = false;
   if (availableFonts.contains(currentPlaylistFont)) {

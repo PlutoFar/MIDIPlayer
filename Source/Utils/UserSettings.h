@@ -4,8 +4,13 @@
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+// Responsibilities: 用户配置值、便携目录规则及设置 XML 的读写/隔离。
+// Concurrency: 实例的 getter/setter 与保存操作由消息线程串行调用；本类没有实例级锁。
+// Contract: 普通 setter 修改内存配置；持久化由 `save`、析构或明确调用保存的操作完成。
+// Failures: 文件错误通过加载/保存诊断查询；析构自动保存的结果无法直接返回给调用方。
 class UserSettings {
 public:
+  // Side effect: 默认构造确定配置目录并读取 XML；显式路径构造只读取给定文件。
   UserSettings() {
     settingsFile = getSettingsDirectory().getChildFile("Settings.xml");
     load();
@@ -20,6 +25,7 @@ public:
       save();
   }
 
+  // Contract: 便携标记决定程序目录或用户目录；调用会尝试创建目录，返回路径不证明创建成功。
   static juce::File getSettingsDirectory() {
     auto exeDir =
         juce::File::getSpecialLocation(juce::File::currentExecutableFile)
@@ -40,6 +46,7 @@ public:
     return dir;
   }
 
+  // Side effect: 尝试创建程序目录下的 VST3 目录；不安装、扫描或授权插件。
   static juce::File getPortableVst3Directory() {
     auto exeDir =
         juce::File::getSpecialLocation(juce::File::currentExecutableFile)
@@ -57,6 +64,7 @@ public:
            exeDir.getChildFile("portable_debug.dat").existsAsFile();
   }
 
+  // Units: 音量存储滑块的 [0,1] 比例；音频增益曲线由界面向核心发命令时转换。
   float getMasterVolume() const {
     return (float)settings.getDoubleValue("masterVolume", 0.8);
   }
@@ -229,7 +237,7 @@ public:
   int getBackgroundBlurMode() const {
     return settings.getIntValue(
         "backgroundBlurMode",
-        0); // 0 表示旧版本未设置；BackgroundComponent 会回退到 None=1。
+        0); // Contract: 0 表示未配置；`BackgroundComponent::loadSettings` 将其归一为 None=1。
   }
   void setBackgroundBlurMode(int mode) {
     settings.setValue("backgroundBlurMode", juce::jlimit(0, 4, mode));
@@ -323,6 +331,8 @@ public:
     settings.setValue("uiScale", juce::jlimit(0.75f, 2.0f, scale));
   }
 
+  // Preconditions: 调用方独占目标路径及同名 .tmp 文件；不允许并发写同一设置文件。
+  // Ordering: XML 完整写入、flush 并关闭流后替换目标；文件错误通过 `Result` 返回。
   static juce::Result writeSettingsAtomically(const juce::PropertySet &source,
                                               const juce::File &targetFile) {
     auto xml = source.createXml("ModernMidiPlayerSettings");
@@ -359,6 +369,7 @@ public:
     return juce::Result::ok();
   }
 
+  // Postconditions: 更新 `lastSaveError`；`save` 是同一操作的布尔结果入口。
   juce::Result saveDetailed() {
     lastSaveError.clear();
     auto result = writeSettingsAtomically(settings, settingsFile);
@@ -373,6 +384,8 @@ public:
 
   juce::String getLastLoadError() const { return lastLoadError; }
 
+  // Preconditions: 文件存在且调用方独占其路径；可选输出指针由调用方提供。
+  // Postconditions: 成功移动到独立的损坏文件路径后才设置输出；失败保留系统诊断。
   static juce::Result quarantineCorruptSettingsFile(
       const juce::File &file, juce::File *quarantinedFile = nullptr) {
     if (!file.existsAsFile())
@@ -397,6 +410,8 @@ public:
     return juce::Result::ok();
   }
 
+  // Trust Boundary: 只有匹配设置根类型的 XML 才恢复配置；无效内容先尝试隔离。
+  // Failures: 隔离失败记录错误并禁止析构覆盖原文件；显式保存仍由调用方决定。
   void load() {
     lastLoadError.clear();
     automaticSaveEnabled = true;
@@ -420,11 +435,12 @@ public:
       return;
     }
 
-    // 隔离失败时禁止析构自动保存，避免默认值覆盖仍可人工恢复的原文件。
+    // Ordering: 原文件未成功隔离时，析构不得用默认值覆盖它。
     automaticSaveEnabled = false;
     lastLoadError = result.getErrorMessage();
   }
 
+  // Side effect: 清空内存配置并立即尝试保存；失败通过 `getLastSaveError` 查询。
   void resetToDefaults() {
     settings = juce::PropertySet();
     save();
@@ -438,6 +454,7 @@ private:
   bool automaticSaveEnabled = true;
 };
 
+// Ownership: 进程级配置实例；首次访问会执行加载，使用方必须遵守消息线程串行访问约定。
 inline UserSettings &getAppSettings() {
   static UserSettings instance;
   return instance;

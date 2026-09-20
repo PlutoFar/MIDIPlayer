@@ -12,10 +12,9 @@ AudioEngine::~AudioEngine() {
   bridge.stop();
 }
 
-// Device callbacks publish configuration only; IPC belongs to the core task.
+// Concurrency: 设备线程只发布原子配置，阻塞 IPC 由核心插件任务执行。
 void AudioEngine::prepareToPlay(double sampleRate, int blockSize) {
-  // MIDI snapshots have one producer, protected by Core::stateMutex. Device
-  // callbacks must not publish another snapshot concurrently with seek/export.
+  // Invariant: MIDI 序列只有一个生产方；设备线程不得与 seek/导出并发发布序列快照。
   deviceSampleRate.store(sampleRate > 0.0 ? sampleRate : 44100.0);
   deviceBlockSize.store(blockSize > 0 ? blockSize : 512);
   deviceRevision.fetch_add(1);
@@ -147,9 +146,7 @@ void AudioEngine::processBlock(juce::AudioBuffer<float> &buffer,
     tailSilentSamples = 0;
   }
 
-  // allSoundOff 在图内触发时，VST3 插件会在样本 0
-  // 立即切断声部并产生波形不连续。 包含该事件的整块 buffer 静音，下一块从 0
-  // 淡入到 1；48 kHz、256 samples 下空隙约 5 ms。
+  // Reason: `allSoundOff` 会立即切断声部；清理事件所在块静音，后续块按淡入采样数恢复增益。
   if (midiPlayer.consumeSeekOccurred()) {
     buffer.clear();
     seekCrossfadePhase = 2;
@@ -187,8 +184,7 @@ void AudioEngine::processBlock(juce::AudioBuffer<float> &buffer,
     stopCleanupDone = false;
   }
 
-  // 淡出到静音后由 MidiPlayer 释放 VST3 按键、踏板和声部状态；
-  // 此时输出已为 0，所以清理事件不会被听到。
+  // Ordering: 停止淡出完成后才要求 `MidiPlayer` 在下一消费块发送声部释放事件。
   if (!isPlaying && fadeOutSamples <= 0 && !stopCleanupDone) {
     midiPlayer.triggerStopCleanup();
     stopCleanupDone = true;

@@ -1,5 +1,9 @@
 #pragma once
 
+// Responsibilities: 页面选择、功能按钮和折叠动画；业务操作通过 `Listener` 同步交付。
+// Concurrency: 消息线程访问；调用方拥有外观和监听器，并保证覆盖侧栏寿命。
+// Postconditions: 功能按钮不改变当前页面选择；布局跟随动画宽度更新。
+
 #include "../Utils/UserSettings.h"
 #include "CustomLookAndFeel.h"
 #include "SidebarAnimationSupport.h"
