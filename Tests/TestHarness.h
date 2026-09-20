@@ -5,7 +5,6 @@
 // Shared, minimal test harness for suites split out of ExportAndHintTests.cpp.
 // Each suite owns its own failure counter, prints "FAIL: ..." lines, and
 // returns the count; the main runner in ExportAndHintTests.cpp sums them.
-// See docs/winui3-refactor-plan.md (Test Plan).
 namespace miditest {
 
 inline void expect(int &failures, bool condition, const char *message) {
@@ -20,6 +19,5 @@ int runWorkerPathTests();
 int runCoreTests();
 int runExportTaskTests();
 int runPersistenceTests();
-int runWinBridgeTests();
 
 } // namespace miditest

@@ -1,3 +1,0 @@
-#include <winres.h>
-
-1 ICON "Assets\\AppIcon.ico"

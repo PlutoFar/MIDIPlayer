@@ -94,25 +94,11 @@ struct Core::Impl {
   bool saveList(const juce::File &file);
   bool loadList(const juce::File &file);
 
-  // ---- Audio device (Core.cpp) ----
-  std::vector<juce::String> audioOutputDevices();
-  juce::String currentAudioDevice();
-  bool setAudioDevice(const juce::String &name);
-  std::vector<int> sampleRates();
-  int currentSampleRate();
-  bool setSampleRate(int sampleRate);
-  std::vector<int> bufferSizes();
-  int currentBufferSize();
-  bool setBufferSize(int bufferSize);
-  void playTestSound();
-  juce::String audioStatus();
-
   // ---- ExportTask (ExportTask.cpp) ----
   // Runs the offline export synchronously on the calling (worker) thread,
   // driving AudioEngine and reporting progress / honouring cancel. The modal
   // progress window stays in the UI layer, which supplies the callbacks. The
-  // playback state capture/restore around the render is handled here so both
-  // front-ends get identical behaviour.
+  // playback state capture/restore around the render is handled here.
   struct ExportPlaybackState {
     int trackIndex = -1;
     juce::File file;

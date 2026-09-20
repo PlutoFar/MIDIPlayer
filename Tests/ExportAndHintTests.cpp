@@ -2124,7 +2124,6 @@ int main(int argc, char *argv[]) {
   failures += miditest::runCoreTests();
   failures += miditest::runExportTaskTests();
   failures += miditest::runPersistenceTests();
-  failures += miditest::runWinBridgeTests();
 
   if (failures == 0)
     std::cout << "All tests passed\n";

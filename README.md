@@ -30,8 +30,8 @@ MIDI Player 使用 C++17 与 JUCE 构建，提供 MIDI 文件播放、VST3 乐�
 | JUCE 桌面界面 | 当前维护 | 当前版本的功能开发、问题修复和发布验证入口 |
 | 播放核心 | 当前维护 | 播放、列表、音频设备、导出和状态管理 |
 | VST3 工作进程 | 当前维护 | 插件加载、编辑器托管和异常隔离 |
-| WinUI 3 界面 | 历史归档 | 迁移至 `archive/winui-unmaintained` 分支 |
-| WinUI 桥接代码 | 迁移阶段 | 迁移完成后从主分支移除 |
+
+WinUI 3 界面及其专用桥接代码保存在 [archive/winui-unmaintained](https://github.com/PlutoFar/MIDIPlayer/tree/archive/winui-unmaintained) 分支，已停止维护。`main` 维护 C++ / JUCE 桌面版本及 VST3 工作进程。
 
 ## 核心功能
 
@@ -158,13 +158,12 @@ cmake --build build --config Release --target MidiTests
 .
 |-- Source/
 |   |-- AudioEngine/    # 音频图、设备管理和离线导出
-|   |-- Core/           # 应用核心与迁移中的 WinUI 桥接
+|   |-- Core/           # 应用状态、命令与 JUCE 控件适配
 |   |-- Midi/           # MIDI 时序与播放控制
 |   |-- Playlist/       # 播放列表模型与持久化
 |   |-- PluginBridge/   # 主进程与插件工作进程协议
 |   |-- UI/             # 当前维护的 JUCE 桌面界面
 |   |-- Utils/          # 设置、文件关联和 Windows 工具
-|   |-- WinUI/          # 历史归档实现
 |   `-- Worker/         # VST3 工作进程
 |-- Tests/              # 原生回归测试
 |-- Resources/          # 应用图标

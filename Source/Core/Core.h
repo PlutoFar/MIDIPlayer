@@ -14,15 +14,9 @@ class LegacyCoreAdapter;
 /**
     midi::Core —— 与界面框架无关的应用状态与命令入口。
 
-    WinUI 与 Legacy 共用这一个门面：通过 state() 取一致状态快照、命令方法
-    驱动业务。Core 内部持有唯一的 AudioEngine 与
-    PlaylistManager，公共契约不暴露 AudioEngine&、PlaylistManager&、
-    PluginBridgeClient& 或原始 worker 句柄，也不暴露任何 JUCE UI / WinUI 类型。
-
-    Legacy 既有控件需要的底层对象绑定经 LegacyCoreAdapter 过渡；WinUI
-    只使用 state() + 命令。
-
-    见 docs/winui3-refactor-plan.md（Core Interface）。
+    通过 state() 获取应用状态快照，通过命令方法驱动播放、列表和导出。
+    Core 内部持有唯一的 AudioEngine 与 PlaylistManager。
+    LegacyCoreAdapter 为 JUCE 音频设置和播放列表控件提供底层对象绑定。
 */
 class Core {
 public:
@@ -107,18 +101,6 @@ public:
   bool hasAudioDevice() const;
   bool isFirstRunAudio() const;
   bool wasDeviceRestoredWithFallback() const;
-  std::vector<std::wstring> audioOutputDevices();
-  std::wstring currentAudioDevice();
-  bool setAudioDevice(const std::wstring &name);
-  std::vector<int> sampleRates();
-  int currentSampleRate();
-  bool setSampleRate(int sampleRate);
-  std::vector<int> bufferSizes();
-  int currentBufferSize();
-  bool setBufferSize(int bufferSize);
-  void playTestSound();
-  std::wstring audioStatus();
-  void saveAudioDeviceSettings();
 
   // 离线导出（同步执行；进度/取消由 UI 提供回调，模态窗口留在 UI 层）。
   enum class ExportResult { Succeeded, Cancelled, Failed };

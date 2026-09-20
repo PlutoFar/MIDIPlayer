@@ -1,9 +1,8 @@
 #pragma once
 
 // 纯图像处理函数：高斯/Aero/亚克力模糊 + Monet K-Means 取色 + 大图降采样。
-// 从 Source/UI/BackgroundComponent.h 的 BackgroundWorkerThread 静态实现抽出为
-// 自由函数，供 WinUI、对话框软件材质和其他后台图像任务复用。Legacy 背景
-// 保留支持协作取消的实现。仅依赖 juce 图像；不含任何 UI / WinRT 类型。
+// 供对话框软件材质和后台图像任务复用，仅依赖 JUCE 图像类型。
+// BackgroundComponent 的后台处理另有支持协作取消的实现。
 
 #include <algorithm>
 #include <cmath>

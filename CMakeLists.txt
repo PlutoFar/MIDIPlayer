@@ -24,15 +24,8 @@ option(MIDIPLAYER_ENABLE_ASIO
     "Enable JUCE ASIO support (requires the Steinberg ASIO SDK)" OFF)
 
 # ============================================================================
-# MidiCore - framework-agnostic application core (state + commands).
-#
-# A STATIC library so it can be consumed by BOTH the CMake world (Legacy,
-# Worker, Tests) and the WinUI 3 MSBuild project (which links the produced
-# MidiCore.lib). It carries the shared include path, JUCE audio/data
-# dependencies and compile definitions for every native target.
-#
-# MidiCore compiles the shared Core translation units and exposes the audio,
-# playlist, export, and plugin-worker services used by both front ends.
+# MidiCore - application state, commands, audio, playlist and export services.
+# Shared by the JUCE desktop application, plugin worker and native tests.
 # ============================================================================
 add_library(MidiCore STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Core.cpp
@@ -75,25 +68,8 @@ if(MSVC)
 endif()
 
 # ============================================================================
-# MidiWinBridge - STL-only WinUI adapter over MidiCore.
-# Kept outside MidiCore so the shared core library does not carry front-end
-# bridge responsibilities.
-# ============================================================================
-add_library(MidiWinBridge STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/WinBridge.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/WinUiSettingsAdapter.cpp
-)
-
-target_link_libraries(MidiWinBridge PUBLIC MidiCore)
-
-if(MSVC)
-    target_compile_options(MidiWinBridge PRIVATE /utf-8)
-    target_compile_options(MidiWinBridge PRIVATE /wd4100 /wd4244 /wd4267)
-endif()
-
-# ============================================================================
-# MidiLegacy - the existing JUCE UI, running on top of MidiCore.
-# Fallback build; produces MidiLegacy.exe.
+# MidiLegacy - the maintained JUCE desktop application, using MidiCore.
+# Produces MidiLegacy.exe; portable releases name it MidiPlayer.exe.
 # ============================================================================
 juce_add_gui_app(MidiLegacy
     PRODUCT_NAME "MidiLegacy"
@@ -103,21 +79,9 @@ juce_add_gui_app(MidiLegacy
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"
 )
 
-file(GLOB_RECURSE LegacySources
-    "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.h"
-)
-
-# The worker has its own entry point (START_JUCE_APPLICATION); keep it out of
-# the Legacy app to avoid a duplicate main. Core .cpp units are compiled into
-# MidiCore, so exclude them here to avoid duplicate symbols. The WinUI front-end
-# is a separate C++/WinRT MSBuild project, not part of the JUCE build.
-list(FILTER LegacySources EXCLUDE REGEX "/Source/Worker/")
-list(FILTER LegacySources EXCLUDE REGEX "/Source/Core/.*\\.cpp$")
-list(FILTER LegacySources EXCLUDE REGEX "/Source/WinUI/")
-
+# Each executable owns its entry point; shared .cpp files belong to MidiCore.
 target_sources(MidiLegacy PRIVATE
-    ${LegacySources}
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Main.cpp
 )
 
 target_link_libraries(MidiLegacy PRIVATE
@@ -135,7 +99,7 @@ endif()
 
 # ============================================================================
 # MidiWorker - VST3 plugin worker child process. Produces MidiWorker.exe.
-# Launched by the main app (WinUI or Legacy) via the worker command-line UID.
+# Launched by the desktop application via the worker command-line UID.
 # ============================================================================
 juce_add_gui_app(MidiWorker
     PRODUCT_NAME "MidiWorker"
@@ -188,11 +152,9 @@ target_sources(MidiTests PRIVATE
     Tests/CoreTests.cpp
     Tests/ExportTaskTests.cpp
     Tests/PersistenceTests.cpp
-    Tests/WinBridgeTests.cpp
 )
 
 target_link_libraries(MidiTests PRIVATE
-    MidiWinBridge
     MidiCore
     juce::juce_gui_basics
     juce::juce_gui_extra

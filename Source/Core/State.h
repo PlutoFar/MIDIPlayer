@@ -61,8 +61,7 @@ struct TaskState {
   std::wstring exportError;
 };
 
-/// UI-agnostic snapshot of the whole application, consumed by both the WinUI
-/// and Legacy front-ends. See docs/winui3-refactor-plan.md (Core Interface).
+/// Application state snapshot consumed by the desktop interface.
 struct AppState {
   PluginState plugin;
   TransportState transport;

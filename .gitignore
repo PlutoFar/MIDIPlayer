@@ -3,12 +3,10 @@ build/
 build-*/
 dist/
 
-# WinUI generated and local build outputs
-Source/WinUI/Generated Files/
-Source/WinUI/MidiPlayer/
-Source/WinUI/obj/
-Source/WinUI/x64/
-Source/WinUI/packages/
+# Generated IDE build outputs
+**/Generated Files/
+**/obj/
+**/x64/
 
 # Local IDE and tool state
 .vs/

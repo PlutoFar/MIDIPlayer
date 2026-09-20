@@ -72,7 +72,7 @@ AppState Core::Impl::buildState() {
 }
 
 void Core::Impl::notify() {
-  // 两个前端均按帧读取一致快照；离散回调接口已删除。
+  // JUCE 界面按帧读取状态快照。
 }
 
 void Core::Impl::scheduleAfter(int ms, std::function<void(Impl &)> fn) {
@@ -89,118 +89,6 @@ double Core::Impl::sampleRate() const {
   StateLock lock(stateMutex);
   const double sr = engine.getSampleRate();
   return sr > 0.0 ? sr : 44100.0;
-}
-
-std::vector<juce::String> Core::Impl::audioOutputDevices() {
-  StateLock lock(stateMutex);
-  std::vector<juce::String> out;
-  if (auto *type = engine.getDeviceManager().getCurrentDeviceTypeObject()) {
-    type->scanForDevices();
-    for (auto &name : type->getDeviceNames(false))
-      out.push_back(name);
-  }
-  return out;
-}
-
-juce::String Core::Impl::currentAudioDevice() {
-  StateLock lock(stateMutex);
-  if (auto *device = engine.getDeviceManager().getCurrentAudioDevice())
-    return device->getName();
-  return {};
-}
-
-bool Core::Impl::setAudioDevice(const juce::String &name) {
-  StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
-    return false;
-  auto setup = engine.getDeviceManager().getAudioDeviceSetup();
-  setup.outputDeviceName = name;
-  setup.useDefaultOutputChannels = true;
-  const auto error = engine.getDeviceManager().setAudioDeviceSetup(setup, true);
-  if (error.isNotEmpty())
-    return false;
-  engine.saveAudioDeviceSettings();
-  notify();
-  return true;
-}
-
-std::vector<int> Core::Impl::sampleRates() {
-  StateLock lock(stateMutex);
-  std::vector<int> out;
-  if (auto *device = engine.getDeviceManager().getCurrentAudioDevice()) {
-    for (auto rate : device->getAvailableSampleRates())
-      out.push_back(static_cast<int>(rate));
-  }
-  return out;
-}
-
-int Core::Impl::currentSampleRate() {
-  StateLock lock(stateMutex);
-  if (auto *device = engine.getDeviceManager().getCurrentAudioDevice())
-    return static_cast<int>(device->getCurrentSampleRate());
-  return 0;
-}
-
-bool Core::Impl::setSampleRate(int sampleRate) {
-  StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
-    return false;
-  auto setup = engine.getDeviceManager().getAudioDeviceSetup();
-  setup.sampleRate = sampleRate;
-  const auto error = engine.getDeviceManager().setAudioDeviceSetup(setup, true);
-  if (error.isNotEmpty())
-    return false;
-  engine.saveAudioDeviceSettings();
-  notify();
-  return true;
-}
-
-std::vector<int> Core::Impl::bufferSizes() {
-  StateLock lock(stateMutex);
-  std::vector<int> out;
-  if (auto *device = engine.getDeviceManager().getCurrentAudioDevice()) {
-    for (auto size : device->getAvailableBufferSizes())
-      out.push_back(size);
-  }
-  return out;
-}
-
-int Core::Impl::currentBufferSize() {
-  StateLock lock(stateMutex);
-  if (auto *device = engine.getDeviceManager().getCurrentAudioDevice())
-    return device->getCurrentBufferSizeSamples();
-  return 0;
-}
-
-bool Core::Impl::setBufferSize(int bufferSize) {
-  StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
-    return false;
-  auto setup = engine.getDeviceManager().getAudioDeviceSetup();
-  setup.bufferSize = bufferSize;
-  const auto error = engine.getDeviceManager().setAudioDeviceSetup(setup, true);
-  if (error.isNotEmpty())
-    return false;
-  engine.saveAudioDeviceSettings();
-  notify();
-  return true;
-}
-
-void Core::Impl::playTestSound() {
-  StateLock lock(stateMutex);
-  if (!exportActiveFlag.load())
-    engine.getDeviceManager().playTestSound();
-}
-
-juce::String Core::Impl::audioStatus() {
-  StateLock lock(stateMutex);
-  if (auto *device = engine.getDeviceManager().getCurrentAudioDevice()) {
-    return L"已连接 | " + juce::String(static_cast<int>(
-                             device->getCurrentSampleRate())) +
-           " Hz | " + juce::String(device->getCurrentBufferSizeSamples()) +
-           " samples";
-  }
-  return L"未连接";
 }
 
 // ---- facade ----
@@ -349,29 +237,6 @@ bool Core::isFirstRunAudio() const { return impl->engine.isFirstRunAudio(); }
 bool Core::wasDeviceRestoredWithFallback() const {
   return impl->engine.wasDeviceRestoredWithFallback();
 }
-std::vector<std::wstring> Core::audioOutputDevices() {
-  std::vector<std::wstring> out;
-  for (const auto &name : impl->audioOutputDevices())
-    out.push_back(toW(name));
-  return out;
-}
-std::wstring Core::currentAudioDevice() { return toW(impl->currentAudioDevice()); }
-bool Core::setAudioDevice(const std::wstring &name) {
-  return impl->setAudioDevice(fromW(name));
-}
-std::vector<int> Core::sampleRates() { return impl->sampleRates(); }
-int Core::currentSampleRate() { return impl->currentSampleRate(); }
-bool Core::setSampleRate(int sampleRate) {
-  return impl->setSampleRate(sampleRate);
-}
-std::vector<int> Core::bufferSizes() { return impl->bufferSizes(); }
-int Core::currentBufferSize() { return impl->currentBufferSize(); }
-bool Core::setBufferSize(int bufferSize) {
-  return impl->setBufferSize(bufferSize);
-}
-void Core::playTestSound() { impl->playTestSound(); }
-std::wstring Core::audioStatus() { return toW(impl->audioStatus()); }
-void Core::saveAudioDeviceSettings() { impl->engine.saveAudioDeviceSettings(); }
 
 // export
 bool Core::isExportActive() const { return impl->exportActiveFlag.load(); }

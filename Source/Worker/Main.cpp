@@ -6,7 +6,7 @@
 /**
     MidiWorker.exe —— VST3 插件 worker 子进程入口。
 
-    由主程序（WinUI 的 MidiPlayer.exe 或 Legacy 的 MidiLegacy.exe）通过
+    由 JUCE 桌面主程序通过
     juce::ChildProcessCoordinator 启动，命令行带 worker UID。本进程只承载
     插件实例、editor 和渲染；不加载主 UI、播放列表或音频设备。
 
