@@ -7,7 +7,7 @@ namespace midi {
 
 bool Core::Impl::addToPlaylist(const juce::File &file) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return false;
   const bool ok = playlist.addFile(file);
   return ok;
@@ -15,7 +15,7 @@ bool Core::Impl::addToPlaylist(const juce::File &file) {
 
 int Core::Impl::addFilesToPlaylist(const std::vector<juce::File> &files) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return 0;
   int added = 0;
   for (const auto &file : files) {
@@ -27,7 +27,7 @@ int Core::Impl::addFilesToPlaylist(const std::vector<juce::File> &files) {
 
 bool Core::Impl::removeTrack(int index) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return false;
   const bool ok = playlist.removeTrack(index);
   if (ok) {
@@ -48,7 +48,7 @@ bool Core::Impl::removeTrack(int index) {
 
 bool Core::Impl::moveTrack(int fromIndex, int toIndex) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return false;
   const bool ok = playlist.moveTrack(fromIndex, toIndex);
   if (ok) {
@@ -65,7 +65,7 @@ bool Core::Impl::moveTrack(int fromIndex, int toIndex) {
 
 bool Core::Impl::refreshTrack(int index) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return false;
   const bool ok = playlist.refreshTrack(index);
   return ok;
@@ -73,7 +73,7 @@ bool Core::Impl::refreshTrack(int index) {
 
 bool Core::Impl::clearPlaylist() {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return false;
   ++trackSwitchGeneration;
   isHandlingTrackEnd = false;
@@ -106,7 +106,7 @@ juce::File Core::Impl::trackFileAt(int index) const {
 
 bool Core::Impl::saveList(const juce::File &file) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return false;
 
   const auto result = playlist.saveDetailed(file);
@@ -120,7 +120,7 @@ bool Core::Impl::saveList(const juce::File &file) {
 
 bool Core::Impl::loadList(const juce::File &file) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return false;
 
   const auto result = playlist.loadDetailed(file);

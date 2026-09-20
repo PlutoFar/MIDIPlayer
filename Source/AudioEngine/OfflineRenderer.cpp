@@ -2,6 +2,7 @@
 #include "AudioEngine.h"
 #include "ExportAudioProcessing.h"
 #include "ExportFormatSupport.h"
+#include "ExportOutputStream.h"
 
 bool OfflineRenderer::runOfflineExport(
     const juce::File &outputFile, const ExportSettings &settings,
@@ -30,11 +31,13 @@ bool OfflineRenderer::runOfflineExport(
     return fail(L"无法创建导出目录: " + parentDir.getFullPathName());
 
   juce::TemporaryFile tempFile(outputFile);
-  auto *rawStream = new juce::FileOutputStream(tempFile.getFile());
-  std::unique_ptr<juce::OutputStream> outStream(rawStream);
-  if (!rawStream->openedOk())
+  auto fileStream = std::make_unique<juce::FileOutputStream>(tempFile.getFile());
+  if (!fileStream->openedOk())
     return fail(L"无法打开临时导出文件: " +
-                rawStream->getStatus().getErrorMessage());
+                fileStream->getStatus().getErrorMessage());
+  auto outputStatus = juce::Result::ok();
+  std::unique_ptr<juce::OutputStream> outStream =
+      std::make_unique<ExportOutputStream>(*fileStream, outputStatus);
 
   auto options = createExportWriterOptions(
       exportSampleRate, settings.bitDepth, settings.useFloatingPoint,
@@ -52,18 +55,22 @@ bool OfflineRenderer::runOfflineExport(
 
   juce::AudioBuffer<float> buffer(2, exportOfflineBlockSize);
   juce::MidiBuffer midi;
+  midi.ensureSize(PluginBridge::SharedBlockLayout::maxMidiBytes);
 
-  const double totalSamples = engine.midiPlayer.getDurationInSamples();
+  const int64_t totalSamples = static_cast<int64_t>(
+      std::ceil(engine.midiPlayer.getDurationInSamples()));
+  const int latencySamples = engine.bridge.getLatencySamples();
 
   // 进度前 90% 对应 MIDI 主体，后 10% 留给尾音；自动尾音最多渲染 60 秒，
   // 并要求连续 0.5 秒低于 0.00001 线性电平后结束，避免混响和释放音被截断。
-  int64_t offlineTailSamplesRendered = 0;
   const auto maxFixedTail =
-      static_cast<int64_t>(exportSampleRate * settings.fixedTailSeconds);
+      static_cast<int64_t>(std::llround(exportSampleRate * settings.fixedTailSeconds));
   const auto maxAutoTail = static_cast<int64_t>(exportSampleRate * 60.0);
   int64_t silentSamples = 0;
-  bool finishedSeq = false;
-  double currentSample = 0;
+  int64_t renderedSamples = 0;
+  int64_t writtenSamples = 0;
+  const int64_t renderLimit = totalSamples + latencySamples +
+      (settings.autoTail ? maxAutoTail : maxFixedTail);
   bool result = true;
   const bool preserveHeadroom = shouldPreserveExportHeadroom(
       settings.formatName, settings.bitDepth, settings.useFloatingPoint);
@@ -85,9 +92,12 @@ bool OfflineRenderer::runOfflineExport(
       break;
     }
 
-    if (finishedSeq && !settings.autoTail && maxFixedTail <= 0)
+    if (renderedSamples >= renderLimit)
       break;
 
+    const int blockSamples = static_cast<int>(juce::jmin<int64_t>(
+        exportOfflineBlockSize, renderLimit - renderedSamples));
+    buffer.setSize(2, blockSamples, false, false, true);
     buffer.clear();
     midi.clear();
 
@@ -98,68 +108,62 @@ bool OfflineRenderer::runOfflineExport(
           pluginError.isNotEmpty() ? pluginError : L"插件进程渲染失败。";
       break;
     }
-    applyMasterOutputStage(buffer, engine.masterVolume.load(),
-                           preserveHeadroom);
-    const float unditheredMaxLevel =
-        settings.autoTail ? measureExportTailLevel(buffer) : 0.0f;
+    if (engine.bridge.getLatencySamples() != latencySamples) {
+      result = false;
+      engine.lastExportError = L"导出期间插件延迟发生变化，请固定插件配置后重新导出。";
+      break;
+    }
+    const int tailStart = static_cast<int>(juce::jlimit<int64_t>(
+        0, blockSamples, totalSamples + latencySamples - renderedSamples));
+    float tailLevel = 0.0f;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+      if (tailStart < blockSamples)
+        tailLevel = juce::jmax(tailLevel,
+                              buffer.getMagnitude(ch, tailStart, blockSamples - tailStart));
+    applyMasterOutputStage(buffer, engine.masterVolume.load(), preserveHeadroom);
     if (applyDither)
       applyTpdfDither(buffer, settings.bitDepth, ditherRandom);
 
-    if (!writer->writeFromAudioSampleBuffer(buffer, 0,
-                                            buffer.getNumSamples())) {
+    // Ordering: 丢弃插件延迟对应的前导采样；主段、尾音和文件长度分别计量。
+    const int skip = static_cast<int>(juce::jlimit<int64_t>(
+        0, blockSamples, latencySamples - renderedSamples));
+    const int count = blockSamples - skip;
+    if (count > 0 && !writer->writeFromAudioSampleBuffer(buffer, skip, count)) {
       result = false;
       engine.lastExportError =
           L"写入音频数据失败，可能是磁盘空间不足或文件不可写。";
       break;
     }
-    currentSample += buffer.getNumSamples();
-
-    if (!finishedSeq) {
-      if (currentSample <= totalSamples) {
-        uint32_t now = juce::Time::getMillisecondCounter();
-        if (now - lastCallbackTime > 30) {
-          reportProgress((float)(currentSample / totalSamples) * 0.9f);
-          lastCallbackTime = now;
-        }
-      }
-      if (engine.midiPlayer.isWaitingForTail() ||
-          currentSample >= totalSamples) {
-        finishedSeq = true;
-      }
-    } else {
-      if (settings.autoTail) {
-        if (unditheredMaxLevel < 0.00001f) {
-          silentSamples += buffer.getNumSamples();
-          if (silentSamples > exportSampleRate * 0.5)
-            break;
-        } else {
-          silentSamples = 0;
-        }
-        offlineTailSamplesRendered += buffer.getNumSamples();
-        if (offlineTailSamplesRendered >= maxAutoTail)
-          break;
-        uint32_t now = juce::Time::getMillisecondCounter();
-        if (now - lastCallbackTime > 30) {
-          reportProgress(0.9f + 0.1f * ((float)offlineTailSamplesRendered /
-                                        (float)maxAutoTail));
-          lastCallbackTime = now;
-        }
-      } else {
-        offlineTailSamplesRendered += buffer.getNumSamples();
-        uint32_t now = juce::Time::getMillisecondCounter();
-        if (now - lastCallbackTime > 30 && maxFixedTail > 0) {
-          reportProgress(0.9f + 0.1f * ((float)offlineTailSamplesRendered /
-                                        (float)maxFixedTail));
-          lastCallbackTime = now;
-        }
-        if (offlineTailSamplesRendered >= maxFixedTail)
-          break;
-      }
+    renderedSamples += blockSamples;
+    writtenSamples += count;
+    if (settings.autoTail && tailStart < blockSamples) {
+      silentSamples = tailLevel < 0.00001f
+                          ? silentSamples + blockSamples - tailStart : 0;
+      if (silentSamples >= exportSampleRate * 0.5)
+        break;
+    }
+    const auto now = juce::Time::getMillisecondCounter();
+    if (now - lastCallbackTime > 30) {
+      reportProgress(writtenSamples <= totalSamples
+                         ? static_cast<float>(writtenSamples) / totalSamples * 0.9f
+                         : 0.9f + 0.1f * static_cast<float>(writtenSamples - totalSamples) /
+                                      juce::jmax<int64_t>(1, settings.autoTail ? maxAutoTail : maxFixedTail));
+      lastCallbackTime = now;
     }
   }
 
   writer.reset();
   outStream.reset();
+  fileStream->flush();
+  if (fileStream->getStatus().failed() && outputStatus.wasOk())
+    outputStatus = fileStream->getStatus();
+  fileStream.reset();
+  if (outputStatus.failed()) {
+    if (engine.lastExportError.isNotEmpty())
+      engine.lastExportError += L"\n";
+    engine.lastExportError += L"音频文件未完成: " + outputStatus.getErrorMessage();
+    result = false;
+  }
 
   if (result) {
     if (!tempFile.overwriteTargetFileWithTemporary()) {

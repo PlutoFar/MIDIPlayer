@@ -4,23 +4,26 @@
 
 AudioEngine::AudioEngine()
     : AudioProcessor(BusesProperties().withOutput(
-          "Output", juce::AudioChannelSet::stereo(), true)) {}
+          "Output", juce::AudioChannelSet::stereo(), true)),
+      juce::Thread("MIDI audio renderer") {}
 
 AudioEngine::~AudioEngine() {
   suspendProcessing(true);
+  stopRealtimeRenderer();
   midiPlayer.setPlaying(false);
   bridge.stop();
 }
 
 // Concurrency: 设备线程只发布原子配置，阻塞 IPC 由核心插件任务执行。
 void AudioEngine::prepareToPlay(double sampleRate, int blockSize) {
+  const juce::ScopedLock lock(getCallbackLock());
   // Invariant: MIDI 序列只有一个生产方；设备线程不得与 seek/导出并发发布序列快照。
   deviceSampleRate.store(sampleRate > 0.0 ? sampleRate : 44100.0);
   deviceBlockSize.store(blockSize > 0 ? blockSize : 512);
   deviceRevision.fetch_add(1);
 }
 
-bool AudioEngine::preparePlugin() {
+bool AudioEngine::preparePlugin(std::function<void(double)> prepareMidi) {
   double sampleRate;
   int blockSize;
   unsigned revision;
@@ -33,13 +36,17 @@ bool AudioEngine::preparePlugin() {
     wasSuspended = isSuspended();
   }
   suspendProcessing(true);
+  stopRealtimeRenderer();
   const bool ok = bridge.prepare(sampleRate, blockSize);
   if (ok)
     preparedRevision.store(revision);
   else
     setLastPluginError(bridge.getLastError());
+  if (ok && prepareMidi)
+    prepareMidi(sampleRate);
+  const bool started = ok && startRealtimeRenderer(sampleRate, blockSize);
   suspendProcessing(wasSuspended);
-  return ok;
+  return started;
 }
 
 bool AudioEngine::prepareForOfflineExport(const ExportSettings &settings) {
@@ -51,35 +58,53 @@ bool AudioEngine::prepareForOfflineExport(const ExportSettings &settings) {
 
   offlineExportActive.store(true, std::memory_order_release);
   suspendProcessing(true);
+  stopRealtimeRenderer();
   const double exportSampleRate = settings.sampleRate;
-  midiPlayer.setPlaying(false);
-  midiPlayer.setSampleRate(exportSampleRate);
-  midiPlayer.seekTo(0.0);
-  if (!bridge.prepare(exportSampleRate, exportOfflineBlockSize, true)) {
+  midiPlayer.resetForOfflineRender(exportSampleRate);
+  if (!bridge.prepare(exportSampleRate, exportOfflineBlockSize, true,
+                      PluginBridge::Command::beginExport)) {
     lastExportError = bridge.getLastError();
-    midiPlayer.setSampleRate(deviceSampleRate.load());
-    offlineExportActive.store(false, std::memory_order_release);
-    suspendProcessing(false);
+    const auto initialError = lastExportError;
+    if (!restoreFromOfflineExport())
+      lastExportError = initialError + L"\n" + lastExportError;
+    else
+      lastExportError = initialError;
     return false;
   }
   return true;
 }
 
 bool AudioEngine::restoreFromOfflineExport() {
-  const double liveSampleRate = deviceSampleRate.load();
-  const bool restored = bridge.isPluginLoaded() && preparePlugin();
+  double liveSampleRate;
+  int blockSize;
+  unsigned revision;
+  {
+    const juce::ScopedLock lock(getCallbackLock());
+    liveSampleRate = deviceSampleRate.load();
+    blockSize = deviceBlockSize.load();
+    revision = deviceRevision.load();
+  }
+  const bool restored = bridge.isPluginLoaded() &&
+      bridge.prepare(liveSampleRate, blockSize, false,
+                     PluginBridge::Command::endExport);
   if (!restored)
     lastExportError = L"无法恢复实时音频: " + bridge.getLastError();
   midiPlayer.setSampleRate(liveSampleRate);
   midiPlayer.setPlaying(false);
   midiPlayer.seekTo(0.0);
   offlineExportActive.store(false, std::memory_order_release);
+  if (restored)
+    preparedRevision.store(revision);
+  const bool started = restored && startRealtimeRenderer(liveSampleRate, blockSize);
   suspendProcessing(false);
-  return restored;
+  if (restored && !started)
+    lastExportError = getLastPluginError();
+  return started;
 }
 
 void AudioEngine::unloadPlugin() {
   suspendProcessing(true);
+  stopRealtimeRenderer();
   midiPlayer.setPlaying(false);
 
   bridge.closeEditor();
@@ -91,6 +116,7 @@ void AudioEngine::unloadPlugin() {
 
 void AudioEngine::terminateCrashedPluginWorker() {
   suspendProcessing(true);
+  stopRealtimeRenderer();
   bridge.terminateCrashedWorker();
   suspendProcessing(false);
 }
@@ -105,6 +131,75 @@ bool AudioEngine::openPluginEditor() {
 
 void AudioEngine::processBlock(juce::AudioBuffer<float> &buffer,
                                juce::MidiBuffer &midiMessages) {
+  midiMessages.clear();
+  if (isOfflineExportActive() || requiresPrepare() || !bridge.isPluginLoaded()) {
+    buffer.clear();
+    return;
+  }
+  if (realtimeAudio.read(buffer) < buffer.getNumSamples())
+    underrunCount.fetch_add(1, std::memory_order_relaxed);
+  notify();
+}
+
+void AudioEngine::stopRealtimeRenderer() {
+  signalThreadShouldExit();
+  notify();
+  // Ordering: IPC 自身有会话失败期限；线程结束前禁止释放其缓冲或插件映射。
+  waitForThreadToExit(-1);
+}
+
+bool AudioEngine::startRealtimeRenderer(double rate, int devicePeriod) {
+  preparedRenderSampleRate = rate;
+  renderQuantum = juce::jmin(devicePeriod, PluginBridge::SharedBlockLayout::maxSamples);
+  // Reason: 缓存两个设备周期，分别用于当前输出和下一周期的跨进程渲染。
+  realtimeAudio.prepare(devicePeriod * 2);
+  realtimeBlock.setSize(2, renderQuantum);
+  realtimeMidi.ensureSize(PluginBridge::SharedBlockLayout::maxMidiBytes);
+  outputGain.reset(rate, 0.01);
+  outputGain.setCurrentAndTargetValue(masterVolume.load());
+  fadeOutDuration = juce::jmax(1, juce::roundToInt(rate * 0.05));
+  fadeOutSamples = fadeOutDuration;
+  seekCrossfadeDuration = juce::jmax(1, juce::roundToInt(rate * 0.003));
+  seekCrossfadeSamples = seekCrossfadePhase = 0;
+  tailSamplesRendered = tailSilentSamples = 0;
+  stopCleanupDone = false;
+  renderLatencySamples.store(devicePeriod * 2 + bridge.getLatencySamples());
+  setLatencySamples(renderLatencySamples.load());
+  if (startThread(juce::Thread::Priority::high))
+    return true;
+  const juce::String error = L"无法启动音频渲染线程。";
+  setLastPluginError(error);
+  bridge.failRenderSession(error);
+  return false;
+}
+
+void AudioEngine::run() {
+  try {
+    while (!threadShouldExit()) {
+      if (requiresPrepare()) {
+        wait(-1);
+        continue;
+      }
+      const int count = juce::jmin(renderQuantum, realtimeAudio.freeSamples());
+      if (count == 0) {
+        wait(-1);
+        continue;
+      }
+      realtimeBlock.setSize(2, count, false, false, true);
+      renderRealtimeBlock(realtimeBlock, realtimeMidi);
+      if (bridge.getStatus() == PluginBridge::BridgeStatus::crashed)
+        return;
+      realtimeAudio.write(realtimeBlock);
+    }
+  } catch (const std::exception &error) {
+    setLastPluginError(juce::String(L"音频渲染失败: ") + error.what());
+    bridge.failRenderSession(getLastPluginError());
+    midiPlayer.setPlaying(false);
+  }
+}
+
+void AudioEngine::renderRealtimeBlock(juce::AudioBuffer<float> &buffer,
+                                      juce::MidiBuffer &midiMessages) {
   juce::ScopedNoDenormals noDenormals;
 
   if (isOfflineExportActive() || requiresPrepare()) {
@@ -113,7 +208,7 @@ void AudioEngine::processBlock(juce::AudioBuffer<float> &buffer,
     return;
   }
 
-  const double renderSampleRate = deviceSampleRate.load();
+  const double renderSampleRate = preparedRenderSampleRate;
   if (!renderPluginBlock(buffer, midiMessages, renderSampleRate)) {
     buffer.clear();
     return;
@@ -146,13 +241,14 @@ void AudioEngine::processBlock(juce::AudioBuffer<float> &buffer,
   }
 
   // Reason: `allSoundOff` 会立即切断声部；清理事件所在块静音，后续块按淡入采样数恢复增益。
-  if (midiPlayer.consumeSeekOccurred()) {
+  const bool resetBlock = midiPlayer.consumeSeekOccurred();
+  if (resetBlock) {
     buffer.clear();
     seekCrossfadePhase = 2;
     seekCrossfadeSamples = seekCrossfadeDuration;
   }
 
-  if (seekCrossfadePhase == 2) {
+  if (!resetBlock && seekCrossfadePhase == 2) {
     int toFade = juce::jmin(seekCrossfadeSamples, numSamples);
     float startGain =
         1.0f - (float)seekCrossfadeSamples / (float)seekCrossfadeDuration;
@@ -193,12 +289,19 @@ void AudioEngine::processBlock(juce::AudioBuffer<float> &buffer,
     buffer.clear();
   }
 
-  applyMasterOutputStage(buffer, masterVolume.load(), false);
+  outputGain.setTargetValue(masterVolume.load());
+  for (int i = 0; i < numSamples; ++i) {
+    const float gain = outputGain.getNextValue();
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+      buffer.setSample(ch, i, buffer.getSample(ch, i) * gain);
+  }
 }
 
-bool AudioEngine::loadPlugin(const juce::PluginDescription &description) {
+bool AudioEngine::loadPlugin(const juce::PluginDescription &description,
+                             std::function<void(double)> prepareMidi) {
 
   suspendProcessing(true);
+  stopRealtimeRenderer();
 
   midiPlayer.setPlaying(false);
   bridge.closeEditor();
@@ -212,7 +315,7 @@ bool AudioEngine::loadPlugin(const juce::PluginDescription &description) {
     return false;
   }
 
-  if (!preparePlugin()) {
+  if (!preparePlugin(std::move(prepareMidi))) {
     setLastPluginError(bridge.getLastError());
     bridge.unloadPlugin();
     suspendProcessing(false);
@@ -244,7 +347,10 @@ bool AudioEngine::renderPluginBlock(juce::AudioBuffer<float> &buffer,
   if (totalSamples <= 0)
     return true;
 
-  midiPlayer.processBlock(midiMessages, totalSamples);
+  midiPlayer.processBlock(midiMessages, totalSamples,
+                          isOfflineExportActive() ? MidiPlayer::ProcessMode::offline
+                                                  : MidiPlayer::ProcessMode::realtime,
+                          PluginBridge::SharedBlockLayout::maxMidiBytes);
   for (int offset = 0; offset < totalSamples;
        offset += PluginBridge::SharedBlockLayout::maxSamples) {
     const int chunkSamples =
@@ -252,7 +358,8 @@ bool AudioEngine::renderPluginBlock(juce::AudioBuffer<float> &buffer,
     juce::AudioBuffer<float> chunk(buffer.getArrayOfWritePointers(),
                                    buffer.getNumChannels(), offset,
                                    chunkSamples);
-    if (!bridge.processBlock(midiMessages, chunk, sampleRate, offset))
+    if (!bridge.processBlock(midiMessages, chunk, sampleRate, offset,
+                             midiPlayer.getMusicalPosition(offset)))
       break;
     if (offset + chunkSamples >= totalSamples)
       return true;

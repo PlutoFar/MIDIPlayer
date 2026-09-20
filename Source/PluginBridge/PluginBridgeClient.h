@@ -172,24 +172,25 @@ public:
 
   // Preconditions: 插件已加载且渲染已暂停；采样率单位为 Hz，块大小单位为采样。
   // Postconditions: 成功回复后切换实时/离线等待策略；失败返回 `false` 并保留诊断。
-  bool prepare(double sampleRate, int blockSize, bool nonRealtime = false) {
+  bool prepare(double sampleRate, int blockSize, bool nonRealtime = false,
+               Command command = Command::prepare) {
     if (!isPluginLoaded())
       return false;
 
     PrepareRequest request;
-    request.sampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
-    request.blockSize = blockSize > 0 ? blockSize : 512;
+    request.sampleRate = sampleRate;
+    request.blockSize = blockSize;
     request.nonRealtime = nonRealtime;
 
-    beginOperation(Command::prepare, getLoadedPluginName());
+    beginOperation(command, getLoadedPluginName());
     responseEvent.reset();
-    if (!sendMessageToWorker(makePrepareCommand(request))) {
+    if (!sendMessageToWorker(makePrepareCommand(request, command))) {
       clearOperation();
       markCrashed("failed to send plugin prepare command");
       return false;
     }
 
-    const auto reply = waitForReply(Command::prepare, workerCommandTimeoutMs);
+    const auto reply = waitForReply(command, workerCommandTimeoutMs);
     clearOperation();
     if (reply.code != StatusCode::ok) {
       handleCommandFailure(reply);
@@ -197,45 +198,28 @@ public:
     }
 
     nonRealtimeMode.store(nonRealtime, std::memory_order_release);
+    latencySamples.store(juce::jmax(0, reply.latencySamples));
     return true;
   }
 
+  int getLatencySamples() const { return latencySamples.load(); }
+  // Failures: 宿主渲染线程无法继续时终止当前会话的可用状态，保留明确诊断。
+  void failRenderSession(const juce::String &message) { markCrashed(message); }
+
   // Preconditions: 块大小不超过 `SharedBlockLayout::maxSamples`，MIDI 时间戳为宿主块采样偏移。
-  // Ordering: 同时最多一个未完成渲染请求；晚到回复必须核对并消费后才能复用共享块。
-  // Postconditions: `true` 表示已复制该请求的音频；`false` 不保证进程已崩溃，调用方须静音失败块。
-  // Failures: 实时超时保留未完成请求；离线超时、序列不符和传输失败记录崩溃状态。
+  // Concurrency: 仅专用渲染线程或离线导出调用，设备回调禁止调用此阻塞接口。
+  // Ordering: 每次调用完成一项渲染请求；失败结束会话，禁止推进后续 MIDI 后继续静音运行。
   bool processBlock(const juce::MidiBuffer &midi,
                     juce::AudioBuffer<float> &buffer, double sampleRate,
-                    int midiStartSample = 0) {
+                    int midiStartSample = 0,
+                    const MusicalPosition &position = {}) {
     if (!isPluginLoaded() || sharedBlock == nullptr || !sharedBlock->isOpen())
       return false;
 
     const bool nonRealtime = nonRealtimeMode.load(std::memory_order_acquire);
-    if (renderRequestOutstanding) {
-      const auto lateResult = sharedBlock->waitForResponse(0);
-      if (lateResult == WaitResult::signalled) {
-        if (!completeOutstandingRender()) {
-          buffer.clear();
-          return false;
-        }
-      } else if (lateResult == WaitResult::failed) {
-        buffer.clear();
-        resetOutstandingRender();
-        markCrashed(sharedBlock->getLastErrorMessage());
-        return false;
-      } else {
-        const auto elapsed =
-            juce::Time::getMillisecondCounter() - outstandingRenderStartTime;
-        buffer.clear();
-        if (elapsed >= static_cast<uint32_t>(workerRenderHangTimeoutMs))
-          markCrashed("plugin worker render unresponsive");
-        return false;
-      }
-    }
-
     const int numSamples = buffer.getNumSamples();
     if (numSamples > SharedBlockLayout::maxSamples) {
-      rememberCommandFailure(
+      markCrashed(
           "audio block is larger than the plugin bridge buffer");
       buffer.clear();
       return false;
@@ -248,6 +232,7 @@ public:
     shared.header.responseSequence = 0;
     shared.header.blockSize = numSamples;
     shared.header.resultCode = static_cast<int>(StatusCode::renderFailed);
+    shared.header.position = position;
 
     for (int ch = 0; ch < SharedBlockLayout::maxChannels; ++ch)
       juce::FloatVectorOperations::clear(shared.audio[ch], numSamples);
@@ -256,7 +241,7 @@ public:
         writeMidiBufferRange(midi, shared.midi, SharedBlockLayout::maxMidiBytes,
                              midiStartSample, numSamples);
     if (midiBytes < 0) {
-      rememberCommandFailure(
+      markCrashed(
           "MIDI block is larger than the plugin bridge buffer");
       buffer.clear();
       return false;
@@ -271,20 +256,19 @@ public:
 
     renderRequestOutstanding = true;
     outstandingRenderSequence = requestSequence;
-    outstandingRenderStartTime = juce::Time::getMillisecondCounter();
 
     const int timeoutMs =
         nonRealtime ? workerCommandTimeoutMs
-                    : getWorkerRenderTimeoutMs(numSamples, sampleRate);
+                    : workerRenderHangTimeoutMs;
     const auto waitResult = sharedBlock->waitForResponse(timeoutMs);
     if (waitResult != WaitResult::signalled) {
       buffer.clear();
       if (waitResult == WaitResult::failed) {
         resetRenderState();
         markCrashed(sharedBlock->getLastErrorMessage());
-      } else if (nonRealtime) {
+      } else {
         resetRenderState();
-        markCrashed("plugin worker offline render timeout");
+        markCrashed("plugin worker render timeout");
       }
       return false;
     }
@@ -408,6 +392,7 @@ public:
   }
 
 private:
+  std::atomic<int> latencySamples{0};
   bool completeOutstandingRender() {
     if (!renderRequestOutstanding || sharedBlock == nullptr)
       return false;
@@ -426,13 +411,14 @@ private:
       return false;
     }
 
+    latencySamples.store(juce::jmax(0, header.latencySamples));
+
     return true;
   }
 
   void resetOutstandingRender() {
     renderRequestOutstanding = false;
     outstandingRenderSequence = 0;
-    outstandingRenderStartTime = 0;
   }
 
   void resetRenderState() {
@@ -636,7 +622,6 @@ private:
   juce::String loadedPluginName;
   std::uint64_t nextRenderSequence = 1;
   std::uint64_t outstandingRenderSequence = 0;
-  uint32_t outstandingRenderStartTime = 0;
   bool renderRequestOutstanding = false;
   Command activeCommand = Command::none;
   juce::String activePluginName;

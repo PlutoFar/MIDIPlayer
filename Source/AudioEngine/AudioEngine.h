@@ -3,6 +3,7 @@
 #include "../Midi/MidiPlayer.h"
 #include "../PluginBridge/PluginBridgeClient.h"
 #include "ExportSettings.h"
+#include "RealtimeAudioBuffer.h"
 #include <atomic>
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -10,14 +11,15 @@
 // Ownership: 持有 `MidiPlayer` 和进程桥接客户端；设备与文件编码由外部服务持有。
 // Concurrency: `Core` 串行化插件命令与导出；JUCE 在设备回调线程调用处理器接口。
 // Ordering: 所有设备回调和导出必须先结束，再析构引擎及共享内存。
-class AudioEngine final : public juce::AudioProcessor {
+class AudioEngine final : public juce::AudioProcessor, private juce::Thread {
 public:
   AudioEngine();
   ~AudioEngine() override;
   // Preconditions: 描述来自已扫描目录；调用方已独占插件任务，禁止与导出并发。
   // Ordering: 暂停实时处理，卸载旧实例，再加载并配置新实例；替换失败不恢复旧插件。
   // Failures: 加载返回 `false` 并记录 `getLastPluginError`；卸载异常由进程状态报告。
-  bool loadPlugin(const juce::PluginDescription &description);
+  bool loadPlugin(const juce::PluginDescription &description,
+                  std::function<void(double)> prepareMidi = {});
   void unloadPlugin();
   // Preconditions: 已加载插件，命令线程独占桥接控制通道；窗口归工作进程所有。
   // Failures: 打开返回 `false` 并记录诊断；关闭错误通过进程状态查询。
@@ -39,7 +41,7 @@ public:
   void resetPluginCancellation() { bridge.resetCancellation(); }
   // Ordering: 捕获设备配置及修订号，暂停实时处理后发出 `prepare`，恢复调用前的暂停状态。
   // Failures: 返回 `false` 并记录插件诊断；失败不发布新的已配置修订号。
-  bool preparePlugin();
+  bool preparePlugin(std::function<void(double)> prepareMidi = {});
   // Postconditions: 采样率单位为 Hz；修订号不一致时，实时输出等待重配置完成。
   double liveSampleRate() const { return deviceSampleRate.load(); }
   bool requiresPrepare() const {
@@ -49,8 +51,8 @@ public:
   // Concurrency: 设备回调只发布原子配置；MIDI 快照更新及阻塞 IPC 由核心调度。
   void prepareToPlay(double sampleRate, int samplesPerBlock) override;
   void releaseResources() override {}
-  // Preconditions: JUCE 串行调用并持有处理器回调锁；导出不得同时消费 MIDI 或渲染共享块。
-  // Postconditions: 覆盖音频/MIDI 缓冲区；离线期间、配置未就绪或渲染失败时清空本块输出。
+  // Preconditions: JUCE 串行调用并持有处理器回调锁；回调只消费预分配音频，不执行 IPC 或 MIDI 分配。
+  // Postconditions: 欠载部分输出静音并记录计数；渲染线程继续按顺序提交 MIDI，禁止丢弃控制事件。
   void processBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &) override;
   // Ownership: 返回借用引用；只供核心编排，序列生产和消费必须遵循 `MidiPlayer` 并发契约。
   MidiPlayer &getMidiPlayer() { return midiPlayer; }
@@ -59,6 +61,8 @@ public:
     masterVolume.store(juce::jlimit(0.0f, 1.0f, value));
   }
   float getMasterVolume() const { return masterVolume.load(); }
+  uint64_t getUnderrunCount() const { return underrunCount.load(); }
+  int getRenderLatencySamples() const { return renderLatencySamples.load(); }
   juce::String getLastPluginError() const {
     const juce::ScopedLock lock(errorLock);
     return lastPluginError;
@@ -121,12 +125,25 @@ public:
   void setStateInformation(const void *, int) override {}
 
 private:
+  // Concurrency: 设备回调只读音频 FIFO；本线程独占 MIDI 消费及阻塞插件 IPC。
+  void run() override;
+  bool startRealtimeRenderer(double rate, int devicePeriod);
+  void stopRealtimeRenderer();
+  void renderRealtimeBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &);
+  RealtimeAudioBuffer realtimeAudio;
+  juce::AudioBuffer<float> realtimeBlock;
+  juce::MidiBuffer realtimeMidi;
+  juce::SmoothedValue<float> outputGain;
+  int renderQuantum = 512;
+  double preparedRenderSampleRate = 44100.0;
+  std::atomic<uint64_t> underrunCount{0};
+  std::atomic<int> renderLatencySamples{0};
   friend class OfflineRenderer;
   void setLastPluginError(const juce::String &message) {
     const juce::ScopedLock lock(errorLock);
     lastPluginError = message;
   }
-  // Preconditions: 实时回调或独占导出中的唯一渲染调用；不得与桥接资源释放并发。
+  // Preconditions: 专用渲染线程或独占导出中的唯一调用；不得与桥接资源释放并发。
   // Ordering: MIDI 按宿主块生成，再按共享块容量切分；任一分块失败即返回 `false`。
   bool renderPluginBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &,
                          double sampleRate);

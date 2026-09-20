@@ -29,8 +29,9 @@ AppState Core::Impl::buildState() {
   AppState s;
 
   s.plugin.scanning = pluginScanActive.load();
-  s.plugin.loadInProgress = pluginChangesAudio.load();
-  s.plugin.operationInProgress = pluginTaskActive.load();
+  s.task.audioChangeInProgress = commandChangesAudio.load() || audioConfigurationActive.load();
+  s.task.commandActive = commandTaskActive.load() || pluginScanActive.load() ||
+                         audioConfigurationActive.load();
   s.plugin.loaded = engine.hasPluginLoaded();
   s.plugin.loadedName = toW(engine.getLoadedPluginName());
   s.plugin.workerCrashed = engine.hasPluginWorkerCrashed();
@@ -41,10 +42,11 @@ AppState Core::Impl::buildState() {
   auto &mp = engine.getMidiPlayer();
   s.transport.playing = mp.getPlaying();
   s.transport.hasSequence = mp.hasSequence();
-  s.transport.positionSamples = mp.getPositionInSamples();
+  s.transport.positionSamples = juce::jmin(mp.getPositionInSamples(), mp.getDurationInSamples());
   s.transport.durationSamples = mp.getDurationInSamples();
   s.transport.currentTrackIndex = currentTrackIndex;
   s.transport.currentMidiName = toW(currentMidiName);
+  s.transport.lastError = toW(midiErrorText);
 
   s.playlist.hasUnsavedChanges = playlist.hasChanges();
   s.playlist.changeSummary = toW(playlist.getChangeSummary());
@@ -56,6 +58,8 @@ AppState Core::Impl::buildState() {
   s.audio.firstRunAudio = audio.isFirstRun();
   s.audio.deviceFallback = audio.wasRestoredWithFallback();
   s.audio.masterVolume = engine.getMasterVolume();
+  s.audio.underrunCount = engine.getUnderrunCount();
+  s.audio.renderLatencySamples = engine.getRenderLatencySamples();
   s.audio.lastInitError = toW(audio.lastError());
 
   s.task.exportActive = exportActiveFlag.load();
@@ -77,16 +81,6 @@ PlaylistState Core::Impl::buildPlaylistState() {
   return result;
 }
 
-void Core::Impl::scheduleAfter(int ms, std::function<void(Impl &)> fn) {
-  std::weak_ptr<int> token = life;
-  juce::Timer::callAfterDelay(ms, [this, token, fn = std::move(fn)]() mutable {
-    if (token.expired())
-      return;
-    StateLock lock(stateMutex);
-    fn(*this);
-  });
-}
-
 double Core::Impl::sampleRate() const {
   StateLock lock(stateMutex);
   const double sr = engine.liveSampleRate();
@@ -104,12 +98,18 @@ PlaylistState Core::playlistState() const { return impl->buildPlaylistState(); }
 
 void Core::tick(bool uiSuppressTrackAdvance) {
   impl->tick(uiSuppressTrackAdvance);
-  if (impl->engine.requiresPrepare() && !impl->pluginTaskActive.load() &&
+  if (impl->engine.requiresPrepare() && !impl->commandTaskActive.load() &&
       !impl->pluginScanActive.load() && !impl->exportActiveFlag.load() &&
       !impl->audioConfigurationActive.load())
-    impl->startPluginTask(
-        [self = impl.get()] { return self->engine.preparePlugin(); }, {},
-        false);
+    impl->startCommandTask(
+        [self = impl.get()] {
+          return self->engine.preparePlugin([self](double rate) {
+            Impl::StateLock lock(self->stateMutex);
+            auto &player = self->engine.getMidiPlayer();
+            player.setSampleRate(rate);
+            player.seekTo(player.getPositionInSamples(), player.getPlaying());
+          });
+        }, {});
 }
 
 // library
@@ -156,16 +156,18 @@ void Core::cancelPendingPluginOperation() {
 }
 
 // player
-bool Core::openMidi(const std::wstring &path) {
-  return impl->openMidi(fileFromPath(path), false, {});
+bool Core::openMidi(const std::wstring &path, std::function<void(bool)> completion) {
+  return impl->beginMidiLoad(fileFromPath(path), true, true, std::move(completion));
 }
 bool Core::openMidiFromShell(const std::wstring &path,
-                             std::function<void()> onPluginMissing) {
-  return impl->openMidi(fileFromPath(path), true, std::move(onPluginMissing));
+                             std::function<void()> onPluginMissing,
+                             std::function<void(bool)> completion) {
+  return impl->beginMidiLoad(fileFromPath(path), true, true,
+                             std::move(completion), std::move(onPluginMissing));
 }
 bool Core::loadMidiFile(const std::wstring &path) {
   Impl::StateLock lock(impl->stateMutex);
-  if (impl->exportActiveFlag.load() || impl->pluginChangesAudio.load())
+  if (impl->exportActiveFlag.load() || impl->commandChangesAudio.load())
     return false;
   return impl->loadMidi(fileFromPath(path));
 }
@@ -177,20 +179,11 @@ void Core::next() { impl->next(); }
 void Core::prev() { impl->prev(); }
 void Core::playTrackAt(int index) {
   Impl::StateLock lock(impl->stateMutex);
-  if (impl->exportActiveFlag.load() || impl->pluginChangesAudio.load() ||
+  if (impl->exportActiveFlag.load() || impl->commandChangesAudio.load() ||
       !impl->engine.hasPluginLoaded() || impl->engine.hasPluginWorkerCrashed())
     return;
   if (const auto *track = impl->playlist.getTrack(index)) {
-    if (impl->loadMidi(track->file)) {
-      impl->currentTrackIndex = index;
-      ++impl->trackSwitchGeneration;
-      const int gen = impl->trackSwitchGeneration;
-      impl->scheduleAfter(100, [gen](Impl &self) {
-        if (self.trackSwitchGeneration != gen || !self.canStartPlayback())
-          return;
-        self.engine.getMidiPlayer().setPlaying(true);
-      });
-    }
+    impl->beginMidiLoad(track->file, false, true);
   }
 }
 void Core::seek(double ratio) { impl->seek(ratio); }

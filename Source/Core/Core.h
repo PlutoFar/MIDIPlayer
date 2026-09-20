@@ -59,7 +59,7 @@ public:
   // Preconditions: 消息线程调用；`loadAsync` 的 `id` 来自 `plugins()`，回调自行约束界面对象寿命。
   // Postconditions: `true` 仅表示受理；存活至完成时在消息线程调用 `completion`，参数为执行结果。
   // Ownership: 上次使用的插件属于界面偏好；调用方在成功后保存，并独立处理保存失败。
-  // Failures: 受理失败返回 `false` 且不回调；线程创建异常直接传播，析构取消后不交付界面回调。
+  // Failures: 线程创建或受理失败返回 `false` 且不回调；任务异常作为失败结果交付，析构取消后不交付回调。
   bool loadAsync(const PluginId &id, std::function<void(bool)> completion);
   bool unloadAsync(std::function<void(bool)> completion);
   bool editorAsync(std::function<void(bool)> completion);
@@ -76,12 +76,14 @@ public:
   // Concurrency: 只置取消标记并唤醒命令等待；不在调用线程销毁进程或共享内存。
   void cancelPendingPluginOperation();
 
-  // Preconditions: 本机 MIDI 文件路径。`openMidi` 同步解析、加入列表，并在已有插件时安排播放。
-  // Failures: 文件无效或音频状态变更期间返回 `false`；成功解析后才更新当前曲目。
-  bool openMidi(const std::wstring &path);
+  // Preconditions: 消息线程传入本机 MIDI 路径；完整解析在后台执行，完成回调在消息线程交付。
+  // Postconditions: 返回受理结果；成功解析后更新曲目/列表并按插件状态安排播放。
+  // Failures: 解析失败保留原曲目，诊断通过 `state().transport.lastError` 查询。
+  bool openMidi(const std::wstring &path, std::function<void(bool)> completion = {});
   // Ordering: 无插件时在释放核心锁后调用 `onPluginMissing`；该回调只负责发起加载交互。
   bool openMidiFromShell(const std::wstring &path,
-                         std::function<void()> onPluginMissing);
+                         std::function<void()> onPluginMissing,
+                         std::function<void(bool)> completion = {});
   // Postconditions: 仅替换 MIDI 序列及文件信息；不修改列表索引、不安排自动播放。
   bool loadMidiFile(const std::wstring &path);
   // Preconditions: 播放需要已加载插件及有效序列，切曲需要有效目标列表项；导出或插件音频变更期间不启动播放。

@@ -284,10 +284,13 @@ void MainContentComponent::openMidiFileFromShell(const juce::File &file) {
       [safeThis = juce::Component::SafePointer<MainContentComponent>(this)]() {
         if (safeThis != nullptr)
           safeThis->tryLoadLastPluginWithDialog();
+      },
+      [safeThis = juce::Component::SafePointer<MainContentComponent>(this)](bool succeeded) {
+        if (safeThis != nullptr && succeeded) {
+          safeThis->playlistPanel.refresh();
+          safeThis->playlistPanel.setCurrentTrackIndex(safeThis->core.currentTrackIndex());
+        }
       });
-
-  playlistPanel.refresh();
-  playlistPanel.setCurrentTrackIndex(core.currentTrackIndex());
 
   pendingShellOpen = false;
 }

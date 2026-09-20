@@ -14,7 +14,8 @@
 
 namespace PluginBridge {
 
-class PluginWorkerProcess final : private juce::ChildProcessWorker {
+class PluginWorkerProcess final : private juce::ChildProcessWorker,
+                                  private juce::AudioProcessorListener {
 public:
   PluginWorkerProcess()
       : terminateAfterFirstRender(
@@ -34,6 +35,29 @@ public:
   }
 
 private:
+  void audioProcessorParameterChanged(juce::AudioProcessor *, int, float) override {}
+  void audioProcessorChanged(juce::AudioProcessor *processor,
+                             const ChangeDetails &details) override {
+    if (details.latencyChanged)
+      pluginLatency.store(processor->getLatencySamples());
+  }
+  class HostedPlayHead final : public juce::AudioPlayHead {
+  public:
+    MusicalPosition position;
+    double sampleRate = 44100.0;
+    juce::Optional<PositionInfo> getPosition() const override {
+      PositionInfo result;
+      result.setTimeInSamples(static_cast<int64_t>(position.samplePosition));
+      result.setTimeInSeconds(position.samplePosition / sampleRate);
+      result.setBpm(position.bpm);
+      result.setPpqPosition(position.ppqPosition);
+      result.setPpqPositionOfLastBarStart(position.barStartPpq);
+      result.setTimeSignature(TimeSignature{position.numerator, position.denominator});
+      result.setIsPlaying(position.playing);
+      return result;
+    }
+  };
+
   class WorkerEditorWindow final : public juce::DocumentWindow {
   public:
     WorkerEditorWindow(const juce::String &name,
@@ -153,9 +177,11 @@ private:
         sendStatus(StatusCode::ok, "plugin unloaded", Command::unloadPlugin);
       });
       break;
-    case Command::prepare: {
+    case Command::prepare:
+    case Command::beginExport:
+    case Command::endExport: {
       const auto request = prepareRequestFromValueTree(tree);
-      juce::MessageManager::callAsync([this, request] { prepare(request); });
+      juce::MessageManager::callAsync([this, request, command] { prepare(request, command); });
       break;
     }
     case Command::openEditor:
@@ -231,9 +257,13 @@ private:
       processChannelCount =
           getWorkerProcessChannelCount(instance->getTotalNumOutputChannels());
       plugin = std::move(instance);
+      pluginLatency.store(plugin->getLatencySamples());
+      plugin->addListener(this);
+      plugin->setPlayHead(&playHead);
       pluginWindowIcon = windowIcon;
     }
 
+    processMidi.ensureSize(SharedBlockLayout::maxMidiBytes);
     if (!blockThread.startThread(juce::Thread::Priority::highest)) {
       unloadPlugin();
       sendStatus(StatusCode::pluginLoadFailed, "unable to start render thread",
@@ -248,28 +278,52 @@ private:
     editorWindow = nullptr;
 
     const juce::ScopedLock lock(pluginLock);
+    if (plugin != nullptr)
+      plugin->removeListener(this);
     plugin = nullptr;
+    pluginLatency.store(0);
+    savedPluginState.reset();
+    hasSavedPluginState = false;
     pluginWindowIcon = {};
     sharedBlock = nullptr;
     processBuffer.setSize(0, 0);
     processChannelCount = SharedBlockLayout::maxChannels;
   }
 
-  void prepare(const PrepareRequest &request) {
+  void prepare(const PrepareRequest &request, Command command) {
     // Trust Boundary: 在调用插件之前拒绝无效配置，禁止将缺失字段作为默认参数使用。
     if (!std::isfinite(request.sampleRate) || request.sampleRate <= 0.0 ||
         request.blockSize <= 0) {
       sendStatus(StatusCode::invalidCommand, "invalid audio configuration",
-                 Command::prepare);
+                 command);
       return;
     }
     const juce::ScopedLock lock(pluginLock);
     if (plugin == nullptr) {
       sendStatus(StatusCode::pluginLoadFailed, "plugin not loaded",
-                 Command::prepare);
+                 command);
       return;
     }
 
+    // Ordering: 导出前保存插件参数；导出结束先恢复参数，再恢复实时处理配置。
+    if (command == Command::beginExport) {
+      if (hasSavedPluginState) {
+        sendStatus(StatusCode::invalidCommand, "export session already active", command);
+        return;
+      }
+      plugin->getStateInformation(savedPluginState);
+      hasSavedPluginState = true;
+      editorWasVisible = editorWindow != nullptr && editorWindow->isVisible();
+      if (editorWindow != nullptr)
+        editorWindow->setVisible(false);
+    } else if (command == Command::endExport && !hasSavedPluginState) {
+      sendStatus(StatusCode::invalidCommand, "export session is not active", command);
+      return;
+    }
+    plugin->releaseResources();
+    if (command == Command::beginExport || command == Command::endExport)
+      plugin->setStateInformation(savedPluginState.getData(),
+                                 static_cast<int>(savedPluginState.getSize()));
     const int pluginOutputChannels = plugin->getTotalNumOutputChannels();
     if (shouldUseExplicitStereoHostConfig(pluginOutputChannels)) {
       plugin->setPlayConfigDetails(0, SharedBlockLayout::maxChannels,
@@ -287,7 +341,14 @@ private:
                           false, false, true);
     plugin->setNonRealtime(request.nonRealtime);
     plugin->prepareToPlay(request.sampleRate, request.blockSize);
-    sendStatus(StatusCode::ok, "plugin prepared", Command::prepare);
+    plugin->reset();
+    if (command == Command::endExport) {
+      savedPluginState.reset();
+      hasSavedPluginState = false;
+      if (editorWasVisible && editorWindow != nullptr)
+        editorWindow->setVisible(true);
+    }
+    sendStatus(StatusCode::ok, "plugin prepared", command);
   }
 
   void openEditor() {
@@ -326,6 +387,7 @@ private:
   }
 
   void processBlocksUntilStopped() {
+    juce::ScopedNoDenormals noDenormals;
     while (!blockThread.threadShouldExit()) {
       auto *blockOwner = sharedBlock.get();
       if (blockOwner == nullptr)
@@ -372,13 +434,14 @@ private:
                           false, true);
     processBuffer.clear();
 
-    juce::MidiBuffer midi;
-    if (!readMidiBuffer(shared.midi, shared.header.midiBytes, midi,
+    if (!readMidiBuffer(shared.midi, shared.header.midiBytes, processMidi,
                         shared.header.blockSize)) {
       shared.header.resultCode = static_cast<int>(StatusCode::invalidCommand);
       return;
     }
-    plugin->processBlock(processBuffer, midi);
+    playHead.position = shared.header.position;
+    playHead.sampleRate = shared.header.sampleRate;
+    plugin->processBlock(processBuffer, processMidi);
 
     for (int ch = 0; ch < SharedBlockLayout::maxChannels; ++ch) {
       const int sourceChannel =
@@ -389,6 +452,7 @@ private:
     }
 
     shared.header.resultCode = static_cast<int>(StatusCode::ok);
+    shared.header.latencySamples = pluginLatency.load();
   }
 
   // Ordering: 发出退出请求并唤醒共享块等待，线程停止后才允许销毁插件及映射。
@@ -406,10 +470,17 @@ private:
 
   void sendStatus(StatusCode code, const juce::String &message,
                   Command command) {
-    sendMessageToCoordinator(makeStatusReply(code, message, command));
+    sendMessageToCoordinator(makeStatusReply(
+        code, message, command, pluginLatency.load()));
   }
 
   juce::AudioPluginFormatManager formatManager;
+  HostedPlayHead playHead;
+  std::atomic<int> pluginLatency{0};
+  juce::MidiBuffer processMidi;
+  juce::MemoryBlock savedPluginState;
+  bool hasSavedPluginState = false;
+  bool editorWasVisible = false;
   std::unique_ptr<juce::AudioPluginInstance> plugin;
   std::unique_ptr<SharedBlockOwner> sharedBlock;
   juce::Image pluginWindowIcon;

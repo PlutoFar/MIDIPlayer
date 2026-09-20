@@ -259,6 +259,7 @@ private:
   void loadSettings();
 
   midi::Core &core;
+  juce::String lastMidiErrorShown;
   FluentLookAndFeel &fluentLookAndFeel;
 
   BackgroundComponent background;

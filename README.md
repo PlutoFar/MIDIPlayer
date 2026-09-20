@@ -7,7 +7,7 @@
 <p align="center">Windows x64 MIDI 播放器与 VST3 乐器宿主</p>
 
 <p align="center">
-  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.0">v1.2.0</a>
+  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.1">v1.2.1</a>
   ·
   <a href="https://github.com/PlutoFar/MIDIPlayer/releases">发布版本</a>
   ·
@@ -25,6 +25,7 @@ MIDI Player 是 Windows MIDI（乐器数字接口）文件播放器，支持通�
 
 - 64 位 VST3 乐器扫描、加载、卸载和编辑器托管
 - 插件独立进程运行与异常恢复
+- 向插件提供 MIDI 速度、拍号和播放位置，用于节拍同步
 - MIDI 文件选择、系统文件打开和拖放导入
 - 播放列表增删、排序、保存、加载和持久化
 - 连续播放、列表循环、单曲循环和随机播放
@@ -32,6 +33,7 @@ MIDI Player 是 Windows MIDI（乐器数字接口）文件播放器，支持通�
 - WASAPI、DirectSound 和 ASIO 音频输出
 - WAV、FLAC、Ogg Vorbis 离线导出
 - 导出采样率、位深、质量和尾音配置
+- 线性音量控制与插件延迟补偿导出
 - 背景图片、高斯模糊、Aero、Acrylic、遮罩和主题色
 - 界面字体、播放列表字体、字号和曲目行间距
 - 窗口置顶、MIDI 文件关联和便携运行
@@ -48,11 +50,15 @@ MIDI Player 是 Windows MIDI（乐器数字接口）文件播放器，支持通�
 
 大型音源的音色库、许可证和厂商运行环境按照插件发行方文档配置。
 
+播放使用 2 个设备周期的音频缓冲。较小的设备缓冲可降低操作延迟；出现断续时可增大缓冲。音频设置的状态提示显示附加播放延迟上限和缓冲欠载次数。
+
+32 位浮点 WAV 保留超过满刻度的音频数据。整数 WAV、FLAC 和 Ogg Vorbis 的输出限制在满刻度范围内；降低音量可避免过载削波。
+
 ## 下载与快速开始
 
-当前发布包：`MIDIPlayer-v1.2.0-Windows-x64.zip`，已包含便携模式标记。
+当前发布包：`MIDIPlayer-v1.2.1-Windows-x64.zip`，已包含便携模式标记。
 
-下载地址：[GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.0)
+下载地址：[GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.1)
 
 1. 将压缩包解压到具有写入权限的目录。
 2. 确认 `MidiPlayer.exe` 与 `MidiWorker.exe` 位于同一目录。

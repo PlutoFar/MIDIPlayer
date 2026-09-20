@@ -1,6 +1,9 @@
 #pragma once
 
 #include "../Utils/DebugLogger.h"
+#include "MusicalTimeline.h"
+#include "MidiNoteChase.h"
+#include "MidiControllerChase.h"
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -11,10 +14,11 @@
 
 // Responsibilities: 发布不可变 MIDI 序列，按采样位置生成事件并重建 seek 后的控制器/音符状态。
 // Concurrency: `setSequence`、`setSampleRate`、`seekTo` 只有一个串行生产方；
-// 消息线程与独占导出线程的生产权由 `Core` 协调。`processBlock` 同时只能有一个消费方。
+// 消息线程、命令线程与独占导出线程的生产权由 `Core` 协调。`processBlock` 同时只能有一个消费方。
 // Ownership: 序列和 seek 消息归本对象持有；析构前必须停止生产方与实时/离线消费方。
 class MidiPlayer {
 public:
+  enum class ProcessMode { realtime, offline };
   MidiPlayer() = default;
 
   ~MidiPlayer() {
@@ -62,7 +66,9 @@ public:
 
   // Preconditions: 唯一消费方调用；`buffer` 由调用方持有，本方法追加事件且不负责预先清空。
   // Postconditions: 追加本块事件并推进采样位置；先消费快照和 seek，再处理普通序列事件。
-  void processBlock(juce::MidiBuffer &buffer, int numSamples) {
+  void processBlock(juce::MidiBuffer &buffer, int numSamples,
+                    ProcessMode mode = ProcessMode::realtime,
+                    int recoveryPacketBytes = std::numeric_limits<int>::max()) {
     if (numSamples <= 0)
       return;
     // Ordering: 先取得定位请求，再消费序列；请求发布前的序列写入对本消费块可见。
@@ -71,18 +77,28 @@ public:
 
     // Ordering: 停止清理由 `AudioEngine` 淡出后触发；seek 清理块由引擎静音并接续淡入。
     if (pendingAllNotesOff.exchange(false)) {
-      addStateResetMessages(buffer, false);
-      cleanupOccurred.store(true, std::memory_order_release);
+      recoveryMessages.clear();
+      recoveryIndex = 0;
+      recoveryIsSeek = false;
+      addStateResetMessages(recoveryMessages, resetControllersOnCleanup);
+      resetControllersOnCleanup = false;
     }
 
-    if (hasSeekRequest && applyPendingSeekRequest(buffer, numSamples))
+    const bool appliedSeek = hasSeekRequest && applyPendingSeekRequest(buffer, numSamples);
+    renderPosition = currentPositionInSamples.load();
+    renderPlaying = isPlaying.load();
+    const bool recovered = writeRecoveryMessages(buffer, numSamples, recoveryPacketBytes);
+    // Ordering: 实时定位留出清理块；离线定位在同块开始正常序列，不写入准备空块。
+    if ((appliedSeek || recovered) && mode == ProcessMode::realtime)
       return;
 
     auto *currentSequence = getAudioThreadSnapshot();
     if (currentSequence == nullptr || !isPlaying.load())
       return;
-    if (sequenceEnded.load(std::memory_order_acquire))
+    if (sequenceEnded.load(std::memory_order_acquire)) {
+      currentPositionInSamples.store(renderPosition + numSamples);
       return;
+    }
 
     const double currentPos = currentPositionInSamples.load();
     const double endPosition = currentPos + numSamples;
@@ -186,6 +202,29 @@ public:
 
   bool hasSequence() const { return sequenceLoaded.load(); }
 
+  // Preconditions: 唯一消费方在 `processBlock` 后查询，偏移属于刚生成的块。
+  MusicalPosition getMusicalPosition(int offset = 0) const {
+    const auto *snapshot = getAudioThreadSnapshot();
+    return snapshot != nullptr
+               ? snapshot->timeline.at(renderPosition + (renderPlaying ? offset : 0),
+                                       snapshot->sampleRate, renderPlaying)
+               : MusicalPosition{};
+  }
+
+  // Preconditions: 实时消费已停止，由独占离线会话调用；下一块从文件开头重建 MIDI。
+  void resetForOfflineRender(double rate) {
+    setPlaying(false);
+    setSampleRate(rate);
+    seekTo(0.0);
+    pendingAllNotesOff.store(true);
+    activeNotes = {};
+    recoveryMessages.clear();
+    recoveryIndex = 0;
+    resetControllersOnCleanup = true;
+    seekOccurred.store(false);
+    cleanupOccurred.store(false);
+  }
+
   // Ordering: seek 实际应用后返回一次 `true`；只由引擎消费，用于清理块静音及后续淡入。
   bool consumeSeekOccurred() {
     return seekOccurred.exchange(false, std::memory_order_acquire);
@@ -203,6 +242,7 @@ public:
 
 private:
   struct SequenceSnapshot {
+    MusicalTimeline timeline;
     juce::MidiMessageSequence sequenceSeconds;
     juce::MidiMessageSequence sequenceSamples;
     double sampleRate = 44100.0;
@@ -266,6 +306,12 @@ private:
   std::atomic<double> cachedSampleRate{44100.0};
   std::atomic<uint32_t> nextSequenceGeneration{1};
   int nextMessageIndex = 0;
+  double renderPosition = 0.0;
+  bool renderPlaying = false;
+  bool resetControllersOnCleanup = false;
+  juce::MidiBuffer recoveryMessages;
+  int recoveryIndex = 0;
+  bool recoveryIsSeek = false;
   std::array<std::array<bool, 128>, 16> activeNotes{};
 
   static double sanitiseSampleRate(double rate) {
@@ -297,6 +343,7 @@ private:
     snapshot->sequenceSeconds = std::move(*seconds);
     snapshot->sequenceSeconds.sort();
     snapshot->sequenceSeconds.updateMatchedPairs();
+    snapshot->timeline.build(snapshot->sequenceSeconds);
     snapshot->sequenceSamples = snapshot->sequenceSeconds;
 
     for (int i = 0; i < snapshot->sequenceSamples.getNumEvents(); ++i) {
@@ -359,10 +406,8 @@ private:
     sequenceLoaded.store(raw != nullptr);
     cachedDurationSamples.store(raw != nullptr ? raw->durationSamples : 0.0);
     cachedSampleRate.store(raw != nullptr ? raw->sampleRate : 44100.0);
-    if (!preservePlayingState) {
-      currentPositionInSamples.store(
-          raw != nullptr ? raw->initialPositionSamples : 0.0);
-    }
+    currentPositionInSamples.store(
+        raw != nullptr ? raw->initialPositionSamples : 0.0);
   }
 
   void reclaimRetiredSequences() {
@@ -460,6 +505,7 @@ private:
 
   // Preconditions: 本消费块已取得定位槽位，并消费了此前发布的序列。
   bool applyPendingSeekRequest(juce::MidiBuffer &buffer, int numSamples) {
+    juce::ignoreUnused(buffer, numSamples);
     auto *active = getAudioThreadSnapshot();
     const auto &request = pendingSeekRequests[(size_t)consumerSeekSlot];
     if (active == nullptr || request.generation != active->generation)
@@ -471,132 +517,61 @@ private:
     sequenceEnded.store(false, std::memory_order_release);
 
     if (request.emitChase) {
-      addStateResetMessages(buffer, true);
+      recoveryMessages.clear();
+      recoveryIndex = 0;
+      recoveryIsSeek = true;
+      addStateResetMessages(recoveryMessages, true);
       for (const auto metadata : request.chaseMessages)
-        addTrackedEvent(buffer, metadata.getMessage(),
-                        juce::jmin(1, numSamples - 1));
-      seekOccurred.store(true, std::memory_order_release);
+        recoveryMessages.addEvent(metadata.data, metadata.numBytes, 1);
     }
     return true;
   }
 
-  // Preconditions: 事件已按采样时间排序，`nextIndex` 指向首个不早于定位点的事件。
-  // Postconditions: 收集定位点之前每通道最后的控制器、音色选择和弯音值。
-  void restoreControllersState(const juce::MidiMessageSequence *seq,
-                               double timeInSamples, int nextIndex,
-                               juce::MidiBuffer &buffer) {
-    if (seq == nullptr)
-      return;
-
-    int ccValues[17][128];
-    for (int ch = 1; ch <= 16; ++ch)
-      for (int cc = 0; cc < 128; ++cc)
-        ccValues[ch][cc] = -1;
-
-    int programValues[17];
-    int pitchWheelValues[17];
-    for (int ch = 1; ch <= 16; ++ch) {
-      programValues[ch] = -1;
-      pitchWheelValues[ch] = -1;
-    }
-
-    const int limit = juce::jmin(nextIndex, seq->getNumEvents());
-    for (int i = 0; i < limit; ++i) {
-      auto *event = seq->getEventPointer(i);
-      if (event == nullptr)
-        break;
-      if (event->message.getTimeStamp() >= timeInSamples)
-        break;
-
-      const auto &msg = event->message;
-      const int channel = msg.getChannel();
-      if (channel < 1 || channel > 16)
+  // Ordering: 恢复消息按原顺序分批发送，每批为桥接的静音准备块；音乐时间保持在定位点。
+  bool writeRecoveryMessages(juce::MidiBuffer &buffer, int numSamples, int maxBytes) {
+    int index = 0, bytes = 0;
+    bool emitted = false, complete = true;
+    for (const auto metadata : recoveryMessages) {
+      if (index++ < recoveryIndex)
         continue;
-
-      if (msg.isController()) {
-        ccValues[channel][msg.getControllerNumber()] =
-            msg.getControllerValue();
-      } else if (msg.isProgramChange()) {
-        programValues[channel] = msg.getProgramChangeNumber();
-      } else if (msg.isPitchWheel()) {
-        pitchWheelValues[channel] = msg.getPitchWheelValue();
+      if (bytes + metadata.numBytes + 8 > maxBytes) {
+        complete = false;
+        break;
       }
+      bytes += metadata.numBytes + 8;
+      addTrackedEvent(buffer, metadata.getMessage(),
+                      juce::jmin(metadata.samplePosition, numSamples - 1));
+      ++recoveryIndex;
+      emitted = true;
     }
-
-    // Ordering: 先发送 bank-select，再发送 program-change、其他 CC 和 pitch-wheel。
-    for (int channel = 1; channel <= 16; ++channel) {
-      for (int cc : {0, 32}) {
-        if (ccValues[channel][cc] != -1) {
-          buffer.addEvent(juce::MidiMessage::controllerEvent(
-                              channel, cc, ccValues[channel][cc]),
-                          0);
-        }
-      }
-
-      if (programValues[channel] != -1) {
-        buffer.addEvent(juce::MidiMessage::programChange(
-                            channel, programValues[channel]),
-                        0);
-      }
-
-      for (int cc = 0; cc < 128; ++cc) {
-        if (cc == 0 || cc == 32)
-          continue; // 已在前面发送
-
-        int value = ccValues[channel][cc];
-        if (value != -1) {
-          buffer.addEvent(
-              juce::MidiMessage::controllerEvent(channel, cc, value), 0);
-        }
-      }
-
-      if (pitchWheelValues[channel] != -1) {
-        buffer.addEvent(
-            juce::MidiMessage::pitchWheel(channel, pitchWheelValues[channel]),
-            0);
-      }
+    if (complete) {
+      recoveryMessages.clear();
+      recoveryIndex = 0;
     }
+    if (emitted) {
+      if (recoveryIsSeek)
+        seekOccurred.store(true, std::memory_order_release);
+      else
+        cleanupOccurred.store(true, std::memory_order_release);
+    }
+    return emitted;
   }
 
-  // Preconditions: 序列已执行 `updateMatchedPairs`，`nextIndex` 指向首个不早于定位点的事件。
-  // Postconditions: 每通道/音高选择最近的已开始音符；结束时间等于定位点时也重新触发。
+  // Ordering: JUCE 保留 RPN/NRPN 选择与数据输入的顺序；踏板由音符恢复阶段处理。
+  void restoreControllersState(juce::MidiMessageSequence *seq,
+                               double timeInSamples, int nextIndex,
+                               juce::MidiBuffer &buffer) {
+    juce::ignoreUnused(timeInSamples);
+    appendChasedControllers(*seq, nextIndex, buffer);
+  }
+
+  // Preconditions: `nextIndex` 指向首个不早于定位点的事件。
+  // Postconditions: 恢复按键及延音/保持踏板维持的音符，后续事件仍按原时间发送。
   static void restoreActiveNotes(const juce::MidiMessageSequence *seq,
                                  double timeInSamples, int nextIndex,
                                  juce::MidiBuffer &buffer) {
-    if (seq == nullptr)
-      return;
-
-    bool noteSeen[17][128] = {false};
-
-    int startIndex = juce::jmin(nextIndex - 1, seq->getNumEvents() - 1);
-    for (int i = startIndex; i >= 0; --i) {
-      auto *event = seq->getEventPointer(i);
-      if (event == nullptr)
-        continue;
-
-      const auto &message = event->message;
-      if (!message.isNoteOn())
-        continue;
-
-      const int channel = message.getChannel();
-      const int noteNum = message.getNoteNumber();
-      if (channel < 1 || channel > 16 || noteNum < 0 || noteNum > 127)
-        continue;
-
-      if (noteSeen[channel][noteNum])
-        continue;
-      noteSeen[channel][noteNum] = true;
-
-      auto *noteOff = event->noteOffObject;
-      // Ordering: 原始 note-off 保留在序列；等于定位点的释放事件在后续消费块处理。
-      if (noteOff == nullptr ||
-          noteOff->message.getTimeStamp() < timeInSamples)
-        continue;
-
-      auto chasedNote = message;
-      chasedNote.setTimeStamp(0.0);
-      buffer.addEvent(chasedNote, 0);
-    }
+    juce::ignoreUnused(timeInSamples);
+    appendChasedNotes(*seq, nextIndex, buffer);
   }
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiPlayer)

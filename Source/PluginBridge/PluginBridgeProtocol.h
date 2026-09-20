@@ -12,19 +12,11 @@
 namespace PluginBridge {
 
 inline constexpr const char *workerCommandLineUid =
-    "modern-midi-player-plugin-worker-v2";
+    "modern-midi-player-plugin-worker-v3";
 inline constexpr int workerConnectionTimeoutMs = 15000;
 inline constexpr int workerCommandTimeoutMs = 30000;
 inline constexpr int workerShutdownTimeoutMs = 2000;
 inline constexpr int workerRenderHangTimeoutMs = 2000;
-
-// Postconditions: 返回毫秒等待预算，至少 10 ms；基于音频块时长，供实时渲染等待使用。
-inline int getWorkerRenderTimeoutMs(int blockSize, double sampleRate) {
-  const double validSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
-  const double blockPeriodMs =
-      1000.0 * static_cast<double>(juce::jmax(1, blockSize)) / validSampleRate;
-  return juce::jmax(10, static_cast<int>(std::ceil(blockPeriodMs * 2.0)));
-}
 
 enum class Command : int {
   none = 0,
@@ -33,7 +25,9 @@ enum class Command : int {
   prepare = 3,
   openEditor = 5,
   closeEditor = 6,
-  shutdown = 7
+  shutdown = 7,
+  beginExport = 8,
+  endExport = 9
 };
 
 enum class StatusCode : int {
@@ -69,6 +63,7 @@ struct StatusReply {
   StatusCode code = StatusCode::ok;
   Command command = Command::none;
   juce::String message;
+  int latencySamples = 0;
 };
 
 // Ownership: 编码返回自有字节副本；解码只在调用期间借用输入，失败由无效树表示。
@@ -190,8 +185,9 @@ inline juce::MemoryBlock makeLoadPluginCommand(
   return valueTreeToBlock(tree);
 }
 
-inline juce::MemoryBlock makePrepareCommand(const PrepareRequest &request) {
-  auto tree = makeCommandTree(Command::prepare);
+inline juce::MemoryBlock makePrepareCommand(const PrepareRequest &request,
+                                           Command command = Command::prepare) {
+  auto tree = makeCommandTree(command);
   tree.setProperty("sampleRate", request.sampleRate, nullptr);
   tree.setProperty("blockSize", request.blockSize, nullptr);
   tree.setProperty("nonRealtime", request.nonRealtime, nullptr);
@@ -214,11 +210,13 @@ inline juce::MemoryBlock makeSimpleCommand(Command command) {
 // Invariant: 回复携带对应 `Command`；控制端依赖命令串行化匹配回复，协议没有独立请求 ID。
 inline juce::MemoryBlock makeStatusReply(StatusCode code,
                                          const juce::String &message,
-                                         Command command = Command::none) {
+                                         Command command = Command::none,
+                                         int latencySamples = 0) {
   juce::ValueTree tree("PluginBridgeStatus");
   tree.setProperty("code", static_cast<int>(code), nullptr);
   tree.setProperty("command", static_cast<int>(command), nullptr);
   tree.setProperty("message", message, nullptr);
+  tree.setProperty("latencySamples", latencySamples, nullptr);
   return valueTreeToBlock(tree);
 }
 
@@ -236,6 +234,7 @@ inline StatusReply statusReplyFromMemoryBlock(const juce::MemoryBlock &block) {
   reply.code = static_cast<StatusCode>(static_cast<int>(tree["code"]));
   reply.command = static_cast<Command>(static_cast<int>(tree["command"]));
   reply.message = tree["message"].toString();
+  reply.latencySamples = static_cast<int>(tree["latencySamples"]);
   return reply;
 }
 
@@ -250,8 +249,7 @@ inline int writeMidiBuffer(const juce::MidiBuffer &source,
                            unsigned char *dest, int maxBytes) {
   juce::MemoryOutputStream out(dest, static_cast<size_t>(maxBytes));
   for (const auto metadata : source) {
-    const auto message = metadata.getMessage();
-    const int messageSize = message.getRawDataSize();
+    const int messageSize = metadata.numBytes;
     const auto requiredBytes =
         static_cast<int64_t>(sizeof(int) * 2 + messageSize);
 
@@ -260,7 +258,7 @@ inline int writeMidiBuffer(const juce::MidiBuffer &source,
 
     out.writeInt(metadata.samplePosition);
     out.writeInt(messageSize);
-    out.write(message.getRawData(), static_cast<size_t>(messageSize));
+    out.write(metadata.data, static_cast<size_t>(messageSize));
   }
 
   return static_cast<int>(out.getPosition());
@@ -280,8 +278,7 @@ inline int writeMidiBufferRange(const juce::MidiBuffer &source,
     if (metadata.samplePosition >= endSample)
       break;
 
-    const auto message = metadata.getMessage();
-    const int messageSize = message.getRawDataSize();
+    const int messageSize = metadata.numBytes;
     const auto requiredBytes =
         static_cast<int64_t>(sizeof(int) * 2 + messageSize);
     if (out.getPosition() + requiredBytes > maxBytes)
@@ -289,7 +286,7 @@ inline int writeMidiBufferRange(const juce::MidiBuffer &source,
 
     out.writeInt(metadata.samplePosition - startSample);
     out.writeInt(messageSize);
-    out.write(message.getRawData(), static_cast<size_t>(messageSize));
+    out.write(metadata.data, static_cast<size_t>(messageSize));
   }
 
   return static_cast<int>(out.getPosition());
@@ -300,7 +297,6 @@ inline int writeMidiBufferRange(const juce::MidiBuffer &source,
 // Failures: 截断、无效消息长度或越界采样偏移返回 `false`，保留原 `dest`，调用方拒绝整块。
 [[nodiscard]] inline bool readMidiBuffer(const unsigned char *source, int numBytes,
                                        juce::MidiBuffer &dest, int numSamples) {
-  juce::MidiBuffer decoded;
   juce::MemoryInputStream in(source, static_cast<size_t>(numBytes), false);
   while (in.getNumBytesRemaining() > 0) {
     if (in.getNumBytesRemaining() < static_cast<int64_t>(sizeof(int) * 2))
@@ -311,18 +307,25 @@ inline int writeMidiBufferRange(const juce::MidiBuffer &source,
         messageSize <= 0 || in.getNumBytesRemaining() < messageSize)
       return false;
 
-    juce::HeapBlock<unsigned char> messageData(messageSize);
-    in.read(messageData.getData(), static_cast<size_t>(messageSize));
+    const auto *messageData = source + in.getPosition();
+    in.skipNextBytes(messageSize);
     // Reason: JUCE 对固定长度消息按状态字节读取，声明长度不足时必须在调用前拒绝。
     const auto status = messageData[0];
     if (status < 0x80 ||
         ((status != 0xf0 && status != 0xf7) &&
          messageSize != juce::MidiMessage::getMessageLengthFromFirstByte(status)))
       return false;
-    if (!decoded.addEvent(messageData.getData(), messageSize, samplePosition))
-      return false;
   }
-  dest.swapWith(decoded);
+  // Ordering: 先验证整包，再复用预分配存储；渲染时不创建逐消息堆块。
+  dest.clear();
+  in.setPosition(0);
+  while (in.getNumBytesRemaining() > 0) {
+    const int samplePosition = in.readInt();
+    const int messageSize = in.readInt();
+    if (!dest.addEvent(source + in.getPosition(), messageSize, samplePosition))
+      return false;
+    in.skipNextBytes(messageSize);
+  }
   return true;
 }
 

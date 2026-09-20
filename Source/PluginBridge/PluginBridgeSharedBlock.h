@@ -5,6 +5,7 @@
 // Invariant: 两端使用相同布局；同时最多一项渲染请求，事件通知前写完对应数据和序列号。
 
 #include <juce_core/juce_core.h>
+#include "../Midi/MusicalTimeline.h"
 
 #include <cstdint>
 
@@ -89,6 +90,8 @@ struct SharedBlockHeader {
   int blockSize = 512;
   int midiBytes = 0;
   int resultCode = 0;
+  MusicalPosition position;
+  int latencySamples = 0;
 };
 
 struct SharedBlock {

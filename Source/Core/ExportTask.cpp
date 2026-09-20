@@ -74,7 +74,7 @@ Core::ExportResult Core::Impl::runExport(int trackIndex,
   juce::File sourceFile;
   {
     StateLock lock(self.stateMutex);
-    if (self.pluginTaskActive.load() || self.pluginScanActive.load() ||
+    if (self.commandTaskActive.load() || self.pluginScanActive.load() ||
         self.audioConfigurationActive.load()) {
       self.exportErrorText = L"当前操作尚未结束，无法开始导出。";
       return ExportResult::Failed;

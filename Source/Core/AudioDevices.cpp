@@ -12,7 +12,7 @@ juce::String
 Core::Impl::configureAudio(std::function<juce::String()> operation) {
   {
     StateLock lock(stateMutex);
-    if (pluginTaskActive.load() || exportActiveFlag.load() ||
+    if (commandTaskActive.load() || exportActiveFlag.load() ||
         audioConfigurationActive.load())
       return L"当前操作尚未结束，无法修改音频设备";
     audioConfigurationActive.store(true);
@@ -39,7 +39,7 @@ juce::String Core::showAudioControlPanel() {
 }
 
 void Core::playTestSound() {
-  if (!impl->exportActiveFlag.load() && !impl->pluginTaskActive.load())
+  if (!impl->exportActiveFlag.load() && !impl->commandTaskActive.load())
     impl->audio.playTestSound();
 }
 

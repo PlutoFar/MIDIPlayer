@@ -266,28 +266,28 @@ void MainContentComponent::timerCallback() {
               "ms)");
   }
 
-  const bool hasPlugin = state.plugin.loaded && !state.plugin.workerCrashed &&
-                         !state.plugin.loadInProgress;
-  scanBtn.setEnabled(!state.plugin.operationInProgress &&
+  const bool hasPlugin = state.plugin.loaded && !state.plugin.workerCrashed;
+  scanBtn.setEnabled(!state.task.commandActive &&
                      !state.task.exportActive);
-  unloadBtn.setEnabled(hasPlugin && !state.plugin.operationInProgress);
-  openPluginBtn.setEnabled(hasPlugin && !state.plugin.operationInProgress);
+  unloadBtn.setEnabled(hasPlugin && !state.task.commandActive);
+  openPluginBtn.setEnabled(hasPlugin && !state.task.commandActive);
   pluginSelector.setEnabled(!isScanningPlugins && !pluginLoadInProgress &&
-                            !state.plugin.operationInProgress);
-  if (state.plugin.workerCrashed && !state.plugin.operationInProgress) {
+                            !state.task.commandActive);
+  if (state.plugin.workerCrashed && !state.task.commandActive) {
     handlePluginWorkerCrash();
   } else if (hasPlugin) {
     pluginWorkerCrashAlertShown = false;
   }
 
-  const bool canControlPlayback = hasPlugin && !state.task.exportActive;
+  const bool canControlPlayback = hasPlugin && !state.task.exportActive &&
+                                  !state.task.audioChangeInProgress;
   playBtn.setEnabled(canControlPlayback);
   stopBtn.setEnabled(canControlPlayback);
-  prevBtn.setEnabled(canControlPlayback);
-  nextBtn.setEnabled(canControlPlayback);
+  prevBtn.setEnabled(canControlPlayback && !state.task.commandActive);
+  nextBtn.setEnabled(canControlPlayback && !state.task.commandActive);
   progressSlider.setEnabled(canControlPlayback && hasTrack);
   exportBtn.setEnabled(canControlPlayback && hasTrack &&
-                       !state.plugin.operationInProgress);
+                       !state.task.commandActive);
 
   if (!hasPlugin) {
     progressSlider.setValue(0.0, juce::dontSendNotification);
@@ -298,6 +298,12 @@ void MainContentComponent::timerCallback() {
     playlistPanel.setCurrentTrackIndex(transport.currentTrackIndex);
   trackLabel.setText(juce::String(transport.currentMidiName.c_str()),
                      juce::dontSendNotification);
+  const juce::String midiError(transport.lastError.c_str());
+  if (midiError != lastMidiErrorShown) {
+    lastMidiErrorShown = midiError;
+    if (midiError.isNotEmpty())
+      showOperationError(L"MIDI 加载失败", transport.lastError);
+  }
 
   if (playbackModeAnimationScale < 1.0f) {
     playbackModeAnimationScale += 0.05f;
@@ -1119,10 +1125,14 @@ void MainContentComponent::showOpenFileDialog() {
           getAppSettings().setLastMidiDirectory(
               result.getParentDirectory().getFullPathName());
           safeThis->core.openMidi(
-              std::wstring(result.getFullPathName().toWideCharPointer()));
-          safeThis->playlistPanel.refresh();
-          safeThis->playlistPanel.setCurrentTrackIndex(
-              safeThis->core.currentTrackIndex());
+              std::wstring(result.getFullPathName().toWideCharPointer()),
+              [safeThis](bool succeeded) {
+                if (safeThis != nullptr && succeeded) {
+                  safeThis->playlistPanel.refresh();
+                  safeThis->playlistPanel.setCurrentTrackIndex(
+                      safeThis->core.currentTrackIndex());
+                }
+              });
         }
       });
 }

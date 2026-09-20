@@ -1437,8 +1437,8 @@ int main(int argc, char *argv[]) {
   applyMasterOutputStage(
       integerBuffer, 0.8f,
       shouldPreserveExportHeadroom("WAV", 16, false));
-  expect(integerBuffer.getMagnitude(0, 1) < 1.0f,
-         "integer export should use the playback soft limiter");
+  expect(integerBuffer.getMagnitude(0, 1) == 1.0f,
+         "integer export should clip only values outside the representable range");
 
   expect(shouldDitherExport("WAV", 16, false),
          "16-bit WAV should use TPDF dither");
@@ -1633,13 +1633,13 @@ int main(int argc, char *argv[]) {
 
     juce::AudioBuffer<float> buffer(2, 64);
     juce::MidiBuffer midi;
-    expect(!bridgeClient.processBlock(midi, buffer, 48000.0),
-           "one late realtime render should produce silence for that block");
+    expect(bridgeClient.processBlock(midi, buffer, 48000.0),
+           "the render thread should wait for a delayed block without dropping it");
     expect(bridgeClient.getStatus() == PluginBridge::BridgeStatus::ready,
            "one late realtime render should keep the worker recoverable");
     juce::Thread::sleep(100);
     expect(bridgeClient.processBlock(midi, buffer, 48000.0),
-           "the next block should drain the late response and resume rendering");
+           "the next request should render after the previous request completes");
     expect(bridgeClient.getStatus() == PluginBridge::BridgeStatus::ready,
            "late render recovery should keep the bridge ready");
     bridgeClient.unloadPlugin();
@@ -1858,13 +1858,6 @@ int main(int argc, char *argv[]) {
              parsedPrepare.blockSize == prepareRequest.blockSize &&
              parsedPrepare.nonRealtime,
          "bridge prepare protocol should preserve non-realtime mode");
-  expect(PluginBridge::getWorkerRenderTimeoutMs(64, 48000.0) == 10,
-         "small real-time blocks should retain a scheduler-safe timeout floor");
-  expect(PluginBridge::getWorkerRenderTimeoutMs(1024, 48000.0) == 43,
-         "render timeout should track two host buffer periods");
-  expect(PluginBridge::workerRenderHangTimeoutMs >
-             PluginBridge::getWorkerRenderTimeoutMs(1024, 48000.0),
-         "a missed realtime deadline should remain distinct from a worker hang");
   PluginBridge::SharedBlockHeader sequencedHeader;
   sequencedHeader.requestSequence = 41;
   sequencedHeader.responseSequence = 41;

@@ -401,11 +401,16 @@ void AudioSettingsContent::refreshControls(bool rescanDevices) {
       statusDetailLabel.setText(juce::String(deviceState.bitDepth) +
                                     L"-bit \u00B7 输出延迟 " + latency,
                                 juce::dontSendNotification);
+    const auto audioState = core.state().audio;
     statusDetailLabel.setTooltip(deviceState.deviceName + L" \u00B7 " +
                                  formatAudioSampleRate(deviceState.sampleRate) +
                                  L" \u00B7 " +
                                  juce::String(deviceState.bitDepth) +
-                                 L"-bit \u00B7 输出延迟 " + latency);
+                                 L"-bit \u00B7 输出延迟 " + latency +
+                                 L"\n附加播放延迟上限 " +
+                                 formatAudioBufferSize(audioState.renderLatencySamples,
+                                                       deviceState.sampleRate) +
+                                 L"\n缓冲欠载 " + juce::String(audioState.underrunCount));
   } else if (!deviceChangePending) {
     statusTitleLabel.setText(lastError.isNotEmpty() ? L"设备切换失败"
                                                     : L"未连接输出设备",

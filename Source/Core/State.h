@@ -3,6 +3,7 @@
 #include "../Playlist/PlaybackMode.h"
 
 #include <string>
+#include <cstdint>
 #include <vector>
 
 namespace midi {
@@ -19,8 +20,6 @@ struct PluginInfo {
 
 struct PluginState {
   bool scanning = false;
-  bool loadInProgress = false;
-  bool operationInProgress = false;
   bool loaded = false;
   bool editorOpen = false;
   bool workerCrashed = false;
@@ -35,6 +34,7 @@ struct TransportState {
   double durationSamples = 0.0;
   int currentTrackIndex = -1;
   std::wstring currentMidiName;
+  std::wstring lastError;
 };
 
 struct PlaylistSummary {
@@ -56,11 +56,15 @@ struct AudioState {
   bool firstRunAudio = false;
   bool deviceFallback = false;
   float masterVolume = 0.8f;
+  uint64_t underrunCount = 0;
+  int renderLatencySamples = 0;
   bool muted = false;
   std::wstring lastInitError;
 };
 
 struct TaskState {
+  bool commandActive = false;
+  bool audioChangeInProgress = false;
   bool exportActive = false;
   float exportProgress = 0.0f;
   bool exportCancelled = false;

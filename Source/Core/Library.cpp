@@ -1,56 +1,74 @@
 #include "CoreImpl.h"
 
-// Responsibilities: 插件任务受理、后台控制命令及消息线程结果交付。
-// Invariant: 同时最多一个内部插件任务；线程结束通过 `join` 与结果读取建立同步。
+// Responsibilities: 后台命令受理、插件操作及消息线程结果交付。
+// Invariant: 同时最多一个内部命令任务；线程结束通过 `join` 与结果读取建立同步。
 
 namespace midi {
 
 Core::Impl::~Impl() {
-  // Ordering: 等待任务前撤销延迟回调；`join` 期间不持有核心锁或消息管理器锁。
+  // Ordering: 等待任务前撤销完成回调；`join` 期间不持有核心锁或消息管理器锁。
   // Concurrency: 工作线程只能等待 IPC，禁止依赖主程序消息线程完成操作。
-  life.reset();
   cancelPendingUpdate();
   engine.cancelPendingPluginOperation();
-  if (pluginTask.joinable())
-    pluginTask.join();
+  if (commandTask.joinable())
+    commandTask.join();
   cancelPendingUpdate();
 }
 
-bool Core::Impl::startPluginTask(std::function<bool()> operation,
+bool Core::Impl::startCommandTask(std::function<bool()> operation,
                                  std::function<void(bool)> completion,
                                  bool changesAudio) {
   jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
   {
     StateLock lock(stateMutex);
-    if (pluginTaskActive.load() || pluginScanActive.load() ||
+    if (commandTaskActive.load() || pluginScanActive.load() ||
         exportActiveFlag.load() || audioConfigurationActive.load()) {
       pluginErrorText = L"当前操作尚未结束";
       return false;
     }
-    pluginTaskActive.store(true);
-    pluginChangesAudio.store(changesAudio);
+    commandTaskActive.store(true);
+    commandChangesAudio.store(changesAudio);
     pluginErrorText.clear();
   }
   engine.resetPluginCancellation();
-  pluginCompletion = std::move(completion);
-  pluginTask = std::thread([this, operation = std::move(operation)] {
-    pluginTaskSucceeded = operation();
-    triggerAsyncUpdate();
-  });
+  commandCompletion = std::move(completion);
+  commandTaskError.clear();
+  try {
+    commandTask = std::thread([this, operation = std::move(operation)] {
+      try {
+        commandTaskSucceeded = operation();
+      } catch (const std::exception &error) {
+        commandTaskSucceeded = false;
+        commandTaskError = juce::String(L"后台操作失败: ") + error.what();
+      } catch (...) {
+        commandTaskSucceeded = false;
+        commandTaskError = L"后台操作发生未知异常。";
+      }
+      triggerAsyncUpdate();
+    });
+  } catch (const std::exception &error) {
+    StateLock lock(stateMutex);
+    commandCompletion = {};
+    commandTaskActive.store(false);
+    commandChangesAudio.store(false);
+    pluginErrorText = juce::String(L"无法启动后台操作: ") + error.what();
+    return false;
+  }
   return true;
 }
 
 void Core::Impl::handleAsyncUpdate() {
   // Ordering: 先等待线程退出，再读取结果、清除任务标记并交付回调。
-  pluginTask.join();
-  auto completion = std::move(pluginCompletion);
-  const bool succeeded = pluginTaskSucceeded;
+  commandTask.join();
+  auto completion = std::move(commandCompletion);
+  const bool succeeded = commandTaskSucceeded;
   {
     StateLock lock(stateMutex);
     if (!succeeded)
-      pluginErrorText = engine.getLastPluginError();
-    pluginTaskActive.store(false);
-    pluginChangesAudio.store(false);
+      pluginErrorText = commandTaskError.isNotEmpty() ? commandTaskError
+                                                    : engine.getLastPluginError();
+    commandTaskActive.store(false);
+    commandChangesAudio.store(false);
   }
   if (closeEditorWhenIdle) {
     closeEditorWhenIdle = false;
@@ -63,7 +81,7 @@ void Core::Impl::handleAsyncUpdate() {
 bool Core::Impl::scan(std::function<bool()> shouldCancel) {
   {
     StateLock lock(stateMutex);
-    if (pluginScanActive.load() || pluginTaskActive.load() ||
+    if (pluginScanActive.load() || commandTaskActive.load() ||
         exportActiveFlag.load() || audioConfigurationActive.load()) {
       pluginErrorText = L"当前操作尚未结束";
       return false;
@@ -115,8 +133,13 @@ bool Core::Impl::loadAsync(const PluginId &id,
                                         : L"没有可用的音频输出设备";
     return false;
   }
-  const bool accepted = startPluginTask(
-      [this, description] { return engine.loadPlugin(description); },
+  const bool accepted = startCommandTask(
+      [this, description] {
+        return engine.loadPlugin(description, [this](double rate) {
+          StateLock lock(stateMutex);
+          engine.getMidiPlayer().setSampleRate(rate);
+        });
+      },
       std::move(completion));
   if (accepted) {
     StateLock lock(stateMutex);
@@ -128,7 +151,7 @@ bool Core::Impl::loadAsync(const PluginId &id,
 }
 
 bool Core::Impl::unloadAsync(std::function<void(bool)> completion) {
-  const bool accepted = startPluginTask(
+  const bool accepted = startCommandTask(
       [this] {
         engine.unloadPlugin();
         return !engine.hasPluginWorkerCrashed();
@@ -145,17 +168,17 @@ bool Core::Impl::unloadAsync(std::function<void(bool)> completion) {
 bool Core::Impl::editorAsync(std::function<void(bool)> completion) {
   if (!engine.hasPluginLoaded())
     return false;
-  return startPluginTask([this] { return engine.openPluginEditor(); },
+  return startCommandTask([this] { return engine.openPluginEditor(); },
                          std::move(completion), false);
 }
 
 void Core::Impl::closeEditor() {
-  if (pluginTaskActive.load()) {
+  if (commandTaskActive.load()) {
     closeEditorWhenIdle = true;
     return;
   }
   if (engine.hasPluginLoaded())
-    startPluginTask(
+    startCommandTask(
         [this] {
           engine.closePluginEditor();
           return !engine.hasPluginWorkerCrashed();
@@ -166,7 +189,7 @@ void Core::Impl::closeEditor() {
 void Core::Impl::terminateCrashedWorker() {
   if (!engine.hasPluginWorkerCrashed())
     return;
-  startPluginTask(
+  startCommandTask(
       [this] {
         engine.terminateCrashedPluginWorker();
         return true;

@@ -1,4 +1,5 @@
 #include "CoreImpl.h"
+#include "../Midi/MidiFileLoader.h"
 
 // Responsibilities: MIDI 解析、播放位置和切曲编排；界面通过 `Core` 快照更新显示。
 // Concurrency: 可变曲目状态和序列生产由 `stateMutex` 串行化；实时消费只读取已发布快照。
@@ -9,36 +10,76 @@ namespace midi {
 bool Core::Impl::canStartPlayback() {
   StateLock lock(stateMutex);
   return engine.getMidiPlayer().hasSequence() && engine.hasPluginLoaded() &&
-         !engine.hasPluginWorkerCrashed() && !pluginChangesAudio.load() &&
+         !engine.hasPluginWorkerCrashed() && !commandChangesAudio.load() &&
          !exportActiveFlag.load();
 }
 
 bool Core::Impl::loadMidi(const juce::File &file) {
-  StateLock lock(stateMutex);
-  if (!file.existsAsFile())
+  std::unique_ptr<juce::MidiMessageSequence> seq;
+  const auto result = readMidiSequence(file, seq);
+  if (result.failed()) {
+    StateLock lock(stateMutex);
+    midiErrorText = result.getErrorMessage();
     return false;
-
-  juce::MidiFile mf;
-  auto stream = file.createInputStream();
-  if (stream == nullptr || !mf.readFrom(*stream))
-    return false;
-
-  const double sr = sampleRate();
-  mf.convertTimestampTicksToSeconds();
-
-  auto seq = std::make_unique<juce::MidiMessageSequence>();
-  for (int i = 0; i < mf.getNumTracks(); ++i) {
-    if (auto *t = mf.getTrack(i)) {
-      for (int j = 0; j < t->getNumEvents(); ++j)
-        seq->addEvent(t->getEventPointer(j)->message);
-    }
   }
-  seq->updateMatchedPairs();
-  seq->sort();
+  StateLock lock(stateMutex);
+  const double sr = sampleRate();
   engine.getMidiPlayer().setSequence(std::move(seq), sr);
   currentMidiFile = file;
   currentMidiName = file.getFileNameWithoutExtension();
+  midiErrorText.clear();
   return true;
+}
+
+bool Core::Impl::beginMidiLoad(const juce::File &file, bool addToList, bool autoPlay,
+                              std::function<void(bool)> completion,
+                              std::function<void()> onPluginMissing) {
+  StateLock lock(stateMutex);
+  if (exportActiveFlag.load() || commandTaskActive.load() || pluginScanActive.load()) {
+    midiErrorText = L"当前操作尚未结束，无法加载 MIDI 文件。";
+    return false;
+  }
+  const int generation = ++trackSwitchGeneration;
+  midiErrorText.clear();
+  const bool accepted = startCommandTask(
+      [this, file, addToList] {
+        if (!loadMidi(file)) {
+          StateLock resultLock(stateMutex);
+          commandTaskError = midiErrorText;
+          return false;
+        }
+        StateLock resultLock(stateMutex);
+        if (addToList)
+          playlist.addFile(file);
+        currentTrackIndex = playlist.findTrackIndex(file);
+        return true;
+      },
+      [this, file, generation, autoPlay, completion = std::move(completion),
+       onPluginMissing = std::move(onPluginMissing)](bool succeeded) {
+        if (succeeded) {
+          getAppSettings().setLastMidiDirectory(file.getParentDirectory().getFullPathName());
+          StateLock resultLock(stateMutex);
+          if (autoPlay && generation == trackSwitchGeneration && canStartPlayback()) {
+            // Ordering: 新曲目从 0 开始，禁止使用旧渲染块尚未完成交接的位置缓存。
+            engine.getMidiPlayer().seekTo(0.0, true);
+            engine.getMidiPlayer().setPlaying(true);
+          }
+        } else {
+          StateLock resultLock(stateMutex);
+          midiErrorText = pluginErrorText;
+        }
+        if (completion)
+          completion(succeeded);
+        if (succeeded && !engine.hasPluginLoaded() && onPluginMissing)
+          onPluginMissing();
+      });
+  if (accepted) {
+    isHandlingTrackEnd = false;
+    engine.getMidiPlayer().setPlaying(false);
+  } else {
+    midiErrorText = pluginErrorText;
+  }
+  return accepted;
 }
 
 void Core::Impl::play() {
@@ -91,7 +132,7 @@ void Core::Impl::stop() {
 
 void Core::Impl::seek(double ratio) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (exportActiveFlag.load() || commandChangesAudio.load())
     return;
   auto &mp = engine.getMidiPlayer();
   const double dur = mp.getDurationInSamples();
@@ -107,7 +148,8 @@ void Core::Impl::volume(float value) {
 
 void Core::Impl::next() {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || pluginChangesAudio.load())
+  if (exportActiveFlag.load() || commandTaskActive.load() || pluginScanActive.load() ||
+      audioConfigurationActive.load())
     return;
   if (playlist.isEmpty() || !engine.hasPluginLoaded())
     return;
@@ -123,22 +165,14 @@ void Core::Impl::next() {
   }
 
   if (const auto *track = playlist.getTrack(nextIndex)) {
-    if (loadMidi(track->file)) {
-      currentTrackIndex = nextIndex;
-      ++trackSwitchGeneration;
-      const int gen = trackSwitchGeneration;
-      scheduleAfter(100, [gen](Impl &self) {
-        if (self.trackSwitchGeneration != gen || !self.canStartPlayback())
-          return;
-        self.engine.getMidiPlayer().setPlaying(true);
-      });
-    }
+    beginMidiLoad(track->file, false, true);
   }
 }
 
 void Core::Impl::prev() {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || pluginChangesAudio.load())
+  if (exportActiveFlag.load() || commandTaskActive.load() || pluginScanActive.load() ||
+      audioConfigurationActive.load())
     return;
   if (playlist.isEmpty() || !engine.hasPluginLoaded())
     return;
@@ -153,16 +187,7 @@ void Core::Impl::prev() {
     return;
   }
   if (const auto *track = playlist.getTrack(previousIndex)) {
-    if (loadMidi(track->file)) {
-      currentTrackIndex = previousIndex;
-      ++trackSwitchGeneration;
-      const int gen = trackSwitchGeneration;
-      scheduleAfter(100, [gen](Impl &self) {
-        if (self.trackSwitchGeneration != gen || !self.canStartPlayback())
-          return;
-        self.engine.getMidiPlayer().setPlaying(true);
-      });
-    }
+    beginMidiLoad(track->file, false, true);
   }
 }
 
@@ -173,103 +198,22 @@ void Core::Impl::handleTrackEnd() {
 
   isHandlingTrackEnd = true;
   ++trackSwitchGeneration;
-  const int myGeneration = trackSwitchGeneration;
   engine.getMidiPlayer().setPlaying(false);
   engine.getMidiPlayer().seekTo(0);
-
-  scheduleAfter(0, [myGeneration](Impl &self) {
-    if (self.trackSwitchGeneration != myGeneration ||
-        !self.canStartPlayback()) {
-      return;
-    }
-
-    const int nextIndex = self.playlist.getNextIndex(self.currentTrackIndex);
-    if (nextIndex != -1) {
-      if (const auto *track = self.playlist.getTrack(nextIndex)) {
-        if (self.loadMidi(track->file)) {
-          self.currentTrackIndex = nextIndex;
-          self.scheduleAfter(100, [myGeneration](Impl &delayed) {
-            if (delayed.trackSwitchGeneration != myGeneration ||
-                !delayed.canStartPlayback())
-              return;
-            delayed.engine.getMidiPlayer().setPlaying(true);
-            delayed.isHandlingTrackEnd = false;
-          });
-          return;
-        }
-      }
-    }
-    self.isHandlingTrackEnd = false;
-  });
-}
-
-bool Core::Impl::openMidi(const juce::File &file, bool autoLoadPluginIfMissing,
-                          std::function<void()> onPluginMissing) {
-  std::unique_lock<std::recursive_mutex> lock(stateMutex);
-  if (exportActiveFlag.load() || pluginChangesAudio.load())
-    return false;
-  if (!file.existsAsFile())
-    return false;
-
-  const auto ext = file.getFileExtension().toLowerCase();
-  if (ext != ".mid" && ext != ".midi")
-    return false;
-
-  ++trackSwitchGeneration;
+  const int nextIndex = playlist.getNextIndex(currentTrackIndex);
+  if (const auto *track = playlist.getTrack(nextIndex))
+    beginMidiLoad(track->file, false, true);
   isHandlingTrackEnd = false;
-  if (!loadMidi(file))
-    return false;
-
-  const bool hasExistingPlaylist = (playlist.size() > 0);
-
-  if (hasExistingPlaylist) {
-    if (playlist.contains(file)) {
-      const int idx = playlist.findTrackIndex(file);
-      if (idx >= 0)
-        currentTrackIndex = idx;
-    } else if (playlist.addFile(file)) {
-      currentTrackIndex = playlist.size() - 1;
-    }
-  } else {
-    playlist.clear();
-    currentPlaylistFile = juce::File();
-    currentTrackIndex = -1;
-    if (playlist.addFile(file))
-      currentTrackIndex = 0;
-  }
-
-  const bool requestPlugin =
-      !engine.hasPluginLoaded() && autoLoadPluginIfMissing;
-  if (engine.hasPluginLoaded()) {
-    const int generation = trackSwitchGeneration;
-    scheduleAfter(150, [generation](Impl &self) {
-      if (self.trackSwitchGeneration != generation || !self.canStartPlayback())
-        return;
-      self.engine.getMidiPlayer().setPlaying(true);
-    });
-  }
-
-  getAppSettings().setLastMidiDirectory(
-      file.getParentDirectory().getFullPathName());
-  // Ordering: 先释放 `stateMutex` 再调用界面回调，防止嵌套消息循环持有核心锁。
-  lock.unlock();
-  if (requestPlugin && onPluginMissing)
-    onPluginMissing();
-  return true;
 }
 
 void Core::Impl::tick(bool uiSuppressTrackAdvance) {
   StateLock lock(stateMutex);
   auto &player = engine.getMidiPlayer();
-  const double sr = sampleRate();
   const bool isExporting = exportActiveFlag.load();
 
-  if (!isExporting && !pluginChangesAudio.load() && player.hasSequence() &&
-      std::abs(player.getSequenceSampleRate() - sr) >= 0.01)
-    player.setSampleRate(sr);
-
   // 曲目自然结束后推进到下一曲（用户拖动进度条期间抑制）。
-  if (!isExporting && !pluginChangesAudio.load() && !uiSuppressTrackAdvance &&
+  if (!isExporting && !commandTaskActive.load() && !pluginScanActive.load() &&
+      !audioConfigurationActive.load() && !uiSuppressTrackAdvance &&
       player.hasFinished())
     handleTrackEnd();
 

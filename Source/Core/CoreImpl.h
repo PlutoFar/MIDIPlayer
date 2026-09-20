@@ -18,7 +18,7 @@
 
 namespace midi {
 
-// Ownership: `Impl` 独占服务对象、播放状态及插件任务；外部只使用 `Core` 契约。
+  // Ownership: `Impl` 独占服务对象、播放状态及后台命令；外部只使用 `Core` 契约。
 // Concurrency: `stateMutex` 保护播放/列表元数据及互斥任务的受理过程，渲染和 IPC 不持有此锁。
 // Ordering: 成员逆序析构使 `audio` 先解除设备回调，之后才销毁 `engine`。
 struct Core::Impl : private juce::AsyncUpdater {
@@ -33,12 +33,10 @@ struct Core::Impl : private juce::AsyncUpdater {
   // Ordering: 导出先取得 `exportMutex`，再短暂取得 `stateMutex`；禁止反向等待。
   std::mutex exportMutex;
   std::atomic<bool> pluginScanActive{false};
-  std::atomic<bool> pluginTaskActive{false};
-  std::atomic<bool> pluginChangesAudio{false};
+  std::atomic<bool> commandTaskActive{false};
+  std::atomic<bool> commandChangesAudio{false};
   std::atomic<bool> audioConfigurationActive{false};
   juce::String pluginErrorText;
-  // Concurrency: 消息线程销毁令牌后，尚未执行的 `Timer` 回调不得解引用 `this`。
-  std::shared_ptr<int> life{std::make_shared<int>(0)};
 
   // Invariant: 文件、名称和列表索引共同描述当前曲目；-1 表示未绑定列表项。
   int currentTrackIndex = -1;
@@ -61,22 +59,21 @@ struct Core::Impl : private juce::AsyncUpdater {
   // Postconditions: 快照方法取得 `stateMutex` 后复制状态，不返回内部可修改引用。
   AppState buildState();
   PlaylistState buildPlaylistState();
-  // Preconditions: 消息线程调用，操作及回调不得抛出异常；`operation` 不得等待界面回调。
+  // Preconditions: 消息线程调用，完成回调不得抛出异常；`operation` 不得等待界面回调。
   // Postconditions: 忙时返回 `false`；受理后由工作线程执行，再由消息线程交付结果。
   // Ordering: `changesAudio` 只控制播放互斥；所有插件任务仍共享同一命令执行顺序。
-  bool startPluginTask(std::function<bool()> operation,
+  bool startCommandTask(std::function<bool()> operation,
                        std::function<void(bool)> completion,
                        bool changesAudio = true);
   void handleAsyncUpdate() override;
-  // Concurrency: 读取 `pluginTaskSucceeded` 前必须完成 `join`；回调和延迟关闭标记仅由消息线程访问。
-  std::thread pluginTask;
-  std::function<void(bool)> pluginCompletion;
-  bool pluginTaskSucceeded = false;
+  // Concurrency: 读取 `commandTaskSucceeded` 前必须完成 `join`；回调和延迟关闭标记仅由消息线程访问。
+  std::thread commandTask;
+  std::function<void(bool)> commandCompletion;
+  bool commandTaskSucceeded = false;
+  juce::String commandTaskError;
   bool closeEditorWhenIdle = false;
   // Ordering: 在锁内受理设备操作，释放锁后执行原生调用，结束时清除互斥标记。
   juce::String configureAudio(std::function<juce::String()> operation);
-  // Preconditions: 消息线程调度；`fn` 在消息线程且持有 `stateMutex` 时执行，不得等待插件线程。
-  void scheduleAfter(int ms, std::function<void(Impl &)> fn);
   double sampleRate() const;
 
   // Concurrency: 插件入口遵循 `Core` 的消息线程/扫描线程约定；目录引用访问由 `stateMutex` 串行化。
@@ -92,14 +89,16 @@ struct Core::Impl : private juce::AsyncUpdater {
   // Concurrency: 播放方法内部取得 `stateMutex`；导出调用 `loadMidi` 时必须已独占导出状态。
   bool canStartPlayback();
   bool loadMidi(const juce::File &file);
+  bool beginMidiLoad(const juce::File &file, bool addToList, bool autoPlay,
+                     std::function<void(bool)> completion = {},
+                     std::function<void()> onPluginMissing = {});
+  juce::String midiErrorText;
   void play();
   void pause();
   void togglePlay();
   void stop();
   void seek(double ratio);
   void volume(float value);
-  bool openMidi(const juce::File &file, bool autoLoadPluginIfMissing,
-                std::function<void()> onPluginMissing);
   void next();
   void prev();
   void handleTrackEnd();
