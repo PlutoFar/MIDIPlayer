@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.27)
 
-project(ModernMidiPlayer VERSION 1.1.0 LANGUAGES C CXX)
+project(ModernMidiPlayer VERSION 1.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,7 +21,7 @@ else()
 endif()
 
 option(MIDIPLAYER_ENABLE_ASIO
-    "Enable JUCE ASIO support (requires the Steinberg ASIO SDK)" OFF)
+    "Enable ASIO support using the SDK bundled with JUCE" OFF)
 
 # ============================================================================
 # MidiCore - application state, commands, audio, playlist and export services.
@@ -45,6 +45,7 @@ target_include_directories(MidiCore PUBLIC
 )
 
 target_compile_definitions(MidiCore PUBLIC
+    MIDI_PLAYER_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
@@ -72,19 +73,19 @@ if(MSVC)
 endif()
 
 # ============================================================================
-# MidiLegacy - the maintained JUCE desktop application, using MidiCore.
-# Produces MidiLegacy.exe; portable releases name it MidiPlayer.exe.
+# MidiPlayer - JUCE desktop application, using MidiCore.
+# Produces MidiPlayer.exe beside the matching MidiWorker.exe.
 # ============================================================================
-juce_add_gui_app(MidiLegacy
-    PRODUCT_NAME "MidiLegacy"
-    VERSION "1.1.0"
+juce_add_gui_app(MidiPlayer
+    PRODUCT_NAME "MidiPlayer"
+    VERSION "${PROJECT_VERSION}"
     COMPANY_NAME "AntigravityAudio"
     BUNDLE_ID "com.antigravity.modernmidiplayer"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"
 )
 
 # Each executable owns its entry point; shared .cpp files belong to MidiCore.
-target_sources(MidiLegacy PRIVATE
+target_sources(MidiPlayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentComponent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentPlugins.cpp
@@ -94,7 +95,7 @@ target_sources(MidiLegacy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/FontSettingsContent.cpp
 )
 
-target_link_libraries(MidiLegacy PRIVATE
+target_link_libraries(MidiPlayer PRIVATE
     MidiCore
     juce::juce_gui_basics
     juce::juce_gui_extra
@@ -103,8 +104,8 @@ target_link_libraries(MidiLegacy PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(MidiLegacy PRIVATE /utf-8)
-    target_compile_options(MidiLegacy PRIVATE /wd4100 /wd4244 /wd4267)
+    target_compile_options(MidiPlayer PRIVATE /utf-8)
+    target_compile_options(MidiPlayer PRIVATE /wd4100 /wd4244 /wd4267)
 endif()
 
 # ============================================================================
@@ -113,7 +114,7 @@ endif()
 # ============================================================================
 juce_add_gui_app(MidiWorker
     PRODUCT_NAME "MidiWorker"
-    VERSION "1.1.0"
+    VERSION "${PROJECT_VERSION}"
     COMPANY_NAME "AntigravityAudio"
     BUNDLE_ID "com.antigravity.midiworker"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/worker-icon.png"
@@ -136,12 +137,12 @@ if(MSVC)
     target_compile_options(MidiWorker PRIVATE /wd4100 /wd4244 /wd4267)
 endif()
 
-add_dependencies(MidiLegacy MidiWorker)
-add_custom_command(TARGET MidiLegacy POST_BUILD
+add_dependencies(MidiPlayer MidiWorker)
+add_custom_command(TARGET MidiPlayer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:MidiWorker>
-        $<TARGET_FILE_DIR:MidiLegacy>
-    COMMENT "Copying the matching plugin worker beside MidiLegacy"
+        $<TARGET_FILE_DIR:MidiPlayer>
+    COMMENT "Copying the matching plugin worker beside MidiPlayer"
 )
 
 # ============================================================================
@@ -176,9 +177,17 @@ if(MSVC)
 endif()
 
 if(WIN32)
-    target_link_libraries(MidiLegacy PRIVATE dwmapi advapi32 shell32 kernel32)
+    # Ordering: JUCE's resource rule must rerun when version metadata changes.
+    foreach(app IN ITEMS MidiPlayer MidiWorker)
+        get_target_property(resource_dir ${app} JUCE_GENERATED_SOURCES_DIRECTORY)
+        get_target_property(resource_info ${app} JUCE_INFO_FILE)
+        add_custom_command(OUTPUT "${resource_dir}/${app}_resources.rc"
+            APPEND DEPENDS "${resource_info}")
+    endforeach()
 
-    set_target_properties(MidiLegacy PROPERTIES
+    target_link_libraries(MidiPlayer PRIVATE dwmapi advapi32 shell32 kernel32)
+
+    set_target_properties(MidiPlayer PROPERTIES
         WIN32_EXECUTABLE TRUE
     )
 
@@ -187,7 +196,7 @@ if(WIN32)
     )
 endif()
 
-install(TARGETS MidiLegacy MidiWorker
+install(TARGETS MidiPlayer MidiWorker
     RUNTIME DESTINATION bin
     RESOURCE DESTINATION bin
 )

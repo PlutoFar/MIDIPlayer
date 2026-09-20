@@ -7,7 +7,7 @@
 <p align="center">Windows x64 MIDI 播放器与 VST3 乐器宿主</p>
 
 <p align="center">
-  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.1.0">v1.1.0</a>
+  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.0">v1.2.0</a>
   ·
   <a href="https://github.com/PlutoFar/MIDIPlayer/releases">发布版本</a>
   ·
@@ -15,23 +15,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Windows-10%2F11-0078D4" alt="Windows 10/11" />
-  <img src="https://img.shields.io/badge/C%2B%2B-17-00599C" alt="C++17" />
-  <img src="https://img.shields.io/badge/JUCE-8.0.15-F28C28" alt="JUCE 8.0.15" />
-  <img src="https://img.shields.io/badge/x64-5C2D91" alt="x64" />
+  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/latest"><img src="https://img.shields.io/github/v/release/PlutoFar/MIDIPlayer" alt="最新版本" /></a>
+  <a href="https://github.com/juce-framework/JUCE/releases/tag/8.0.15"><img src="https://img.shields.io/badge/JUCE-8.0.15-F28C28" alt="JUCE 8.0.15" /></a>
 </p>
 
-MIDI Player 使用 C++17 与 JUCE 构建，提供 MIDI 文件播放、VST3 乐器托管、播放列表管理、音频设备配置和离线音频导出。播放器主进程负责界面与播放控制，`MidiWorker.exe` 负责插件实例和编辑器窗口。
-
-## 维护状态
-
-| 模块 | 状态 | 说明 |
-| --- | --- | --- |
-| JUCE 桌面界面 | 当前维护 | 当前版本的功能开发、问题修复和发布验证入口 |
-| 播放核心 | 当前维护 | 播放、列表、音频设备、导出和状态管理 |
-| VST3 工作进程 | 当前维护 | 插件加载、编辑器托管和异常隔离 |
-
-WinUI 3 界面及其专用桥接代码保存在 [archive/winui-unmaintained](https://github.com/PlutoFar/MIDIPlayer/tree/archive/winui-unmaintained) 分支，已停止维护。`main` 维护 C++ / JUCE 桌面版本及 VST3 工作进程。
+MIDI Player 是 Windows MIDI（乐器数字接口）文件播放器，支持通过 VST3（虚拟演播室技术 3）乐器发声、管理播放列表和导出音频。
 
 ## 核心功能
 
@@ -41,7 +29,7 @@ WinUI 3 界面及其专用桥接代码保存在 [archive/winui-unmaintained](htt
 - 播放列表增删、排序、保存、加载和持久化
 - 连续播放、列表循环、单曲循环和随机播放
 - Windows 音频输出设备、采样率、缓冲区和通道配置
-- WASAPI、DirectSound 和可选 ASIO 音频后端
+- WASAPI、DirectSound 和 ASIO 音频输出
 - WAV、FLAC、Ogg Vorbis 离线导出
 - 导出采样率、位深、质量和尾音配置
 - 背景图片、高斯模糊、Aero、Acrylic、遮罩和主题色
@@ -62,9 +50,9 @@ WinUI 3 界面及其专用桥接代码保存在 [archive/winui-unmaintained](htt
 
 ## 下载与快速开始
 
-当前发布包：`MIDIPlayer-v1.1.0-JUCE-x64.zip`。
+当前发布包：`MIDIPlayer-v1.2.0-Windows-x64.zip`，已包含便携模式标记。
 
-下载地址：[GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.1.0)
+下载地址：[GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.0)
 
 1. 将压缩包解压到具有写入权限的目录。
 2. 确认 `MidiPlayer.exe` 与 `MidiWorker.exe` 位于同一目录。
@@ -76,10 +64,11 @@ WinUI 3 界面及其专用桥接代码保存在 [archive/winui-unmaintained](htt
 
 ## VST3 插件目录
 
-程序启动时扫描以下目录：
+点击“扫描插件”可搜索系统及便携目录中的插件。常用目录：
 
 ```text
 C:\Program Files\Common Files\VST3\
+%APPDATA%\VST3\
 程序目录\VST3\
 ```
 
@@ -94,7 +83,9 @@ C:\Program Files\Common Files\VST3\
 | `portable.dat` | 与 `MidiPlayer.exe` 同级 | 普通便携模式 | `程序目录\Settings\` | 关闭 |
 | `portable_debug.dat` | 与 `MidiPlayer.exe` 同级 | 诊断便携模式 | `程序目录\Settings\` | `程序目录\debug_log.txt` |
 
-日常使用创建 `portable.dat`。故障定位期间使用 `portable_debug.dat`，复现问题后提交 `debug_log.txt`。
+发布包默认使用 `portable.dat`。故障定位期间将标记改为 `portable_debug.dat`，复现问题后提交 `debug_log.txt`。
+
+升级时退出程序，保留原目录的 `Settings/` 和 `VST3/`，再解压新版本。播放列表文件及其引用的 MIDI 文件保存在用户选择的位置。
 
 ## 从源码构建
 
@@ -104,7 +95,6 @@ C:\Program Files\Common Files\VST3\
 - CMake 3.27 或更高版本
 - Windows SDK 10.0.26100.0
 - JUCE 8.0.15，提交 `91ad83ae34a81e0833b1a2b0866f54846370ae53`
-- Steinberg ASIO SDK（可选）
 
 ### 获取源码
 
@@ -128,53 +118,25 @@ cmake --preset windows-vs2022
 cmake --preset windows-vs2022 -DMIDIPLAYER_ENABLE_ASIO=ON
 ```
 
-ASIO SDK 的 `common/` 目录放置于 `JUCE/modules/juce_audio_devices/native/common/`。
+ASIO 构建使用 JUCE 8.0.15 随附的 Steinberg ASIO SDK。发布包已启用 ASIO 支持。
 
-### 构建 JUCE 桌面版本
+### 构建
 
 ```powershell
-cmake --build build --config Release --target MidiLegacy MidiWorker --parallel
+cmake --build build --config Release --target MidiPlayer --parallel
 ```
 
 构建产物：
 
 ```text
-build/MidiLegacy_artefacts/Release/MidiLegacy.exe
-build/MidiLegacy_artefacts/Release/MidiWorker.exe
+build/
+`-- MidiPlayer_artefacts/
+    `-- Release/
+        |-- MidiPlayer.exe
+        `-- MidiWorker.exe
 ```
 
-便携发布包中的主程序名称为 `MidiPlayer.exe`。
-
-### 运行测试
-
-```powershell
-cmake --build build --config Release --target MidiTests
-.\build\MidiTests_artefacts\Release\MidiTests.exe
-```
-
-## 仓库结构
-
-```text
-.
-|-- Source/
-|   |-- AudioEngine/    # 实时音频、设备管理、插件目录和离线编码
-|   |-- Core/           # 应用状态、异步插件命令和播放业务
-|   |-- Midi/           # MIDI 时序与播放控制
-|   |-- Playlist/       # 播放列表模型与持久化
-|   |-- PluginBridge/   # 主进程与插件工作进程协议
-|   |-- UI/             # 当前维护的 JUCE 桌面界面
-|   |-- Utils/          # 设置、文件关联和 Windows 工具
-|   `-- Worker/         # VST3 工作进程
-|-- Tests/              # 原生回归测试
-|-- Resources/          # 应用图标
-|-- patches/            # JUCE 补丁
-|-- CMakeLists.txt
-`-- CMakePresets.json
-```
-
-## 运行数据
-
-用户设置、日志和播放列表按运行模式写入用户配置目录或程序目录 `Settings/`。程序目录 `VST3/` 用于存放便携包专用插件。
+`MidiPlayer` 目标自动构建并复制配套的 `MidiWorker.exe`。
 
 ## 问题反馈
 
