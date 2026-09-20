@@ -7,7 +7,7 @@
 // Responsibilities: 用户配置值、便携目录规则及设置 XML 的读写/隔离。
 // Concurrency: 实例的 getter/setter 与保存操作由消息线程串行调用；本类没有实例级锁。
 // Contract: 普通 setter 修改内存配置；持久化由 `save`、析构或明确调用保存的操作完成。
-// Failures: 文件错误通过加载/保存诊断查询；析构自动保存的结果无法直接返回给调用方。
+// Failures: 显式保存返回结果；析构保存失败写入日志，应用退出前须显式保存并处理结果。
 class UserSettings {
 public:
   // Side effect: 默认构造确定配置目录并读取 XML；显式路径构造只读取给定文件。
@@ -21,9 +21,16 @@ public:
   }
 
   ~UserSettings() {
-    if (automaticSaveEnabled)
-      save();
+    if (automaticSaveEnabled) {
+      const auto result = saveDetailed();
+      if (result.failed())
+        juce::Logger::writeToLog(result.getErrorMessage());
+    }
   }
+
+  // Ordering: 应用已处理最后一次保存结果后关闭析构保存，避免退出时重复写入或重试失败操作。
+  void finishPersistence() { automaticSaveEnabled = false; }
+  bool isAutomaticSaveEnabled() const { return automaticSaveEnabled; }
 
   // Contract: 便携标记决定程序目录或用户目录；调用会尝试创建目录，返回路径不证明创建成功。
   static juce::File getSettingsDirectory() {
@@ -370,7 +377,7 @@ public:
   }
 
   // Postconditions: 更新 `lastSaveError`；`save` 是同一操作的布尔结果入口。
-  juce::Result saveDetailed() {
+  [[nodiscard]] juce::Result saveDetailed() {
     lastSaveError.clear();
     auto result = writeSettingsAtomically(settings, settingsFile);
     if (result.failed())
@@ -378,7 +385,7 @@ public:
     return result;
   }
 
-  bool save() { return saveDetailed().wasOk(); }
+  [[nodiscard]] bool save() { return saveDetailed().wasOk(); }
 
   juce::String getLastSaveError() const { return lastSaveError; }
 
@@ -440,10 +447,10 @@ public:
     lastLoadError = result.getErrorMessage();
   }
 
-  // Side effect: 清空内存配置并立即尝试保存；失败通过 `getLastSaveError` 查询。
-  void resetToDefaults() {
+  // Side effect: 清空内存配置并立即尝试保存；失败由调用方处理，内存保留默认值。
+  [[nodiscard]] juce::Result resetToDefaults() {
     settings = juce::PropertySet();
-    save();
+    return saveDetailed();
   }
 
 private:

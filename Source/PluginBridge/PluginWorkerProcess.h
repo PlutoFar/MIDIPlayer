@@ -234,7 +234,12 @@ private:
       pluginWindowIcon = windowIcon;
     }
 
-    blockThread.startThread(juce::Thread::Priority::highest);
+    if (!blockThread.startThread(juce::Thread::Priority::highest)) {
+      unloadPlugin();
+      sendStatus(StatusCode::pluginLoadFailed, "unable to start render thread",
+                 Command::loadPlugin);
+      return;
+    }
     sendStatus(StatusCode::ok, "plugin loaded", Command::loadPlugin);
   }
 
@@ -251,6 +256,13 @@ private:
   }
 
   void prepare(const PrepareRequest &request) {
+    // Trust Boundary: 在调用插件之前拒绝无效配置，禁止将缺失字段作为默认参数使用。
+    if (!std::isfinite(request.sampleRate) || request.sampleRate <= 0.0 ||
+        request.blockSize <= 0) {
+      sendStatus(StatusCode::invalidCommand, "invalid audio configuration",
+                 Command::prepare);
+      return;
+    }
     const juce::ScopedLock lock(pluginLock);
     if (plugin == nullptr) {
       sendStatus(StatusCode::pluginLoadFailed, "plugin not loaded",
@@ -347,8 +359,11 @@ private:
       return;
     }
 
+    // Trust Boundary: 先验证共享块容量，再允许解码器读取；失败块不调用插件。
     if (shared.header.blockSize <= 0 ||
-        shared.header.blockSize > SharedBlockLayout::maxSamples) {
+        shared.header.blockSize > SharedBlockLayout::maxSamples ||
+        shared.header.midiBytes < 0 ||
+        shared.header.midiBytes > SharedBlockLayout::maxMidiBytes) {
       shared.header.resultCode = static_cast<int>(StatusCode::invalidCommand);
       return;
     }
@@ -358,7 +373,11 @@ private:
     processBuffer.clear();
 
     juce::MidiBuffer midi;
-    readMidiBuffer(shared.midi, shared.header.midiBytes, midi);
+    if (!readMidiBuffer(shared.midi, shared.header.midiBytes, midi,
+                        shared.header.blockSize)) {
+      shared.header.resultCode = static_cast<int>(StatusCode::invalidCommand);
+      return;
+    }
     plugin->processBlock(processBuffer, midi);
 
     for (int ch = 0; ch < SharedBlockLayout::maxChannels; ++ch) {

@@ -117,14 +117,7 @@ bool Core::Impl::loadAsync(const PluginId &id,
   }
   const bool accepted = startPluginTask(
       [this, description] { return engine.loadPlugin(description); },
-      [id, completion = std::move(completion)](bool succeeded) {
-        if (succeeded) {
-          getAppSettings().setLastPluginId(juce::String(id.c_str()));
-          getAppSettings().save();
-        }
-        if (completion)
-          completion(succeeded);
-      });
+      std::move(completion));
   if (accepted) {
     StateLock lock(stateMutex);
     ++trackSwitchGeneration;
@@ -140,12 +133,7 @@ bool Core::Impl::unloadAsync(std::function<void(bool)> completion) {
         engine.unloadPlugin();
         return !engine.hasPluginWorkerCrashed();
       },
-      [completion = std::move(completion)](bool succeeded) {
-        getAppSettings().setLastPluginId({});
-        getAppSettings().save();
-        if (completion)
-          completion(succeeded);
-      });
+      std::move(completion));
   if (accepted) {
     StateLock lock(stateMutex);
     ++trackSwitchGeneration;

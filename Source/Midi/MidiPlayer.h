@@ -63,6 +63,10 @@ public:
   // Preconditions: 唯一消费方调用；`buffer` 由调用方持有，本方法追加事件且不负责预先清空。
   // Postconditions: 追加本块事件并推进采样位置；先消费快照和 seek，再处理普通序列事件。
   void processBlock(juce::MidiBuffer &buffer, int numSamples) {
+    if (numSamples <= 0)
+      return;
+    // Ordering: 先取得定位请求，再消费序列；请求发布前的序列写入对本消费块可见。
+    const bool hasSeekRequest = takeLatestSeekRequest();
     applyPublishedSequence();
 
     // Ordering: 停止清理由 `AudioEngine` 淡出后触发；seek 清理块由引擎静音并接续淡入。
@@ -71,11 +75,11 @@ public:
       cleanupOccurred.store(true, std::memory_order_release);
     }
 
-    if (applyPendingSeekRequest(buffer))
+    if (hasSeekRequest && applyPendingSeekRequest(buffer, numSamples))
       return;
 
     auto *currentSequence = getAudioThreadSnapshot();
-    if (currentSequence == nullptr || !isPlaying.load() || numSamples <= 0)
+    if (currentSequence == nullptr || !isPlaying.load())
       return;
     if (sequenceEnded.load(std::memory_order_acquire))
       return;
@@ -124,8 +128,8 @@ public:
   bool getPlaying() const { return isPlaying.load(); }
 
   // Preconditions: 序列生产方调用，位置单位为当前序列采样；与快照替换串行。
-  // Postconditions: 位置限制在序列范围后入队，消费方只应用当前代次的最新请求。
-  // Failures: 无序列时无操作；队列满时记录日志并丢弃本次请求，调用返回不表示已完成定位。
+  // Postconditions: 发布限定在序列范围内的位置；新请求替换尚未消费的旧请求，没有容量拒绝。
+  // Failures: 无序列时无操作；实际定位在消费方后续块执行，旧序列代次的请求失效。
   void seekTo(double positionInSamples, bool forceChaseWhilePaused = false) {
     auto *currentSequence = getMessageThreadSnapshot();
     if (currentSequence == nullptr)
@@ -149,7 +153,10 @@ public:
                          request.index, request.chaseMessages);
     }
 
-    enqueueSeekRequest(std::move(request));
+    pendingSeekRequests[(size_t)producerSeekSlot] = std::move(request);
+    producerSeekSlot = publishedSeekSlot.exchange(
+                           producerSeekSlot | seekRequestReady,
+                           std::memory_order_acq_rel) & seekSlotMask;
   }
 
   // Postconditions: `hasFinished` 一次性消费尾音结束标记；其他状态/位置查询读取原子缓存。
@@ -213,7 +220,8 @@ private:
     juce::MidiBuffer chaseMessages;
   };
 
-  static constexpr int seekQueueCapacity = 8;
+  static constexpr int seekRequestReady = 4;
+  static constexpr int seekSlotMask = 3;
   static constexpr int sequenceSlotCount = 4;
 
   enum class SlotState : uint8_t {
@@ -234,6 +242,8 @@ private:
   std::array<SequenceSlot, sequenceSlotCount> sequenceSlots;
   std::atomic<int> publishedSlot{-1};
   std::atomic<int> audioActiveSlot{-1};
+  // Ownership: 生产方记录最新序列，避免消费方交接槽位期间读到上一代序列。
+  int latestSequenceSlot = -1;
 
   std::atomic<bool> isPlaying{false};
   std::atomic<bool> finishedFlag{false};
@@ -243,10 +253,13 @@ private:
   std::atomic<bool> seekOccurred{false};
   std::atomic<bool> cleanupOccurred{false};
 
-  // Concurrency: `pendingSeekFifo` 为单生产方、单消费方队列；消费后才归还已读槽位。
-  // Invariant: 只应用与当前序列 `generation` 相同的最后一个已入队请求。
-  std::array<SeekRequest, seekQueueCapacity> pendingSeekRequests;
-  juce::AbstractFifo pendingSeekFifo{seekQueueCapacity};
+  // Concurrency: 三个槽位分别归生产方、消费方和原子交换位置所有；双方只写自己的槽位。
+  // Ordering: exchange 交接槽位所有权；覆盖旧请求及回收 MIDI 消息只发生在生产方。
+  // Invariant: 最新请求替换尚未消费的请求；消费方只应用当前序列的 generation。
+  std::array<SeekRequest, 3> pendingSeekRequests;
+  int producerSeekSlot = 0;
+  int consumerSeekSlot = 1;
+  std::atomic<int> publishedSeekSlot{2};
 
   std::atomic<double> currentPositionInSamples{0.0};
   std::atomic<double> cachedDurationSamples{0.0};
@@ -327,6 +340,7 @@ private:
 
     const int replacedPending =
         publishedSlot.exchange(targetSlot, std::memory_order_acq_rel);
+    latestSequenceSlot = targetSlot;
     if (replacedPending >= 0 && replacedPending != targetSlot) {
       auto &replaced = sequenceSlots[(size_t)replacedPending];
       auto expected = SlotState::Ready;
@@ -363,12 +377,8 @@ private:
   }
 
   SequenceSnapshot *getMessageThreadSnapshot() const {
-    int slotIndex = publishedSlot.load(std::memory_order_acquire);
-    if (slotIndex < 0)
-      slotIndex = audioActiveSlot.load(std::memory_order_acquire);
-
-    return slotIndex >= 0
-               ? sequenceSlots[(size_t)slotIndex].snapshot.get()
+    return latestSequenceSlot >= 0
+               ? sequenceSlots[(size_t)latestSequenceSlot].snapshot.get()
                : nullptr;
   }
 
@@ -439,67 +449,35 @@ private:
     }
   }
 
-  bool enqueueSeekRequest(SeekRequest request) {
-    int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
-    pendingSeekFifo.prepareToWrite(1, start1, size1, start2, size2);
-
-    if (size1 > 0) {
-      pendingSeekRequests[(size_t)start1] = std::move(request);
-      pendingSeekFifo.finishedWrite(1);
-      return true;
-    }
-
-    if (size2 > 0) {
-      pendingSeekRequests[(size_t)start2] = std::move(request);
-      pendingSeekFifo.finishedWrite(1);
-      return true;
-    }
-
-    LOG_DEBUG("MidiPlayer::seekTo - dropping seek request because the queue is "
-              "full");
-    // Failures: 队列满时未取得写槽位，本次请求没有发布给消费方。
-    return false;
+  bool takeLatestSeekRequest() {
+    if ((publishedSeekSlot.load(std::memory_order_acquire) & seekRequestReady) == 0)
+      return false;
+    consumerSeekSlot = publishedSeekSlot.exchange(
+                          consumerSeekSlot, std::memory_order_acq_rel) &
+                      seekSlotMask;
+    return true;
   }
 
-  bool applyPendingSeekRequest(juce::MidiBuffer &buffer) {
-    const int ready = pendingSeekFifo.getNumReady();
-    if (ready <= 0)
+  // Preconditions: 本消费块已取得定位槽位，并消费了此前发布的序列。
+  bool applyPendingSeekRequest(juce::MidiBuffer &buffer, int numSamples) {
+    auto *active = getAudioThreadSnapshot();
+    const auto &request = pendingSeekRequests[(size_t)consumerSeekSlot];
+    if (active == nullptr || request.generation != active->generation)
       return false;
 
-    int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
-    pendingSeekFifo.prepareToRead(ready, start1, size1, start2, size2);
+    currentPositionInSamples.store(request.position);
+    nextMessageIndex = request.index;
+    finishedFlag.store(false);
+    sequenceEnded.store(false, std::memory_order_release);
 
-    auto *active = getAudioThreadSnapshot();
-    const uint32_t generation = active != nullptr ? active->generation : 0;
-    const SeekRequest *latestRequest = nullptr;
-
-    auto findLatestMatchingRequest = [&](int start, int size) {
-      for (int i = 0; i < size; ++i) {
-        auto &candidate = pendingSeekRequests[(size_t)(start + i)];
-        if (candidate.generation == generation)
-          latestRequest = &candidate;
-      }
-    };
-
-    findLatestMatchingRequest(start1, size1);
-    findLatestMatchingRequest(start2, size2);
-
-    if (latestRequest != nullptr) {
-      currentPositionInSamples.store(latestRequest->position);
-      nextMessageIndex = latestRequest->index;
-      finishedFlag.store(false);
-      sequenceEnded.store(false, std::memory_order_release);
-
-      if (latestRequest->emitChase) {
-        addStateResetMessages(buffer, true);
-        for (const auto metadata : latestRequest->chaseMessages)
-          addTrackedEvent(buffer, metadata.getMessage(), 1);
-        seekOccurred.store(true, std::memory_order_release);
-      }
+    if (request.emitChase) {
+      addStateResetMessages(buffer, true);
+      for (const auto metadata : request.chaseMessages)
+        addTrackedEvent(buffer, metadata.getMessage(),
+                        juce::jmin(1, numSamples - 1));
+      seekOccurred.store(true, std::memory_order_release);
     }
-
-    pendingSeekFifo.finishedRead(size1 + size2);
-    return latestRequest != nullptr;
+    return true;
   }
 
   // Preconditions: 事件已按采样时间排序，`nextIndex` 指向首个不早于定位点的事件。

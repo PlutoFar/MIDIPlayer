@@ -51,8 +51,7 @@ bool AudioEngine::prepareForOfflineExport(const ExportSettings &settings) {
 
   offlineExportActive.store(true, std::memory_order_release);
   suspendProcessing(true);
-  const double exportSampleRate =
-      settings.sampleRate > 0.0 ? settings.sampleRate : 44100.0;
+  const double exportSampleRate = settings.sampleRate;
   midiPlayer.setPlaying(false);
   midiPlayer.setSampleRate(exportSampleRate);
   midiPlayer.seekTo(0.0);

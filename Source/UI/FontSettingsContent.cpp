@@ -1,4 +1,5 @@
 #include "FontSettingsContent.h"
+#include "SettingsPersistence.h"
 
 FontSettingsContent::FontSettingsContent(FluentLookAndFeel &laf)
     : fluentLookAndFeel(laf) {
@@ -160,7 +161,9 @@ void FontSettingsContent::paint(juce::Graphics &g) {
 }
 
 FontSettingsContent::~FontSettingsContent() {
-  getAppSettings().save();
+  // Ordering: 应用退出前已完成最终保存时，关闭子窗口只释放界面资源。
+  if (getAppSettings().isAutomaticSaveEnabled())
+    saveAppSettingsWithFeedback();
   setLookAndFeel(nullptr);
 }
 

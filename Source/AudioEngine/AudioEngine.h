@@ -66,7 +66,7 @@ public:
   // Concurrency: 导出诊断由独占导出线程访问；其他线程通过 `Core` 的同步快照读取结果。
   juce::String getLastExportError() const { return lastExportError; }
   bool wasLastExportCancelled() const { return lastExportCancelled; }
-  // Preconditions: 核心已取得导出所有权，插件已加载，设置随后由编码边界校验。
+  // Preconditions: 核心已取得导出所有权，插件已加载，设置已通过核心入口的数值和编码校验。
   // Ordering: 先阻止实时消费，再切换插件采样率和离线模式；恢复阶段重新配置实时设备参数。
   // Failures: 返回 `false` 时读取导出错误；调用方仍负责恢复曲目和播放位置。
   bool prepareForOfflineExport(const ExportSettings &settings);

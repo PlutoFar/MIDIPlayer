@@ -71,7 +71,12 @@ public:
     DebugLogger::shutdown();
   }
 
-  void systemRequestedQuit() override { quit(); }
+  void systemRequestedQuit() override {
+    if (mainWindow != nullptr && !mainWindow->saveSettingsBeforeQuit())
+      return;
+    getAppSettings().finishPersistence();
+    quit();
+  }
 
   void anotherInstanceStarted(const juce::String &commandLine) override {
     auto midiFile = parseMidiFileFromCommandLine(commandLine);
@@ -150,16 +155,33 @@ public:
       juce::Desktop::getInstance().removeDarkModeSettingListener(this);
     }
 
+    // Ordering: 窗口仍存活时完成设置保存；用户取消退出后保留窗口及内存配置。
+    bool saveSettingsBeforeQuit() {
+      auto &settings = getAppSettings();
+      if (settings.getRememberWindowBounds()) {
+        settings.setWindowMaximized(isFullScreen());
+        if (!isFullScreen())
+          settings.setWindowBounds(getBounds());
+      }
+      auto *content =
+          dynamic_cast<MainContentComponent *>(getContentComponent());
+      const auto result = content != nullptr ? content->saveSettings()
+                                             : settings.saveDetailed();
+      if (result.wasOk())
+        return true;
+      const bool exitWithoutSaving = juce::AlertWindow::showOkCancelBox(
+          juce::AlertWindow::WarningIcon, L"设置未保存",
+          L"无法保存设置。\n\n" + result.getErrorMessage() +
+              L"\n\n是否仍然退出？",
+          L"仍然退出", L"取消", this);
+      if (!exitWithoutSaving)
+        isClosing = false;
+      return exitWithoutSaving;
+    }
+
     void closeButtonPressed() override {
       if (isClosing)
         return;
-
-      if (getAppSettings().getRememberWindowBounds()) {
-        getAppSettings().setWindowMaximized(isFullScreen());
-        if (!isFullScreen())
-          getAppSettings().setWindowBounds(getBounds());
-        getAppSettings().save();
-      }
 
       auto *content =
           dynamic_cast<MainContentComponent *>(getContentComponent());

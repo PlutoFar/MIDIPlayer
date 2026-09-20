@@ -17,20 +17,13 @@ bool OfflineRenderer::runOfflineExport(
   if (!engine.isOfflineExportActive() || !engine.bridge.isPluginLoaded())
     return fail(L"音频引擎或插件未准备好。");
 
-  const double exportSampleRate =
-      settings.sampleRate > 0.0 ? settings.sampleRate : 44100.0;
+  const double exportSampleRate = settings.sampleRate;
 
   juce::AudioFormatManager localFormatManager;
   localFormatManager.registerBasicFormats();
   auto *format = findExportAudioFormat(localFormatManager, settings.formatName);
   if (format == nullptr)
     return fail(L"当前 JUCE 构建不支持导出格式: " + settings.formatName);
-
-  const auto validation = validateExportFormatSettings(
-      settings.formatName, exportSampleRate, settings.bitDepth,
-      settings.useFloatingPoint, settings.qualityIndex);
-  if (validation.failed())
-    return fail(validation.getErrorMessage());
 
   auto parentDir = outputFile.getParentDirectory();
   if (!parentDir.exists() && !parentDir.createDirectory())
@@ -60,17 +53,15 @@ bool OfflineRenderer::runOfflineExport(
   juce::AudioBuffer<float> buffer(2, exportOfflineBlockSize);
   juce::MidiBuffer midi;
 
-  double totalSamples = engine.midiPlayer.getDurationInSamples();
-  if (totalSamples <= 0)
-    totalSamples = exportSampleRate * 60.0;
+  const double totalSamples = engine.midiPlayer.getDurationInSamples();
 
   // 进度前 90% 对应 MIDI 主体，后 10% 留给尾音；自动尾音最多渲染 60 秒，
   // 并要求连续 0.5 秒低于 0.00001 线性电平后结束，避免混响和释放音被截断。
-  int offlineTailSamplesRendered = 0;
-  int maxFixedTail =
-      (int)(exportSampleRate * juce::jmax(0.0, settings.fixedTailSeconds));
-  int maxAutoTail = (int)(exportSampleRate * 60.0);
-  int silentSamples = 0;
+  int64_t offlineTailSamplesRendered = 0;
+  const auto maxFixedTail =
+      static_cast<int64_t>(exportSampleRate * settings.fixedTailSeconds);
+  const auto maxAutoTail = static_cast<int64_t>(exportSampleRate * 60.0);
+  int64_t silentSamples = 0;
   bool finishedSeq = false;
   double currentSample = 0;
   bool result = true;

@@ -43,6 +43,10 @@ public:
 
   ~MainContentComponent() override;
 
+  // Preconditions: 宿主在消息线程、窗口销毁前调用；失败诊断由退出流程处理。
+  // Postconditions: 保存当前音量、播放模式及已修改的用户配置。
+  [[nodiscard]] juce::Result saveSettings();
+
   void timerCallback() override;
 
   void paint(juce::Graphics &g) override;
@@ -254,7 +258,6 @@ private:
 
   void loadSettings();
 
-  void saveSettings();
   midi::Core &core;
   FluentLookAndFeel &fluentLookAndFeel;
 

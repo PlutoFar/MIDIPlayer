@@ -263,6 +263,11 @@ std::wstring Core::lastExportError() const {
 Core::ExportResult Core::runExport(const ExportRequest &request,
                                    std::function<void(float)> onProgress,
                                    std::function<bool()> shouldCancel) {
+  if (!juce::File::isAbsolutePath(fromW(request.targetPath))) {
+    Impl::StateLock lock(impl->stateMutex);
+    impl->exportErrorText = L"导出路径必须为完整的本机文件路径。";
+    return ExportResult::Failed;
+  }
   ExportSettings settings;
   settings.formatName = fromW(request.formatName);
   settings.sampleRate = request.sampleRate;

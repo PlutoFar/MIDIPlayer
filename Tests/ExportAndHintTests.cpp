@@ -1819,8 +1819,10 @@ int main(int argc, char *argv[]) {
       bridgeMidi, midiBytes, PluginBridge::SharedBlockLayout::maxMidiBytes);
   expect(written > 0, "bridge MIDI serialization should write bytes");
   juce::MidiBuffer decodedBridgeMidi;
-  PluginBridge::readMidiBuffer(midiBytes, written, decodedBridgeMidi);
-  expect(findNoteSamplePosition(decodedBridgeMidi, true, 1, 60) == 7,
+  const bool decodedBridgeOk = PluginBridge::readMidiBuffer(
+      midiBytes, written, decodedBridgeMidi, 1024);
+  expect(decodedBridgeOk &&
+             findNoteSamplePosition(decodedBridgeMidi, true, 1, 60) == 7,
          "bridge MIDI serialization should preserve note sample position");
   expect(findControllerSamplePosition(decodedBridgeMidi, 1, 64, 127) == 11,
          "bridge MIDI serialization should preserve controller sample position");
@@ -1836,8 +1838,10 @@ int main(int argc, char *argv[]) {
       rangedBridgeMidi, midiBytes, PluginBridge::SharedBlockLayout::maxMidiBytes,
       1024, 1024);
   juce::MidiBuffer decodedRange;
-  PluginBridge::readMidiBuffer(midiBytes, rangedBytes, decodedRange);
-  expect(findNoteSamplePosition(decodedRange, true, 1, 61) == 76,
+  const bool decodedRangeOk = PluginBridge::readMidiBuffer(
+      midiBytes, rangedBytes, decodedRange, 1024);
+  expect(decodedRangeOk &&
+             findNoteSamplePosition(decodedRange, true, 1, 61) == 76,
          "bridge chunk serialization should rebase MIDI sample positions");
   expect(findNoteSamplePosition(decodedRange, true, 1, 60) < 0 &&
              findNoteSamplePosition(decodedRange, true, 1, 62) < 0,

@@ -4,6 +4,8 @@
 // Trust Boundary: `validateExportFormatSettings` 检查实际编码能力；界面预设不能替代该校验。
 
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <cmath>
+#include <limits>
 
 struct ExportFormatCapabilities {
   bool available = false;
@@ -53,20 +55,26 @@ getExportFormatCapabilities(const juce::String &formatName) {
   return result;
 }
 
-// Preconditions: 采样率和数值参数为有限值；采样率单位为 Hz，质量索引从 0 起。
-// Failures: 不支持的格式、采样率、位深、浮点组合或质量索引返回带诊断的失败结果。
+// Trust Boundary: 采样率必须为有限正整数 Hz，质量索引从 0 起；先验证数值再转换整数。
+// Failures: 无效数值或不支持的编码组合返回带诊断的失败结果，不替换请求参数。
 inline juce::Result validateExportFormatSettings(
     const juce::String &formatName, double sampleRate, int bitDepth,
     bool useFloatingPoint, int qualityIndex) {
+  if (!std::isfinite(sampleRate) || sampleRate <= 0.0 ||
+      sampleRate > static_cast<double>(std::numeric_limits<int>::max()) ||
+      std::floor(sampleRate) != sampleRate)
+    return juce::Result::fail(L"采样率必须为有效的正整数 Hz。");
+  if (qualityIndex < 0)
+    return juce::Result::fail(L"质量/压缩等级无效。");
+
   const auto capabilities = getExportFormatCapabilities(formatName);
   if (!capabilities.available)
     return juce::Result::fail(L"当前 JUCE 构建不支持导出格式: " +
                               formatName);
 
-  const int roundedSampleRate = juce::roundToInt(sampleRate);
-  if (sampleRate <= 0.0 ||
-      (!capabilities.sampleRates.isEmpty() &&
-       !capabilities.sampleRates.contains(roundedSampleRate))) {
+  const int roundedSampleRate = static_cast<int>(sampleRate);
+  if (!capabilities.sampleRates.isEmpty() &&
+      !capabilities.sampleRates.contains(roundedSampleRate)) {
     return juce::Result::fail(formatName + L" 不支持 " +
                               juce::String(roundedSampleRate) +
                               L" Hz 采样率。");
@@ -90,9 +98,9 @@ inline juce::Result validateExportFormatSettings(
   if (useFloatingPoint && bitDepth != 32)
     return juce::Result::fail(L"浮点采样格式仅支持 32-bit。");
 
-  if (!capabilities.qualityOptions.isEmpty() &&
-      !juce::isPositiveAndBelow(qualityIndex,
-                                capabilities.qualityOptions.size())) {
+  if (capabilities.qualityOptions.isEmpty() ? qualityIndex != 0
+      : !juce::isPositiveAndBelow(qualityIndex,
+                                  capabilities.qualityOptions.size())) {
     return juce::Result::fail(formatName + L" 的质量/压缩等级无效。");
   }
 

@@ -1,6 +1,7 @@
 #include "ExportDialog.h"
 #include "LegacyExportTask.h"
 #include "MainContentComponent.h"
+#include "SettingsPersistence.h"
 
 void MainContentComponent::playlistTrackRevealRequested(int index) {
   const auto path = core.trackFileAt(index);
@@ -262,12 +263,12 @@ void MainContentComponent::showFileAssociationPrompt() {
           if (safeThis->registerFileAssociation()) {
             getAppSettings().setFileAssociated(true);
             getAppSettings().setDontShowFileAssocPrompt(true);
-            getAppSettings().save();
+            saveAppSettingsWithFeedback();
           }
         } else {
           if (dontShowAgain) {
             getAppSettings().setDontShowFileAssocPrompt(true);
-            getAppSettings().save();
+            saveAppSettingsWithFeedback();
           }
         }
       }),

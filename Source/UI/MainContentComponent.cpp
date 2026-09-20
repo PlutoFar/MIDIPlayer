@@ -198,7 +198,6 @@ MainContentComponent::~MainContentComponent() {
   cancelPendingUpdate();
   closeSettingsWindows();
   fileChooser.reset();
-  saveSettings();
   core.cancelPendingPluginOperation();
   pluginLoadingWindow.deleteAndZero();
   pluginMessageWindow.deleteAndZero();

@@ -1,4 +1,5 @@
 #include "MainContentComponent.h"
+#include "SettingsPersistence.h"
 
 void MainContentComponent::startPluginScan() {
   if (isScanningPlugins)
@@ -65,6 +66,8 @@ void MainContentComponent::unloadPlugin() {
                                        juce::dontSendNotification);
         if (!succeeded)
           safeThis->handlePluginWorkerCrash();
+        getAppSettings().setLastPluginId({});
+        saveAppSettingsWithFeedback();
       })) {
     showOperationError(L"无法卸载插件", L"当前操作尚未结束");
     return;
@@ -96,6 +99,7 @@ void MainContentComponent::finishPluginLoadUi(const midi::PluginInfo &plugin) {
       juce::dontSendNotification);
   playbackPausedByPluginSwitch = false;
   getAppSettings().setLastPluginId(juce::String(plugin.id.c_str()));
+  saveAppSettingsWithFeedback();
 }
 
 void MainContentComponent::showPluginLoadSuccessToast(

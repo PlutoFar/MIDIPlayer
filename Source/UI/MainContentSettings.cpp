@@ -106,8 +106,8 @@ void MainContentComponent::loadSettings() {
   playlistPanel.refresh();
 }
 
-void MainContentComponent::saveSettings() {
+juce::Result MainContentComponent::saveSettings() {
   getAppSettings().setMasterVolume((float)volumeSlider.getValue());
   getAppSettings().setPlayMode(core.state().playlist.playMode);
-  getAppSettings().save();
+  return getAppSettings().saveDetailed();
 }

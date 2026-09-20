@@ -11,6 +11,7 @@
 #include "CustomControls.h"
 #include "CustomLookAndFeel.h"
 #include "FluentSettingsStyle.h"
+#include "SettingsPersistence.h"
 #include <algorithm>
 #include <atomic>
 #include <functional>
@@ -1724,7 +1725,7 @@ public:
           static_cast<WindowMaterial::Type>(dialogMaterialCombo.getSelectedId()));
       updateDialogMaterialControlState();
       applyDialogMaterialSettings(true);
-      getAppSettings().save();
+      saveAppSettingsWithFeedback();
     };
 
     addAndMakeVisible(dialogOpacityLabel);
@@ -1745,7 +1746,7 @@ public:
           (float)dialogOpacitySlider.getValue() / 100.0f);
       applyDialogMaterialSettings(false);
     };
-    dialogOpacitySlider.onDragEnd = []() { getAppSettings().save(); };
+    dialogOpacitySlider.onDragEnd = []() { saveAppSettingsWithFeedback(); };
 
     addAndMakeVisible(dialogStrengthLabel);
     dialogStrengthLabel.setText(L"效果强度", juce::dontSendNotification);
@@ -1765,7 +1766,7 @@ public:
       applyDialogMaterialSettings(false);
     };
     dialogStrengthSlider.onDragEnd = [this]() {
-      getAppSettings().save();
+      saveAppSettingsWithFeedback();
       applyDialogMaterialSettings(true);
     };
 
@@ -1912,7 +1913,7 @@ public:
     monetToggle.onClick = [this]() {
       bool enabled = monetToggle.getToggleState();
       getAppSettings().setMonetEnabled(enabled);
-      getAppSettings().save();
+      saveAppSettingsWithFeedback();
       paletteSelector.setVisible(enabled);
 
       if (enabled) {
@@ -1954,7 +1955,7 @@ public:
     rememberWindowToggle.onClick = [this]() {
       getAppSettings().setRememberWindowBounds(
           rememberWindowToggle.getToggleState());
-      getAppSettings().save();
+      saveAppSettingsWithFeedback();
     };
 
     addAndMakeVisible(currentPathLabel);
@@ -2294,7 +2295,7 @@ private:
     cleanupOldBackgrounds();
 
     getAppSettings().setBackgroundImagePath(uniqueFile.getFullPathName());
-    getAppSettings().save();
+    saveAppSettingsWithFeedback();
     updateImageDependentControls();
 
     background.startImageLoadJob(uniqueFile.getFullPathName(), true);
@@ -2426,7 +2427,7 @@ private:
       recentButtons.add(btn);
       btn->onClick = [this, f] {
         getAppSettings().setBackgroundImagePath(f.getFullPathName());
-        getAppSettings().save();
+        saveAppSettingsWithFeedback();
         updateImageDependentControls();
         background.startImageLoadJob(f.getFullPathName(),
                                      true);
@@ -2497,7 +2498,7 @@ private:
   void clearImage() {
     getAppSettings().setBackgroundImagePath("");
     getAppSettings().setMonetEnabled(false);
-    getAppSettings().save();
+    saveAppSettingsWithFeedback();
     monetToggle.setToggleState(false, juce::dontSendNotification);
     paletteSelector.setVisible(false);
 

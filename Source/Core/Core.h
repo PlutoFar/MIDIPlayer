@@ -20,8 +20,8 @@ namespace midi {
 */
 class Core {
 public:
-  // Preconditions: 路径由调用方选择；索引对应待导出曲目，采样率单位为 Hz。
-  // `runExport` 校验曲目及编码能力；参数默认值仅用于初始化导出界面。
+  // Trust Boundary: `runExport` 在改变播放状态前校验绝对目标路径、曲目索引、编码参数和尾音范围。
+  // 采样率单位为整数 Hz；参数默认值仅用于初始化导出界面，不替代无效请求中的值。
   struct ExportRequest {
     int trackIndex = -1;
     std::wstring targetPath;
@@ -58,6 +58,7 @@ public:
   std::vector<PluginInfo> plugins() const;
   // Preconditions: 消息线程调用；`loadAsync` 的 `id` 来自 `plugins()`，回调自行约束界面对象寿命。
   // Postconditions: `true` 仅表示受理；存活至完成时在消息线程调用 `completion`，参数为执行结果。
+  // Ownership: 上次使用的插件属于界面偏好；调用方在成功后保存，并独立处理保存失败。
   // Failures: 受理失败返回 `false` 且不回调；线程创建异常直接传播，析构取消后不交付界面回调。
   bool loadAsync(const PluginId &id, std::function<void(bool)> completion);
   bool unloadAsync(std::function<void(bool)> completion);
@@ -92,7 +93,7 @@ public:
   void next();
   void prev();
   void playTrackAt(int index);
-  // Postconditions: `ratio` 限制在 [0,1] 后转换为采样位置；音频线程在后续块应用请求。
+  // Postconditions: `ratio` 限制在 [0,1] 后转换为采样位置；音频线程在后续块应用最新请求。
   // Failures: 无有效时长或正在导出时保留播放位置。
   void seek(double ratio);
   // Preconditions: `value` 是线性音频增益；调用方负责滑块值的音量曲线换算和设置持久化。

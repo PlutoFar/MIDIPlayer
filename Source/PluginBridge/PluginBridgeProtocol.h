@@ -295,22 +295,35 @@ inline int writeMidiBufferRange(const juce::MidiBuffer &source,
   return static_cast<int>(out.getPosition());
 }
 
-// Preconditions: `source` 的可读长度覆盖非负 `numBytes`；共享块容量必须由上游约束。
-// Postconditions: 向 `dest` 追加完整记录；截断或非正消息长度时停止，已追加的前缀保留。
-// Failures: 本接口没有解析结果返回值，不能用正常返回证明整包有效。
-inline void readMidiBuffer(const unsigned char *source, int numBytes,
-                           juce::MidiBuffer &dest) {
+// Preconditions: 接收端已验证 `numBytes` 在源缓冲区容量内，`numSamples` 为有效块长度。
+// Postconditions: 完整解码并验证块内偏移后替换 `dest`。
+// Failures: 截断、无效消息长度或越界采样偏移返回 `false`，保留原 `dest`，调用方拒绝整块。
+[[nodiscard]] inline bool readMidiBuffer(const unsigned char *source, int numBytes,
+                                       juce::MidiBuffer &dest, int numSamples) {
+  juce::MidiBuffer decoded;
   juce::MemoryInputStream in(source, static_cast<size_t>(numBytes), false);
-  while (in.getNumBytesRemaining() >= static_cast<int64_t>(sizeof(int) * 2)) {
+  while (in.getNumBytesRemaining() > 0) {
+    if (in.getNumBytesRemaining() < static_cast<int64_t>(sizeof(int) * 2))
+      return false;
     const int samplePosition = in.readInt();
     const int messageSize = in.readInt();
-    if (messageSize <= 0 || in.getNumBytesRemaining() < messageSize)
-      return;
+    if (samplePosition < 0 || samplePosition >= numSamples ||
+        messageSize <= 0 || in.getNumBytesRemaining() < messageSize)
+      return false;
 
     juce::HeapBlock<unsigned char> messageData(messageSize);
     in.read(messageData.getData(), static_cast<size_t>(messageSize));
-    dest.addEvent(messageData.getData(), messageSize, samplePosition);
+    // Reason: JUCE 对固定长度消息按状态字节读取，声明长度不足时必须在调用前拒绝。
+    const auto status = messageData[0];
+    if (status < 0x80 ||
+        ((status != 0xf0 && status != 0xf7) &&
+         messageSize != juce::MidiMessage::getMessageLengthFromFirstByte(status)))
+      return false;
+    if (!decoded.addEvent(messageData.getData(), messageSize, samplePosition))
+      return false;
   }
+  dest.swapWith(decoded);
+  return true;
 }
 
 } // namespace PluginBridge
