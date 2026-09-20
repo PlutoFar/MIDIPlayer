@@ -1,7 +1,8 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
-#include "../AudioEngine/AudioEngine.h"
+#include "../AudioEngine/ExportSettings.h"
+#include "../AudioEngine/ExportFormatSupport.h"
 #include "CustomLookAndFeel.h"
 #include "ExportHintState.h"
 #include "MarqueeLabelSupport.h"

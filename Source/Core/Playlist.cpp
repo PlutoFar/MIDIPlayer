@@ -1,7 +1,7 @@
 #include "CoreImpl.h"
 
-// Core/Playlist —— 播放列表保存/加载与未保存状态。曲目增删/重复检测仍由
-// PlaylistManager 承载（经 LegacyCoreAdapter 给 Legacy 控件过渡使用）。
+// Playlist commands own index updates, persistence and delayed-play
+// invalidation.
 
 namespace midi {
 
@@ -10,8 +10,6 @@ bool Core::Impl::addToPlaylist(const juce::File &file) {
   if (exportActiveFlag.load())
     return false;
   const bool ok = playlist.addFile(file);
-  if (ok)
-    notify();
   return ok;
 }
 
@@ -24,8 +22,6 @@ int Core::Impl::addFilesToPlaylist(const std::vector<juce::File> &files) {
     if (playlist.addFile(file))
       ++added;
   }
-  if (added > 0)
-    notify();
   return added;
 }
 
@@ -36,14 +32,16 @@ bool Core::Impl::removeTrack(int index) {
   const bool ok = playlist.removeTrack(index);
   if (ok) {
     if (currentTrackIndex == index) {
+      ++trackSwitchGeneration;
+      isHandlingTrackEnd = false;
       currentTrackIndex = -1;
       currentMidiFile = {};
       currentMidiName = {};
       engine.getMidiPlayer().setPlaying(false);
+      engine.getMidiPlayer().setSequence(nullptr, sampleRate());
     } else if (currentTrackIndex > index) {
       --currentTrackIndex;
     }
-    notify();
   }
   return ok;
 }
@@ -61,7 +59,6 @@ bool Core::Impl::moveTrack(int fromIndex, int toIndex) {
     } else if (toIndex <= currentTrackIndex && currentTrackIndex < fromIndex) {
       ++currentTrackIndex;
     }
-    notify();
   }
   return ok;
 }
@@ -71,15 +68,15 @@ bool Core::Impl::refreshTrack(int index) {
   if (exportActiveFlag.load())
     return false;
   const bool ok = playlist.refreshTrack(index);
-  if (ok)
-    notify();
   return ok;
 }
 
-void Core::Impl::clearPlaylist() {
+bool Core::Impl::clearPlaylist() {
   StateLock lock(stateMutex);
   if (exportActiveFlag.load())
-    return;
+    return false;
+  ++trackSwitchGeneration;
+  isHandlingTrackEnd = false;
   playlist.clear();
   currentTrackIndex = -1;
   currentMidiFile = {};
@@ -88,16 +85,16 @@ void Core::Impl::clearPlaylist() {
   playlistErrorText.clear();
   getAppSettings().setLastPlaylistPath({});
   engine.getMidiPlayer().setPlaying(false);
-  notify();
+  engine.getMidiPlayer().setSequence(nullptr, sampleRate());
+  return true;
 }
 
 void Core::Impl::setPlayMode(int mode) {
   StateLock lock(stateMutex);
   if (mode < 1 || mode > 4)
     mode = 1;
-  playlist.setPlaybackMode(static_cast<PlaylistManager::PlaybackMode>(mode));
+  playlist.setPlaybackMode(static_cast<midi::PlaybackMode>(mode));
   getAppSettings().setPlayMode(mode);
-  notify();
 }
 
 juce::File Core::Impl::trackFileAt(int index) const {
@@ -118,7 +115,6 @@ bool Core::Impl::saveList(const juce::File &file) {
     currentPlaylistFile = file;
     getAppSettings().setLastPlaylistPath(file.getFullPathName());
   }
-  notify();
   return result.wasOk();
 }
 
@@ -132,9 +128,10 @@ bool Core::Impl::loadList(const juce::File &file) {
   if (result.wasOk()) {
     currentPlaylistFile = file;
     getAppSettings().setLastPlaylistPath(file.getFullPathName());
-    currentTrackIndex = -1;
+    currentTrackIndex = playlist.findTrackIndex(currentMidiFile);
+    ++trackSwitchGeneration;
+    isHandlingTrackEnd = false;
   }
-  notify();
   return result.wasOk();
 }
 

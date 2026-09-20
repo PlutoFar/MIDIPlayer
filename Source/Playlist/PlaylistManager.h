@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PlaybackMode.h"
+
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -124,8 +126,9 @@ public:
 
       auto tempFile = file.getSiblingFile(file.getFileName() + ".tmp");
       if (tempFile.exists() && !tempFile.deleteFile())
-        return juce::Result::fail("Unable to delete stale playlist temp file: " +
-                                  tempFile.getFullPathName());
+        return juce::Result::fail(
+            "Unable to delete stale playlist temp file: " +
+            tempFile.getFullPathName());
 
       auto stream = tempFile.createOutputStream();
       if (stream == nullptr)
@@ -136,9 +139,9 @@ public:
         const auto error = stream->getStatus().getErrorMessage();
         stream.reset();
         tempFile.deleteFile();
-        return juce::Result::fail("Unable to reset playlist temp file: " +
-                                  (error.isNotEmpty() ? error
-                                                      : tempFile.getFullPathName()));
+        return juce::Result::fail(
+            "Unable to reset playlist temp file: " +
+            (error.isNotEmpty() ? error : tempFile.getFullPathName()));
       }
 
       juce::JSON::writeToStream(*stream, juce::var(root.get()), true);
@@ -212,47 +215,41 @@ public:
       changeLog.reset();
       return juce::Result::ok();
     } catch (...) {
-      return juce::Result::fail("Unexpected exception while loading playlist: " +
-                                file.getFullPathName());
+      return juce::Result::fail(
+          "Unexpected exception while loading playlist: " +
+          file.getFullPathName());
     }
   }
 
   bool load(const juce::File &file) { return loadDetailed(file).wasOk(); }
 
-  enum class PlaybackMode {
-    Sequential = 1,
-    LoopList = 2,
-    LoopSingle = 3,
-    Shuffle = 4
-  };
-
-  void setPlaybackMode(PlaybackMode mode) { currentMode = mode; }
-  PlaybackMode getPlaybackMode() const { return currentMode; }
+  void setPlaybackMode(midi::PlaybackMode mode) { currentMode = mode; }
+  midi::PlaybackMode getPlaybackMode() const { return currentMode; }
 
   int getNextIndex(int currentIndex) const {
     if (tracks.isEmpty())
       return -1;
 
     switch (currentMode) {
-    case PlaybackMode::LoopSingle:
-      return currentIndex;
+    case midi::PlaybackMode::LoopSingle:
+      return juce::isPositiveAndBelow(currentIndex, tracks.size())
+                 ? currentIndex
+                 : 0;
 
-    case PlaybackMode::Shuffle: {
+    case midi::PlaybackMode::Shuffle: {
       if (tracks.size() == 1)
         return 0;
-      int next;
-      int attempts = 0;
-      do {
-        next = juce::Random::getSystemRandom().nextInt(tracks.size());
-        attempts++;
-      } while (next == currentIndex && attempts < 5);
-      return next;
+      if (!juce::isPositiveAndBelow(currentIndex, tracks.size()))
+        return juce::Random::getSystemRandom().nextInt(tracks.size());
+      const int next =
+          juce::Random::getSystemRandom().nextInt(tracks.size() - 1);
+      return next >= currentIndex ? next + 1 : next;
     }
 
-    case PlaybackMode::LoopList:
+    case midi::PlaybackMode::LoopList:
       return (currentIndex + 1) % tracks.size();
 
-    case PlaybackMode::Sequential:
+    case midi::PlaybackMode::Sequential:
     default:
       if (currentIndex >= tracks.size() - 1)
         return -1;
@@ -265,8 +262,8 @@ public:
     if (tracks.isEmpty())
       return -1;
 
-    if (currentMode == PlaybackMode::LoopList ||
-        currentMode == PlaybackMode::LoopSingle) {
+    if (currentMode == midi::PlaybackMode::LoopList ||
+        currentMode == midi::PlaybackMode::LoopSingle) {
       int prev = currentIndex - 1;
       if (prev < 0)
         prev = tracks.size() - 1;
@@ -281,7 +278,7 @@ public:
 
 private:
   juce::Array<Track> tracks;
-  PlaybackMode currentMode = PlaybackMode::Sequential;
+  midi::PlaybackMode currentMode = midi::PlaybackMode::Sequential;
   mutable ChangeLog changeLog; // save() 为 const，保存成功后仍需清零变更记录。
 
 public:

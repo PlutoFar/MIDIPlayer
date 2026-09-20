@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../AudioEngine/AudioEngine.h"
+#include "../AudioEngine/ExportSettings.h"
 #include "../Core/Core.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>

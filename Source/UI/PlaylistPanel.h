@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../Playlist/PlaylistManager.h"
+#include "../Core/Core.h"
 #include "../Utils/UserSettings.h"
 #include "CustomLookAndFeel.h"
 #include "PlaylistAnimationSupport.h"
@@ -28,7 +28,7 @@ public:
 
     void paint(juce::Graphics &g) override {
       panel.paintPlaylistRow(row, g, getWidth(), getHeight(),
-                            panel.listBox.isRowSelected(row));
+                             panel.listBox.isRowSelected(row));
     }
 
   private:
@@ -46,19 +46,19 @@ public:
     virtual bool playlistClearRequested() = 0;
     virtual bool playlistLoadRequested(const juce::File &playlistFile) = 0;
     virtual bool playlistTrackMoveRequested(int fromIndex, int toIndex,
-                                           int newCurrentIndex) = 0;
+                                            int newCurrentIndex) = 0;
     virtual bool playlistTrackRemoveRequested(int index,
-                                             int newCurrentIndex) = 0;
+                                              int newCurrentIndex) = 0;
     virtual void playlistTrackRevealRequested(int index) = 0;
     virtual void playlistLoaded(const juce::File &playlistFile) = 0;
     virtual void playlistTrackReordered(int newCurrentIndex) = 0;
   };
 
-  PlaylistPanel(PlaylistManager &pm) : playlistManager(pm) {
+  PlaylistPanel(const midi::Core &c)
+      : core(c), playlistState(c.playlistState()) {
     addAndMakeVisible(listBox);
     listBox.setModel(this);
-    listBox.setRowHeight(
-        LegacyDesignTokens::Layout::playlistMinimumRowHeight);
+    listBox.setRowHeight(LegacyDesignTokens::Layout::playlistMinimumRowHeight);
     listBox.setColour(juce::ListBox::backgroundColourId,
                       juce::Colours::transparentBlack);
     listBox.setColour(juce::ListBox::outlineColourId,
@@ -109,8 +109,7 @@ public:
 
   ~PlaylistPanel() override { listBox.removeKeyListener(this); }
 
-  bool keyPressed(const juce::KeyPress &key,
-                  juce::Component *) override {
+  bool keyPressed(const juce::KeyPress &key, juce::Component *) override {
     const int selected = listBox.getSelectedRow();
     if (key == juce::KeyPress::deleteKey && selected >= 0) {
       beginRemoveTrack(selected);
@@ -143,6 +142,7 @@ public:
   int getCurrentTrackIndex() const { return currentTrackIndex; }
 
   void refresh() {
+    playlistState = core.playlistState();
     updateRowHeight();
     listBox.updateContent();
     listBox.repaint();
@@ -170,9 +170,8 @@ public:
   void updateRowHeight() {
     const float size = getAppSettings().getPlaylistFontSize();
     auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel());
-    const auto font = laf != nullptr
-                          ? laf->getPlaylistFont(size)
-                          : juce::Font(juce::FontOptions(size));
+    const auto font = laf != nullptr ? laf->getPlaylistFont(size)
+                                     : juce::Font(juce::FontOptions(size));
     listBox.setRowHeight(LegacyDesignTokens::Layout::playlistRowHeight(
         font.getHeight(), getAppSettings().getPlaylistRowSpacingAutomatic(),
         getAppSettings().getPlaylistManualRowHeight()));
@@ -190,15 +189,16 @@ public:
     ensureAnimationTimer();
   }
 
-  int getNumRows() override { return playlistManager.size(); }
+  int getNumRows() override {
+    return static_cast<int>(playlistState.trackNames.size());
+  }
 
   void paintListBoxItem(int, juce::Graphics &, int, int, bool) override {}
 
   juce::Component *
   refreshComponentForRow(int row, bool,
                          juce::Component *existingComponent) override {
-    auto *component =
-        dynamic_cast<AnimatedRowComponent *>(existingComponent);
+    auto *component = dynamic_cast<AnimatedRowComponent *>(existingComponent);
     if (component == nullptr)
       component = new AnimatedRowComponent(*this);
     component->setRow(row);
@@ -207,32 +207,31 @@ public:
 
   void paintPlaylistRow(int row, juce::Graphics &g, int width, int height,
                         bool rowIsSelected) {
-    auto *track = playlistManager.getTrack(row);
-    if (track == nullptr)
+    if (!juce::isPositiveAndBelow(row, playlistState.trackNames.size()))
       return;
+    const auto trackName = juce::String(
+        playlistState.trackNames[static_cast<size_t>(row)].c_str());
+    const bool available =
+        playlistState.trackAvailable[static_cast<size_t>(row)];
 
     auto area = juce::Rectangle<int>(0, 0, width, height).reduced(6, 2);
 
     auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel());
     auto colors = laf ? laf->getColors() : FluentLookAndFeel::FluentColors();
 
-    const float currentHighlight =
-        animationState.getCurrentHighlight(row);
+    const float currentHighlight = animationState.getCurrentHighlight(row);
     const float stableHighlight =
-        row == currentTrackIndex && currentHighlight <= 0.0f
-            ? 1.0f
-            : currentHighlight;
+        row == currentTrackIndex && currentHighlight <= 0.0f ? 1.0f
+                                                             : currentHighlight;
 
     if (stableHighlight > 0.001f) {
-      g.setColour(
-          colors.accentPrimary.withAlpha(0.12f * stableHighlight));
+      g.setColour(colors.accentPrimary.withAlpha(0.12f * stableHighlight));
       g.fillRoundedRectangle(area.toFloat(), 4.0f);
 
       auto indicatorArea = area.removeFromLeft(3).reduced(0, 8);
-      const int indicatorHeight = juce::roundToInt(
-          indicatorArea.getHeight() * stableHighlight);
-      indicatorArea =
-          indicatorArea.withSizeKeepingCentre(3, indicatorHeight);
+      const int indicatorHeight =
+          juce::roundToInt(indicatorArea.getHeight() * stableHighlight);
+      indicatorArea = indicatorArea.withSizeKeepingCentre(3, indicatorHeight);
       g.setColour(colors.accentPrimary.withAlpha(stableHighlight));
       g.fillRoundedRectangle(indicatorArea.toFloat(), 1.5f);
     } else if (rowIsSelected) {
@@ -261,20 +260,17 @@ public:
     g.drawText(juce::String(row + 1), indexArea,
                juce::Justification::centredRight);
 
-    g.setColour(!track->available
-                    ? colors.textDisabled
-                    : stableHighlight > 0.5f
-                          ? juce::Colours::white
-                          : juce::Colours::white.withAlpha(0.85f));
+    g.setColour(!available ? colors.textDisabled
+                : stableHighlight > 0.5f
+                    ? juce::Colours::white
+                    : juce::Colours::white.withAlpha(0.85f));
 
     if (laf)
-      g.setFont(
-          laf->getPlaylistFont(fontSize, stableHighlight > 0.5f));
+      g.setFont(laf->getPlaylistFont(fontSize, stableHighlight > 0.5f));
     else
       g.setFont(juce::FontOptions(fontSize));
-    const auto displayName = track->available
-                                 ? track->name
-                                 : track->name + L"（文件不可用）";
+    const auto displayName =
+        available ? trackName : trackName + L"（文件不可用）";
     g.drawText(displayName, area.reduced(8, 0),
                juce::Justification::centredLeft, true);
   }
@@ -295,9 +291,7 @@ public:
     deselectAllRows();
   }
 
-  void mouseDown(const juce::MouseEvent &) override {
-    deselectAllRows();
-  }
+  void mouseDown(const juce::MouseEvent &) override { deselectAllRows(); }
 
   juce::var
   getDragSourceDescription(const juce::SparseSet<int> &selectedRows) override {
@@ -323,7 +317,7 @@ public:
     int rowHeight = listBox.getRowHeight();
 
     int newInsertIndex =
-        juce::jlimit(0, playlistManager.size(),
+        juce::jlimit(0, static_cast<int>(playlistState.trackNames.size()),
                      (localPoint.y + scrollY + rowHeight / 2) / rowHeight);
 
     if (newInsertIndex != dropInsertIndex) {
@@ -346,14 +340,15 @@ public:
     int rowHeight = listBox.getRowHeight();
 
     int insertIndex =
-        juce::jlimit(0, playlistManager.size(),
+        juce::jlimit(0, static_cast<int>(playlistState.trackNames.size()),
                      (localPoint.y + scrollY + rowHeight / 2) / rowHeight);
 
     bool movedAnyTrack = false;
     auto desc = details.description.toString();
     if (desc.startsWith("trackIdx:")) {
       int srcRow = desc.substring(9).getIntValue();
-      if (srcRow >= 0 && srcRow < playlistManager.size() &&
+      if (srcRow >= 0 &&
+          srcRow < static_cast<int>(playlistState.trackNames.size()) &&
           srcRow != insertIndex) {
         int targetRow = insertIndex;
         if (srcRow < insertIndex)
@@ -376,8 +371,6 @@ public:
           if (auto *asyncListener = getAsyncListener()) {
             moved = asyncListener->playlistTrackMoveRequested(
                 srcRow, targetRow, newCurrentTrackIndex);
-          } else {
-            moved = playlistManager.moveTrack(srcRow, targetRow);
           }
 
           if (moved) {
@@ -387,8 +380,8 @@ public:
             if (movedPlayingTrack) {
               animationState.clearReorder();
             } else {
-              animationState.startReorder(
-                  srcRow, targetRow, (float)listBox.getRowHeight());
+              animationState.startReorder(srcRow, targetRow,
+                                          (float)listBox.getRowHeight());
             }
             listBox.selectRow(targetRow);
             startDropAnimation(targetRow, movedPlayingTrack);
@@ -407,10 +400,10 @@ public:
 
   void paintOverChildren(juce::Graphics &g) override {
     auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel());
-    const auto colors = laf != nullptr ? laf->getColors()
-                                       : FluentLookAndFeel::FluentColors{};
+    const auto colors =
+        laf != nullptr ? laf->getColors() : FluentLookAndFeel::FluentColors{};
 
-    if (playlistManager.isEmpty()) {
+    if (playlistState.trackNames.empty()) {
       g.setColour(colors.textSecondary);
       if (laf != nullptr)
         g.setFont(laf->getBodyLargeFont());
@@ -497,8 +490,10 @@ private:
   }
 
   void updateCountLabel() {
-    countLabel.setText(juce::String(playlistManager.size()) + L" 个曲目",
-                       juce::dontSendNotification);
+    countLabel.setText(
+        juce::String(static_cast<int>(playlistState.trackNames.size())) +
+            L" 个曲目",
+        juce::dontSendNotification);
   }
 
   void showAddFileDialog() {
@@ -536,50 +531,27 @@ private:
         juce::ModalCallbackFunction::create(
             [safeThis = juce::Component::SafePointer<PlaylistPanel>(this)](
                 int result) {
-          if (safeThis == nullptr)
-            return;
+              if (safeThis == nullptr)
+                return;
 
-          if (result == 1) {
-            bool cleared = false;
-            if (auto *listener = safeThis->getAsyncListener())
-              cleared = listener->playlistClearRequested();
-            else {
-              safeThis->playlistManager.clear();
-              getAppSettings().setLastPlaylistPath("");
-              cleared = true;
-            }
-            if (cleared) {
-              safeThis->currentTrackIndex = -1;
-              safeThis->refresh();
-              if (auto *listener = safeThis->getAsyncListener())
-                listener->playlistLoaded(juce::File());
-            }
-          }
-        }));
+              if (result == 1) {
+                bool cleared = false;
+                if (auto *listener = safeThis->getAsyncListener())
+                  cleared = listener->playlistClearRequested();
+
+                if (cleared) {
+                  safeThis->currentTrackIndex = -1;
+                  safeThis->refresh();
+                  if (auto *listener = safeThis->getAsyncListener())
+                    listener->playlistLoaded(juce::File());
+                }
+              }
+            }));
   }
 
   void savePlaylist() {
-    if (auto *playlistListener = getAsyncListener()) {
+    if (auto *playlistListener = getAsyncListener())
       playlistListener->playlistSaveRequested();
-      return;
-    }
-
-    fileChooser = std::make_unique<juce::FileChooser>(L"保存播放列表",
-                                                       juce::File(), "*.json");
-    fileChooser->launchAsync(
-        juce::FileBrowserComponent::saveMode,
-        [safeThis = juce::Component::SafePointer<PlaylistPanel>(this)](
-            const juce::FileChooser &fc) {
-          if (safeThis == nullptr)
-            return;
-
-          auto r = fc.getResult();
-          if (r != juce::File()) {
-            auto file = r.withFileExtension(".json");
-            if (safeThis->playlistManager.save(file))
-              getAppSettings().setLastPlaylistPath(file.getFullPathName());
-          }
-        });
   }
 
   void loadPlaylist() {
@@ -595,14 +567,14 @@ private:
           juce::ModalCallbackFunction::create(
               [safeThis = juce::Component::SafePointer<PlaylistPanel>(this),
                lastFile](int result) {
-            if (safeThis == nullptr)
-              return;
-            if (result == 1) {
-              safeThis->performLoad(lastFile);
-            } else if (result == 2) {
-              safeThis->showLoadFileChooser();
-            }
-          }));
+                if (safeThis == nullptr)
+                  return;
+                if (result == 1) {
+                  safeThis->performLoad(lastFile);
+                } else if (result == 2) {
+                  safeThis->showLoadFileChooser();
+                }
+              }));
     } else {
       showLoadFileChooser();
     }
@@ -628,11 +600,6 @@ private:
     bool loaded = false;
     if (auto *asyncListener = getAsyncListener())
       loaded = asyncListener->playlistLoadRequested(file);
-    else {
-      loaded = playlistManager.load(file);
-      if (loaded)
-        getAppSettings().setLastPlaylistPath(file.getFullPathName());
-    }
 
     if (loaded) {
       currentTrackIndex = -1;
@@ -651,22 +618,19 @@ private:
     m.showMenuAsync(
         {}, [safeThis = juce::Component::SafePointer<PlaylistPanel>(this),
              row](int r) {
-      if (safeThis == nullptr)
-        return;
+          if (safeThis == nullptr)
+            return;
 
-      if (r == 1) {
-        if (auto *listener = safeThis->getAsyncListener())
-          listener->playlistTrackDoubleClicked(row);
-      }
-      else if (r == 2) {
-        safeThis->beginRemoveTrack(row);
-      } else if (r == 3) {
-        if (auto *listener = safeThis->getAsyncListener())
-          listener->playlistTrackRevealRequested(row);
-        else if (auto *track = safeThis->playlistManager.getTrack(row))
-          track->file.revealToUser();
-      }
-    });
+          if (r == 1) {
+            if (auto *listener = safeThis->getAsyncListener())
+              listener->playlistTrackDoubleClicked(row);
+          } else if (r == 2) {
+            safeThis->beginRemoveTrack(row);
+          } else if (r == 3) {
+            if (auto *listener = safeThis->getAsyncListener())
+              listener->playlistTrackRevealRequested(row);
+          }
+        });
   }
 
   void startDropAnimation(int row, bool isAccent) {
@@ -715,7 +679,8 @@ private:
   }
 
   void updateVisibleRowTransforms() {
-    for (int row = 0; row < playlistManager.size(); ++row) {
+    for (int row = 0; row < static_cast<int>(playlistState.trackNames.size());
+         ++row) {
       auto *component = listBox.getComponentForRowNumber(row);
       if (component == nullptr)
         continue;
@@ -723,18 +688,18 @@ private:
       const float scale = animationState.getRowScale(row);
       const float offset = animationState.getRowOffset(row);
       component->setAlpha(animationState.getRowAlpha(row));
-      component->setTransform(
-          juce::AffineTransform::scale(
-              1.0f, scale, component->getWidth() * 0.5f,
-              component->getHeight() * 0.5f)
-              .translated(0.0f, offset));
+      component->setTransform(juce::AffineTransform::scale(
+                                  1.0f, scale, component->getWidth() * 0.5f,
+                                  component->getHeight() * 0.5f)
+                                  .translated(0.0f, offset));
       component->repaint();
     }
   }
 
   void beginRemoveTrack(int row) {
     if (pendingRemovalRow >= 0 ||
-        !juce::isPositiveAndBelow(row, playlistManager.size()))
+        !juce::isPositiveAndBelow(
+            row, static_cast<int>(playlistState.trackNames.size())))
       return;
 
     pendingRemovalRow = row;
@@ -744,7 +709,8 @@ private:
 
   void finishPendingRemoval() {
     const int row = pendingRemovalRow;
-    if (!juce::isPositiveAndBelow(row, playlistManager.size())) {
+    if (!juce::isPositiveAndBelow(
+            row, static_cast<int>(playlistState.trackNames.size()))) {
       pendingRemovalRow = -1;
       animationState.clearRemoval();
       return;
@@ -755,9 +721,8 @@ private:
 
     bool removed = false;
     if (auto *asyncListener = getAsyncListener())
-      removed = asyncListener->playlistTrackRemoveRequested(row, newCurrentIndex);
-    else
-      removed = playlistManager.removeTrack(row);
+      removed =
+          asyncListener->playlistTrackRemoveRequested(row, newCurrentIndex);
 
     if (!removed) {
       pendingRemovalRow = -1;
@@ -770,15 +735,15 @@ private:
     animationState.clearRemoval();
     animationState.startCurrentTrackTransition(-1, currentTrackIndex);
     refresh();
-    animationState.startShiftAfterRemoval(
-        row, (float)listBox.getRowHeight());
+    animationState.startShiftAfterRemoval(row, (float)listBox.getRowHeight());
     pendingRemovalRow = -1;
 
     if (auto *asyncListener = getAsyncListener())
       asyncListener->playlistTrackReordered(currentTrackIndex);
   }
 
-  PlaylistManager &playlistManager;
+  const midi::Core &core;
+  midi::PlaylistState playlistState;
   Listener *listener = nullptr;
   juce::Component::SafePointer<juce::Component> listenerComponent;
   juce::ListBox listBox;

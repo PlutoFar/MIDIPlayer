@@ -29,15 +29,14 @@ AppState Core::Impl::buildState() {
   AppState s;
 
   s.plugin.scanning = pluginScanActive.load();
-  s.plugin.loadInProgress = pluginLoadActive.load();
+  s.plugin.loadInProgress = pluginChangesAudio.load();
+  s.plugin.operationInProgress = pluginTaskActive.load();
   s.plugin.loaded = engine.hasPluginLoaded();
   s.plugin.loadedName = toW(engine.getLoadedPluginName());
   s.plugin.workerCrashed = engine.hasPluginWorkerCrashed();
-  s.plugin.lastError = toW(engine.getLastPluginError());
-  for (const auto &type : engine.getPluginList().getTypes())
-    s.plugin.available.push_back(
-        {toW(type.createIdentifierString()), toW(type.name),
-         toW(type.manufacturerName), toW(type.pluginFormatName)});
+  s.plugin.lastError =
+      toW(pluginErrorText.isNotEmpty() ? pluginErrorText
+                                       : engine.getLastPluginError());
 
   auto &mp = engine.getMidiPlayer();
   s.transport.playing = mp.getPlaying();
@@ -47,21 +46,17 @@ AppState Core::Impl::buildState() {
   s.transport.currentTrackIndex = currentTrackIndex;
   s.transport.currentMidiName = toW(currentMidiName);
 
-  for (const auto &track : playlist.getTracks()) {
-    s.playlist.trackNames.push_back(toW(track.name));
-    s.playlist.trackAvailable.push_back(track.available);
-  }
   s.playlist.hasUnsavedChanges = playlist.hasChanges();
   s.playlist.changeSummary = toW(playlist.getChangeSummary());
   s.playlist.currentListPath = pathToW(currentPlaylistFile);
   s.playlist.lastError = toW(playlistErrorText);
   s.playlist.playMode = static_cast<int>(playlist.getPlaybackMode());
 
-  s.audio.hasDevice = engine.hasAudioDevice();
-  s.audio.firstRunAudio = engine.isFirstRunAudio();
-  s.audio.deviceFallback = engine.wasDeviceRestoredWithFallback();
+  s.audio.hasDevice = audio.hasDevice();
+  s.audio.firstRunAudio = audio.isFirstRun();
+  s.audio.deviceFallback = audio.wasRestoredWithFallback();
   s.audio.masterVolume = engine.getMasterVolume();
-  s.audio.lastInitError = toW(engine.getLastInitError());
+  s.audio.lastInitError = toW(audio.lastError());
 
   s.task.exportActive = exportActiveFlag.load();
   s.task.exportProgress = exportProgressValue.load();
@@ -71,8 +66,15 @@ AppState Core::Impl::buildState() {
   return s;
 }
 
-void Core::Impl::notify() {
-  // JUCE 界面按帧读取状态快照。
+PlaylistState Core::Impl::buildPlaylistState() {
+  StateLock lock(stateMutex);
+  PlaylistState result;
+  static_cast<PlaylistSummary &>(result) = buildState().playlist;
+  for (const auto &track : playlist.getTracks()) {
+    result.trackNames.push_back(toW(track.name));
+    result.trackAvailable.push_back(track.available);
+  }
+  return result;
 }
 
 void Core::Impl::scheduleAfter(int ms, std::function<void(Impl &)> fn) {
@@ -87,7 +89,7 @@ void Core::Impl::scheduleAfter(int ms, std::function<void(Impl &)> fn) {
 
 double Core::Impl::sampleRate() const {
   StateLock lock(stateMutex);
-  const double sr = engine.getSampleRate();
+  const double sr = engine.liveSampleRate();
   return sr > 0.0 ? sr : 44100.0;
 }
 
@@ -95,32 +97,43 @@ double Core::Impl::sampleRate() const {
 
 Core::Core() : impl(std::make_unique<Impl>()) {}
 
-Core::~Core() { shutdown(); }
-
-bool Core::init() {
-  return true;
-}
-
-void Core::shutdown() {}
+Core::~Core() = default;
 
 AppState Core::state() const { return impl->buildState(); }
+PlaylistState Core::playlistState() const { return impl->buildPlaylistState(); }
 
 void Core::tick(bool uiSuppressTrackAdvance) {
   impl->tick(uiSuppressTrackAdvance);
+  if (impl->engine.requiresPrepare() && !impl->pluginTaskActive.load() &&
+      !impl->pluginScanActive.load() && !impl->exportActiveFlag.load() &&
+      !impl->audioConfigurationActive.load())
+    impl->startPluginTask(
+        [self = impl.get()] { return self->engine.preparePlugin(); }, {},
+        false);
 }
 
 // library
 bool Core::scan(std::function<bool()> shouldCancel) {
   return impl->scan(std::move(shouldCancel));
 }
-std::vector<PluginInfo> Core::plugins() const { return state().plugin.available; }
-bool Core::load(const PluginId &id) { return impl->load(id); }
-void Core::unload() { impl->unload(); }
-bool Core::editor() { return impl->editor(); }
-void Core::closeEditor() {
-  if (!impl->exportActiveFlag.load() && !impl->pluginLoadActive.load())
-    impl->engine.closePluginEditor();
+std::vector<PluginInfo> Core::plugins() const {
+  Impl::StateLock lock(impl->stateMutex);
+  std::vector<PluginInfo> result;
+  for (const auto &type : impl->library.plugins().getTypes())
+    result.push_back({toW(type.createIdentifierString()), toW(type.name),
+                      toW(type.manufacturerName), toW(type.pluginFormatName)});
+  return result;
 }
+bool Core::loadAsync(const PluginId &id, std::function<void(bool)> completion) {
+  return impl->loadAsync(id, std::move(completion));
+}
+bool Core::unloadAsync(std::function<void(bool)> completion) {
+  return impl->unloadAsync(std::move(completion));
+}
+bool Core::editorAsync(std::function<void(bool)> completion) {
+  return impl->editorAsync(std::move(completion));
+}
+void Core::closeEditor() { impl->closeEditor(); }
 bool Core::hasPluginLoaded() const { return impl->engine.hasPluginLoaded(); }
 std::wstring Core::loadedPluginName() const {
   return toW(impl->engine.getLoadedPluginName());
@@ -132,7 +145,10 @@ std::wstring Core::pluginError() const {
   return toW(impl->engine.getPluginWorkerError());
 }
 std::wstring Core::lastPluginError() const {
-  return toW(impl->engine.getLastPluginError());
+  Impl::StateLock lock(impl->stateMutex);
+  return toW(impl->pluginErrorText.isNotEmpty()
+                 ? impl->pluginErrorText
+                 : impl->engine.getLastPluginError());
 }
 void Core::terminateCrashedWorker() { impl->terminateCrashedWorker(); }
 void Core::cancelPendingPluginOperation() {
@@ -144,12 +160,12 @@ bool Core::openMidi(const std::wstring &path) {
   return impl->openMidi(fileFromPath(path), false, {});
 }
 bool Core::openMidiFromShell(const std::wstring &path,
-                            std::function<void()> onPluginMissing) {
+                             std::function<void()> onPluginMissing) {
   return impl->openMidi(fileFromPath(path), true, std::move(onPluginMissing));
 }
 bool Core::loadMidiFile(const std::wstring &path) {
   Impl::StateLock lock(impl->stateMutex);
-  if (impl->exportActiveFlag.load() || impl->pluginLoadActive.load())
+  if (impl->exportActiveFlag.load() || impl->pluginChangesAudio.load())
     return false;
   return impl->loadMidi(fileFromPath(path));
 }
@@ -161,17 +177,16 @@ void Core::next() { impl->next(); }
 void Core::prev() { impl->prev(); }
 void Core::playTrackAt(int index) {
   Impl::StateLock lock(impl->stateMutex);
-  if (impl->exportActiveFlag.load() || impl->pluginLoadActive.load() ||
-      !impl->engine.hasPluginLoaded() ||
-      impl->engine.hasPluginWorkerCrashed())
+  if (impl->exportActiveFlag.load() || impl->pluginChangesAudio.load() ||
+      !impl->engine.hasPluginLoaded() || impl->engine.hasPluginWorkerCrashed())
     return;
-  impl->currentTrackIndex = index;
   if (const auto *track = impl->playlist.getTrack(index)) {
     if (impl->loadMidi(track->file)) {
+      impl->currentTrackIndex = index;
       ++impl->trackSwitchGeneration;
       const int gen = impl->trackSwitchGeneration;
       impl->scheduleAfter(100, [gen](Impl &self) {
-        if (self.trackSwitchGeneration != gen)
+        if (self.trackSwitchGeneration != gen || !self.canStartPlayback())
           return;
         self.engine.getMidiPlayer().setPlaying(true);
       });
@@ -206,7 +221,7 @@ int Core::findTrackIndex(const std::wstring &path) const {
   Impl::StateLock lock(impl->stateMutex);
   return impl->playlist.findTrackIndex(fileFromPath(path));
 }
-void Core::clearPlaylist() { impl->clearPlaylist(); }
+bool Core::clearPlaylist() { return impl->clearPlaylist(); }
 void Core::setPlayMode(int mode) { impl->setPlayMode(mode); }
 std::wstring Core::trackFileAt(int index) const {
   return pathToW(impl->trackFileAt(index));
@@ -232,10 +247,10 @@ std::wstring Core::lastPlaylistError() const {
 }
 
 // audio device
-bool Core::hasAudioDevice() const { return impl->engine.hasAudioDevice(); }
-bool Core::isFirstRunAudio() const { return impl->engine.isFirstRunAudio(); }
+bool Core::hasAudioDevice() const { return impl->audio.hasDevice(); }
+bool Core::isFirstRunAudio() const { return impl->audio.isFirstRun(); }
 bool Core::wasDeviceRestoredWithFallback() const {
-  return impl->engine.wasDeviceRestoredWithFallback();
+  return impl->audio.wasRestoredWithFallback();
 }
 
 // export

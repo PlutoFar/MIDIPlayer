@@ -1,13 +1,13 @@
 #pragma once
 
+#include "../Core/WorkerPath.h"
 #include "PluginBridgeProtocol.h"
 #include "PluginBridgeSharedBlock.h"
-#include "../Core/WorkerPath.h"
 
 #include <atomic>
 #include <cstdint>
-#include <vector>
 #include <juce_events/juce_events.h>
+#include <vector>
 
 namespace PluginBridge {
 
@@ -52,8 +52,8 @@ public:
     responseEvent.reset();
     clearPendingReplies();
     const auto exe = midi::WorkerPath::resolve();
-    const bool launched = launchWorkerProcess(
-        exe, workerCommandLineUid, workerConnectionTimeoutMs, 0);
+    const bool launched = launchWorkerProcess(exe, workerCommandLineUid,
+                                              workerConnectionTimeoutMs, 0);
 
     if (!launched) {
       clearOperation();
@@ -121,7 +121,8 @@ public:
       return false;
     }
 
-    const auto reply = waitForReply(Command::loadPlugin, workerCommandTimeoutMs);
+    const auto reply =
+        waitForReply(Command::loadPlugin, workerCommandTimeoutMs);
     clearOperation();
     if (reply.code != StatusCode::ok) {
       handleCommandFailure(reply);
@@ -193,8 +194,7 @@ public:
     if (!isPluginLoaded() || sharedBlock == nullptr || !sharedBlock->isOpen())
       return false;
 
-    const bool nonRealtime =
-        nonRealtimeMode.load(std::memory_order_acquire);
+    const bool nonRealtime = nonRealtimeMode.load(std::memory_order_acquire);
     if (renderRequestOutstanding) {
       const auto lateResult = sharedBlock->waitForResponse(0);
       if (lateResult == WaitResult::signalled) {
@@ -208,8 +208,8 @@ public:
         markCrashed(sharedBlock->getLastErrorMessage());
         return false;
       } else {
-        const auto elapsed = juce::Time::getMillisecondCounter() -
-                             outstandingRenderStartTime;
+        const auto elapsed =
+            juce::Time::getMillisecondCounter() - outstandingRenderStartTime;
         buffer.clear();
         if (elapsed >= static_cast<uint32_t>(workerRenderHangTimeoutMs))
           markCrashed("plugin worker render unresponsive");
@@ -219,7 +219,8 @@ public:
 
     const int numSamples = buffer.getNumSamples();
     if (numSamples > SharedBlockLayout::maxSamples) {
-      rememberCommandFailure("audio block is larger than the plugin bridge buffer");
+      rememberCommandFailure(
+          "audio block is larger than the plugin bridge buffer");
       buffer.clear();
       return false;
     }
@@ -235,11 +236,12 @@ public:
     for (int ch = 0; ch < SharedBlockLayout::maxChannels; ++ch)
       juce::FloatVectorOperations::clear(shared.audio[ch], numSamples);
 
-    const int midiBytes = writeMidiBufferRange(
-        midi, shared.midi, SharedBlockLayout::maxMidiBytes, midiStartSample,
-        numSamples);
+    const int midiBytes =
+        writeMidiBufferRange(midi, shared.midi, SharedBlockLayout::maxMidiBytes,
+                             midiStartSample, numSamples);
     if (midiBytes < 0) {
-      rememberCommandFailure("MIDI block is larger than the plugin bridge buffer");
+      rememberCommandFailure(
+          "MIDI block is larger than the plugin bridge buffer");
       buffer.clear();
       return false;
     }
@@ -255,9 +257,9 @@ public:
     outstandingRenderSequence = requestSequence;
     outstandingRenderStartTime = juce::Time::getMillisecondCounter();
 
-    const int timeoutMs = nonRealtime
-                              ? workerCommandTimeoutMs
-                              : getWorkerRenderTimeoutMs(numSamples, sampleRate);
+    const int timeoutMs =
+        nonRealtime ? workerCommandTimeoutMs
+                    : getWorkerRenderTimeoutMs(numSamples, sampleRate);
     const auto waitResult = sharedBlock->waitForResponse(timeoutMs);
     if (waitResult != WaitResult::signalled) {
       buffer.clear();
@@ -297,7 +299,8 @@ public:
       return false;
     }
 
-    const auto reply = waitForReply(Command::openEditor, workerCommandTimeoutMs);
+    const auto reply =
+        waitForReply(Command::openEditor, workerCommandTimeoutMs);
     clearOperation();
     if (reply.code != StatusCode::ok) {
       handleCommandFailure(reply);
@@ -317,7 +320,8 @@ public:
       return;
     }
 
-    const auto reply = waitForReply(Command::closeEditor, workerCommandTimeoutMs);
+    const auto reply =
+        waitForReply(Command::closeEditor, workerCommandTimeoutMs);
     if (reply.code != StatusCode::ok)
       handleCommandFailure(reply);
   }
@@ -338,7 +342,8 @@ public:
   }
 
   BridgeStatus getStatus() const {
-    return static_cast<BridgeStatus>(statusAtomic.load(std::memory_order_acquire));
+    return static_cast<BridgeStatus>(
+        statusAtomic.load(std::memory_order_acquire));
   }
 
   juce::String getLastError() const {
@@ -372,13 +377,14 @@ public:
   }
 
   void cancelPendingOperation() {
-    if (getStatus() == BridgeStatus::stopped)
-      return;
-    pluginReady.store(false, std::memory_order_release);
-    nonRealtimeMode.store(false, std::memory_order_release);
-    markCrashed("plugin operation cancelled");
+    // The command thread owns process and shared-memory lifetime. Cancellation
+    // only wakes its wait, so it cannot race a concurrent launch or render.
+    cancellationRequested.store(true, std::memory_order_release);
     responseEvent.signal();
-    killWorkerProcess();
+  }
+
+  void resetCancellation() {
+    cancellationRequested.store(false, std::memory_order_release);
   }
 
 private:
@@ -453,6 +459,9 @@ private:
     const auto timeout = static_cast<uint32_t>(juce::jmax(1, timeoutMs));
 
     for (;;) {
+      if (cancellationRequested.load(std::memory_order_acquire))
+        return {StatusCode::pluginCrashed, command,
+                "plugin operation cancelled"};
       {
         const juce::ScopedLock lock(responseLock);
         for (auto it = replies.begin(); it != replies.end(); ++it) {
@@ -508,7 +517,8 @@ private:
     if (status == BridgeStatus::stopped)
       return;
 
-    if (status != BridgeStatus::crashed) {
+    if (status != BridgeStatus::crashed &&
+        !cancellationRequested.load(std::memory_order_acquire)) {
       expectingWorkerShutdown.store(true, std::memory_order_release);
       responseEvent.reset();
       if (status == BridgeStatus::ready)
@@ -597,6 +607,7 @@ private:
   std::atomic<int> statusAtomic{static_cast<int>(BridgeStatus::stopped)};
   std::atomic<bool> expectingWorkerShutdown{false};
   std::atomic<bool> pluginReady{false};
+  std::atomic<bool> cancellationRequested{false};
   std::atomic<bool> nonRealtimeMode{false};
   std::unique_ptr<SharedBlockOwner> sharedBlock;
   juce::String sharedBlockName;

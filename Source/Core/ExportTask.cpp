@@ -2,7 +2,7 @@
 
 // Core/ExportTask —— 离线导出编排：进入前保存播放现场、可选切到目标曲目、
 // 通过 AudioEngine::OfflineExportSession 渲染、结束后恢复播放现场。渲染本身
-// 仍由 AudioEngine::runOfflineExport 执行；模态进度窗口留在 UI 层，由调用方
+// 由 OfflineRenderer 执行；模态进度窗口留在 UI 层，由调用方
 // 提供 onProgress / shouldCancel 回调。runExport 在调用方的工作线程上同步执行。
 
 namespace midi {
@@ -14,13 +14,11 @@ Core::Impl::ExportPlaybackState Core::Impl::captureExportPlaybackState() {
   ExportPlaybackState state;
   state.trackIndex = currentTrackIndex;
   state.file = currentMidiFile;
-  state.position = engine.getMidiPlayer().getPositionInSamples();
+  state.positionSeconds =
+      engine.getMidiPlayer().getPositionInSamples() / sampleRate();
   state.wasPlaying = engine.getMidiPlayer().getPlaying();
-  state.hadPendingResume = pendingResumePlayback;
-  state.wasHandlingTrackEnd = isHandlingTrackEnd;
   ++trackSwitchGeneration;
 
-  pendingResumePlayback = false;
   isHandlingTrackEnd = false;
   engine.getMidiPlayer().setPlaying(false);
   return state;
@@ -37,9 +35,10 @@ Core::Impl::restoreExportPlaybackState(const ExportPlaybackState &state) {
   if (state.file != juce::File{}) {
     if (!state.file.existsAsFile() || !loadMidi(state.file)) {
       currentTrackIndex = -1;
-      pendingResumePlayback = false;
+      currentMidiFile = {};
+      currentMidiName = {};
+      engine.getMidiPlayer().setSequence(nullptr, sampleRate());
       isHandlingTrackEnd = false;
-      notify();
       return juce::Result::fail(L"无法重新加载原曲目: " +
                                 state.file.getFullPathName());
     }
@@ -51,20 +50,19 @@ Core::Impl::restoreExportPlaybackState(const ExportPlaybackState &state) {
   }
 
   currentTrackIndex = state.trackIndex;
-  pendingResumePlayback = state.hadPendingResume;
-  isHandlingTrackEnd = state.wasHandlingTrackEnd;
+  isHandlingTrackEnd = false;
 
-  engine.getMidiPlayer().seekTo(state.position, state.wasPlaying);
+  engine.getMidiPlayer().seekTo(state.positionSeconds * sampleRate(),
+                                state.wasPlaying);
   engine.getMidiPlayer().setPlaying(state.wasPlaying);
-  notify();
   return juce::Result::ok();
 }
 
-Core::ExportResult
-Core::Impl::runExport(int trackIndex, const ExportSettings &settings,
-                      const juce::File &targetFile,
-                      std::function<void(float)> onProgress,
-                      std::function<bool()> shouldCancel) {
+Core::ExportResult Core::Impl::runExport(int trackIndex,
+                                         const ExportSettings &settings,
+                                         const juce::File &targetFile,
+                                         std::function<void(float)> onProgress,
+                                         std::function<bool()> shouldCancel) {
   auto &self = *this;
   std::unique_lock<std::mutex> operationLock(self.exportMutex,
                                              std::try_to_lock);
@@ -78,6 +76,11 @@ Core::Impl::runExport(int trackIndex, const ExportSettings &settings,
   // 避免与捕获/恢复播放现场竞争。
   {
     StateLock lock(self.stateMutex);
+    if (self.pluginTaskActive.load() || self.pluginScanActive.load() ||
+        self.audioConfigurationActive.load()) {
+      self.exportErrorText = L"当前操作尚未结束，无法开始导出。";
+      return ExportResult::Failed;
+    }
     self.exportActiveFlag.store(true);
     self.exportProgressValue.store(0.0f);
     self.exportCancelledFlag = false;
@@ -114,16 +117,14 @@ Core::Impl::runExport(int trackIndex, const ExportSettings &settings,
   {
     AudioEngine::OfflineExportSession session(self.engine, settings);
     if (session.isActive()) {
-      const bool ok = self.engine.runOfflineExport(
+      const bool ok = self.renderer.runOfflineExport(
           targetFile, settings,
           [&self, onProgress](float p) {
             self.exportProgressValue.store(p);
             if (onProgress)
               onProgress(p);
           },
-          [shouldCancel]() -> bool {
-            return shouldCancel && shouldCancel();
-          });
+          [shouldCancel]() -> bool { return shouldCancel && shouldCancel(); });
 
       if (ok) {
         result = ExportResult::Succeeded;
@@ -134,12 +135,16 @@ Core::Impl::runExport(int trackIndex, const ExportSettings &settings,
       } else {
         result = ExportResult::Failed;
       }
+      if (!session.finish()) {
+        StateLock lock(self.stateMutex);
+        self.exportErrorText = self.engine.getLastExportError();
+        result = ExportResult::Failed;
+      }
     } else {
       StateLock lock(self.stateMutex);
       const auto error = self.engine.getLastExportError();
-      self.exportErrorText = error.isEmpty()
-                                 ? juce::String(L"无法初始化离线导出环境。")
-                                 : error;
+      self.exportErrorText =
+          error.isEmpty() ? juce::String(L"无法初始化离线导出环境。") : error;
     }
   }
 
@@ -149,8 +154,12 @@ Core::Impl::runExport(int trackIndex, const ExportSettings &settings,
     StateLock lock(self.stateMutex);
     if (result == ExportResult::Failed && self.exportErrorText.isEmpty())
       self.exportErrorText = self.engine.getLastExportError();
-    if (restore.failed() && self.exportErrorText.isEmpty())
-      self.exportErrorText = restore.getErrorMessage();
+    if (restore.failed()) {
+      if (self.exportErrorText.isNotEmpty())
+        self.exportErrorText += L"\n";
+      self.exportErrorText += restore.getErrorMessage();
+      result = ExportResult::Failed;
+    }
   }
 
   return result;

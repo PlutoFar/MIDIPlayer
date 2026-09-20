@@ -36,7 +36,6 @@ public:
     juce::LookAndFeel::setDefaultLookAndFeel(applicationLookAndFeel.get());
 
     core = std::make_unique<midi::Core>();
-    core->init();
     mainWindow = std::make_unique<MainWindow>(getApplicationName(), *core,
                                               *applicationLookAndFeel);
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../Playlist/PlaybackMode.h"
+
 #include <string>
 #include <vector>
 
@@ -18,12 +20,12 @@ struct PluginInfo {
 struct PluginState {
   bool scanning = false;
   bool loadInProgress = false;
+  bool operationInProgress = false;
   bool loaded = false;
   bool editorOpen = false;
   bool workerCrashed = false;
   std::wstring loadedName;
   std::wstring lastError;
-  std::vector<PluginInfo> available;
 };
 
 struct TransportState {
@@ -35,14 +37,18 @@ struct TransportState {
   std::wstring currentMidiName;
 };
 
-struct PlaylistState {
-  std::vector<std::wstring> trackNames;
-  std::vector<bool> trackAvailable;
+struct PlaylistSummary {
   bool hasUnsavedChanges = false;
   std::wstring changeSummary;
   std::wstring currentListPath;
   std::wstring lastError;
   int playMode = 1;
+};
+
+// Track collections are read on list changes, outside the transport refresh.
+struct PlaylistState : PlaylistSummary {
+  std::vector<std::wstring> trackNames;
+  std::vector<bool> trackAvailable;
 };
 
 struct AudioState {
@@ -65,7 +71,7 @@ struct TaskState {
 struct AppState {
   PluginState plugin;
   TransportState transport;
-  PlaylistState playlist;
+  PlaylistSummary playlist;
   AudioState audio;
   TaskState task;
 };

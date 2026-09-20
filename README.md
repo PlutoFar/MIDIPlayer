@@ -157,8 +157,8 @@ cmake --build build --config Release --target MidiTests
 ```text
 .
 |-- Source/
-|   |-- AudioEngine/    # 音频图、设备管理和离线导出
-|   |-- Core/           # 应用状态、命令与 JUCE 控件适配
+|   |-- AudioEngine/    # 实时音频、设备管理、插件目录和离线编码
+|   |-- Core/           # 应用状态、异步插件命令和播放业务
 |   |-- Midi/           # MIDI 时序与播放控制
 |   |-- Playlist/       # 播放列表模型与持久化
 |   |-- PluginBridge/   # 主进程与插件工作进程协议

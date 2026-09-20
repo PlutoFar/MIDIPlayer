@@ -29,11 +29,15 @@ option(MIDIPLAYER_ENABLE_ASIO
 # ============================================================================
 add_library(MidiCore STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/LegacyBridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/AudioDevices.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Library.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Player.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Playlist.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/ExportTask.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioDeviceService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/PluginLibrary.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/OfflineRenderer.cpp
 )
 
 target_include_directories(MidiCore PUBLIC
@@ -82,6 +86,12 @@ juce_add_gui_app(MidiLegacy
 # Each executable owns its entry point; shared .cpp files belong to MidiCore.
 target_sources(MidiLegacy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentComponent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentPlugins.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentFiles.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentSettings.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/AudioSettingsContent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/FontSettingsContent.cpp
 )
 
 target_link_libraries(MidiLegacy PRIVATE

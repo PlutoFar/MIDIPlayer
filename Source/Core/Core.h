@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../AudioEngine/AudioDeviceState.h"
 #include "State.h"
 
 #include <functional>
@@ -9,14 +10,12 @@
 
 namespace midi {
 
-class LegacyCoreAdapter;
-
 /**
     midi::Core —— 与界面框架无关的应用状态与命令入口。
 
     通过 state() 获取应用状态快照，通过命令方法驱动播放、列表和导出。
     Core 内部持有唯一的 AudioEngine 与 PlaylistManager。
-    LegacyCoreAdapter 为 JUCE 音频设置和播放列表控件提供底层对象绑定。
+    界面通过值快照读取列表和设备，通过命令修改状态。
 */
 class Core {
 public:
@@ -39,10 +38,8 @@ public:
   Core(const Core &) = delete;
   Core &operator=(const Core &) = delete;
 
-  bool init();
-  void shutdown();
-
   AppState state() const;
+  PlaylistState playlistState() const;
 
   // 每帧由 UI 调用，承载与界面无关的轮询业务：采样率同步、曲目结束推进、
   // seek 后延迟恢复、worker 崩溃后停止播放。uiSuppressTrackAdvance 在用户拖动
@@ -52,9 +49,10 @@ public:
   // 插件库
   bool scan(std::function<bool()> shouldCancel = {});
   std::vector<PluginInfo> plugins() const;
-  bool load(const PluginId &id);
-  void unload();
-  bool editor();
+  // Completion runs on the message thread. Destruction cancels and joins work.
+  bool loadAsync(const PluginId &id, std::function<void(bool)> completion);
+  bool unloadAsync(std::function<void(bool)> completion);
+  bool editorAsync(std::function<void(bool)> completion);
   void closeEditor();
   bool hasPluginLoaded() const;
   std::wstring loadedPluginName() const;
@@ -88,7 +86,7 @@ public:
   bool moveTrack(int fromIndex, int toIndex);
   bool refreshTrack(int index);
   int findTrackIndex(const std::wstring &path) const;
-  void clearPlaylist();
+  bool clearPlaylist();
   void setPlayMode(int mode);
   std::wstring trackFileAt(int index) const;
   bool saveList(const std::wstring &path);
@@ -101,6 +99,14 @@ public:
   bool hasAudioDevice() const;
   bool isFirstRunAudio() const;
   bool wasDeviceRestoredWithFallback() const;
+  AudioDeviceState audioDeviceState(bool rescan = false);
+  juce::String setAudioDriver(const juce::String &name);
+  juce::String
+  configureAudioDevice(const juce::AudioDeviceManager::AudioDeviceSetup &setup);
+  juce::String showAudioControlPanel();
+  void playTestSound();
+  void addAudioDeviceListener(juce::ChangeListener *listener);
+  void removeAudioDeviceListener(juce::ChangeListener *listener);
 
   // 离线导出（同步执行；进度/取消由 UI 提供回调，模态窗口留在 UI 层）。
   enum class ExportResult { Succeeded, Cancelled, Failed };
@@ -111,8 +117,6 @@ public:
   std::wstring lastExportError() const;
 
 private:
-  friend class LegacyCoreAdapter;
-
   struct Impl;
   std::unique_ptr<Impl> impl;
 };

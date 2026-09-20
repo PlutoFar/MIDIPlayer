@@ -1,41 +1,98 @@
 #include "CoreImpl.h"
 
-// Core/Library —— 插件扫描、加载、卸载、editor、worker 崩溃清理。
-// 从 MainContentComponent 抽出的与界面无关的插件库业务。
-
 namespace midi {
 
-bool Core::Impl::scan(std::function<bool()> shouldCancel) {
-  std::lock_guard<std::mutex> scanLock(pluginScanMutex);
-  if (pluginLoadActive.load() || exportActiveFlag.load())
-    return false;
+Core::Impl::~Impl() {
+  // Joining holds no state/message lock. IPC work never waits for UI callbacks.
+  life.reset();
+  cancelPendingUpdate();
+  engine.cancelPendingPluginOperation();
+  if (pluginTask.joinable())
+    pluginTask.join();
+  cancelPendingUpdate();
+}
 
-  pluginScanActive.store(true);
+bool Core::Impl::startPluginTask(std::function<bool()> operation,
+                                 std::function<void(bool)> completion,
+                                 bool changesAudio) {
+  jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+  {
+    StateLock lock(stateMutex);
+    if (pluginTaskActive.load() || pluginScanActive.load() ||
+        exportActiveFlag.load() || audioConfigurationActive.load()) {
+      pluginErrorText = L"当前操作尚未结束";
+      return false;
+    }
+    pluginTaskActive.store(true);
+    pluginChangesAudio.store(changesAudio);
+    pluginErrorText.clear();
+  }
+  engine.resetPluginCancellation();
+  pluginCompletion = std::move(completion);
+  pluginTask = std::thread([this, operation = std::move(operation)] {
+    pluginTaskSucceeded = operation();
+    triggerAsyncUpdate();
+  });
+  return true;
+}
+
+void Core::Impl::handleAsyncUpdate() {
+  pluginTask.join();
+  auto completion = std::move(pluginCompletion);
+  const bool succeeded = pluginTaskSucceeded;
+  {
+    StateLock lock(stateMutex);
+    if (!succeeded)
+      pluginErrorText = engine.getLastPluginError();
+    pluginTaskActive.store(false);
+    pluginChangesAudio.store(false);
+  }
+  if (closeEditorWhenIdle) {
+    closeEditorWhenIdle = false;
+    closeEditor();
+  }
+  if (completion)
+    completion(succeeded);
+}
+
+bool Core::Impl::scan(std::function<bool()> shouldCancel) {
+  {
+    StateLock lock(stateMutex);
+    if (pluginScanActive.load() || pluginTaskActive.load() ||
+        exportActiveFlag.load() || audioConfigurationActive.load()) {
+      pluginErrorText = L"当前操作尚未结束";
+      return false;
+    }
+    pluginScanActive.store(true);
+    pluginErrorText.clear();
+  }
   struct ScanGuard {
     std::atomic<bool> &active;
     ~ScanGuard() { active.store(false); }
   } scanGuard{pluginScanActive};
-
   juce::KnownPluginList scanned;
   {
     StateLock lock(stateMutex);
-    engine.copyPluginListTo(scanned);
+    library.copyPluginListTo(scanned);
   }
-
-  if (!engine.scanPlugins(scanned, shouldCancel))
+  if (!library.scanPlugins(scanned, shouldCancel)) {
+    StateLock lock(stateMutex);
+    pluginErrorText = library.lastError();
     return false;
-
+  }
   {
     StateLock lock(stateMutex);
-    engine.replacePluginList(scanned);
+    if (!library.replacePluginList(scanned)) {
+      pluginErrorText = library.lastError();
+      return false;
+    }
   }
-  notify();
   return true;
 }
 
 bool Core::Impl::findById(const PluginId &id, juce::PluginDescription &out) {
   StateLock lock(stateMutex);
-  for (const auto &type : engine.getPluginList().getTypes()) {
+  for (const auto &type : library.plugins().getTypes()) {
     if (std::wstring(type.createIdentifierString().toWideCharPointer()) == id) {
       out = type;
       return true;
@@ -44,62 +101,84 @@ bool Core::Impl::findById(const PluginId &id, juce::PluginDescription &out) {
   return false;
 }
 
-bool Core::Impl::load(const PluginId &id) {
-  if (exportActiveFlag.load() || pluginScanActive.load() ||
-      pluginLoadActive.exchange(true))
+bool Core::Impl::loadAsync(const PluginId &id,
+                           std::function<void(bool)> completion) {
+  juce::PluginDescription description;
+  if (!audio.hasDevice() || !findById(id, description)) {
+    StateLock lock(stateMutex);
+    pluginErrorText = audio.hasDevice() ? L"未找到所选插件，请重新扫描"
+                                        : L"没有可用的音频输出设备";
     return false;
-
-  struct LoadGuard {
-    std::atomic<bool> &active;
-    ~LoadGuard() { active.store(false); }
-  } loadGuard{pluginLoadActive};
-
-  {
+  }
+  const bool accepted = startPluginTask(
+      [this, description] { return engine.loadPlugin(description); },
+      [id, completion = std::move(completion)](bool succeeded) {
+        if (succeeded) {
+          getAppSettings().setLastPluginId(juce::String(id.c_str()));
+          getAppSettings().save();
+        }
+        if (completion)
+          completion(succeeded);
+      });
+  if (accepted) {
     StateLock lock(stateMutex);
     ++trackSwitchGeneration;
-    pendingResumePlayback = false;
     isHandlingTrackEnd = false;
     engine.getMidiPlayer().setPlaying(false);
   }
-
-  juce::PluginDescription desc;
-  if (findById(id, desc)) {
-    const bool ok = engine.loadPlugin(desc);
-    if (ok) {
-      getAppSettings().setLastPluginId(desc.createIdentifierString());
-      getAppSettings().save();
-    }
-    notify();
-    return ok;
-  }
-  return false;
+  return accepted;
 }
 
-void Core::Impl::unload() {
-  if (exportActiveFlag.load() || pluginLoadActive.load())
+bool Core::Impl::unloadAsync(std::function<void(bool)> completion) {
+  const bool accepted = startPluginTask(
+      [this] {
+        engine.unloadPlugin();
+        return !engine.hasPluginWorkerCrashed();
+      },
+      [completion = std::move(completion)](bool succeeded) {
+        getAppSettings().setLastPluginId({});
+        getAppSettings().save();
+        if (completion)
+          completion(succeeded);
+      });
+  if (accepted) {
+    StateLock lock(stateMutex);
+    ++trackSwitchGeneration;
+    engine.getMidiPlayer().setPlaying(false);
+  }
+  return accepted;
+}
+
+bool Core::Impl::editorAsync(std::function<void(bool)> completion) {
+  if (!engine.hasPluginLoaded())
+    return false;
+  return startPluginTask([this] { return engine.openPluginEditor(); },
+                         std::move(completion), false);
+}
+
+void Core::Impl::closeEditor() {
+  if (pluginTaskActive.load()) {
+    closeEditorWhenIdle = true;
     return;
-  {
-    StateLock lock(stateMutex);
-    ++trackSwitchGeneration;
-    pendingResumePlayback = false;
-    isHandlingTrackEnd = false;
-    engine.getMidiPlayer().setPlaying(false);
   }
-  engine.unloadPlugin();
-  getAppSettings().setLastPluginId({});
-  getAppSettings().save();
-  notify();
-}
-
-bool Core::Impl::editor() {
-  if (exportActiveFlag.load() || pluginLoadActive.load())
-    return false;
-  return engine.openPluginEditor();
+  if (engine.hasPluginLoaded())
+    startPluginTask(
+        [this] {
+          engine.closePluginEditor();
+          return !engine.hasPluginWorkerCrashed();
+        },
+        {}, false);
 }
 
 void Core::Impl::terminateCrashedWorker() {
-  if (engine.hasPluginWorkerCrashed())
-    engine.terminateCrashedPluginWorker();
+  if (!engine.hasPluginWorkerCrashed())
+    return;
+  startPluginTask(
+      [this] {
+        engine.terminateCrashedPluginWorker();
+        return true;
+      },
+      {});
 }
 
 } // namespace midi
