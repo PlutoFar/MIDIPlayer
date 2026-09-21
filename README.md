@@ -7,7 +7,7 @@
 <p align="center">Windows x64 MIDI 播放器与 VST3 乐器宿主</p>
 
 <p align="center">
-  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.1">v1.2.1</a>
+  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.2">v1.2.2</a>
   ·
   <a href="https://github.com/PlutoFar/MIDIPlayer/releases">发布版本</a>
   ·
@@ -58,9 +58,9 @@ MIDI Player 是 Windows MIDI（乐器数字接口）文件播放器，支持通�
 
 ## 下载与快速开始
 
-当前发布包：`MIDIPlayer-v1.2.1-Windows-x64.zip`，已包含便携模式标记。
+当前发布包：`MIDIPlayer-v1.2.2-Windows-x64.zip`，已包含便携模式标记。
 
-下载地址：[GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.1)
+下载地址：[GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.2)
 
 1. 将压缩包解压到具有写入权限的目录。
 2. 确认 `MidiPlayer.exe` 与 `MidiWorker.exe` 位于同一目录。
