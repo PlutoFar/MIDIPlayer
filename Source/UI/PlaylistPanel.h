@@ -62,7 +62,7 @@ public:
       : core(c), playlistState(c.playlistState()) {
     addAndMakeVisible(listBox);
     listBox.setModel(this);
-    listBox.setRowHeight(LegacyDesignTokens::Layout::playlistMinimumRowHeight);
+    listBox.setRowHeight(DesignTokens::Layout::playlistMinimumRowHeight);
     listBox.setColour(juce::ListBox::backgroundColourId,
                       juce::Colours::transparentBlack);
     listBox.setColour(juce::ListBox::outlineColourId,
@@ -176,7 +176,7 @@ public:
     auto *laf = dynamic_cast<FluentLookAndFeel *>(&getLookAndFeel());
     const auto font = laf != nullptr ? laf->getPlaylistFont(size)
                                      : juce::Font(juce::FontOptions(size));
-    listBox.setRowHeight(LegacyDesignTokens::Layout::playlistRowHeight(
+    listBox.setRowHeight(DesignTokens::Layout::playlistRowHeight(
         font.getHeight(), getAppSettings().getPlaylistRowSpacingAutomatic(),
         getAppSettings().getPlaylistManualRowHeight()));
   }

@@ -59,14 +59,14 @@ FontSettingsContent::FontSettingsContent(FluentLookAndFeel &laf)
   FluentSettingsStyle::configureLabel(uiFontSizeLabel, fluentLookAndFeel);
 
   addAndMakeVisible(uiFontSizeSlider);
-  uiFontSizeSlider.setRange(LegacyDesignTokens::Typography::minimumBody,
-                            LegacyDesignTokens::Typography::maximumBody, 1.0);
-  uiFontSizeSlider.setValue(getAppSettings().getLegacyUIFontSize());
+  uiFontSizeSlider.setRange(DesignTokens::Typography::minimumBody,
+                            DesignTokens::Typography::maximumBody, 1.0);
+  uiFontSizeSlider.setValue(getAppSettings().getUIFontSize());
   uiFontSizeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
   uiFontSizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
   uiFontSizeSlider.onValueChange = [this]() {
     const float size = (float)uiFontSizeSlider.getValue();
-    getAppSettings().setLegacyUIFontSize(size);
+    getAppSettings().setUIFontSize(size);
     fluentLookAndFeel.setUIFontSize(size);
     refreshTypography();
     if (onSettingsChanged)
@@ -136,8 +136,8 @@ FontSettingsContent::FontSettingsContent(FluentLookAndFeel &laf)
 
   addAndMakeVisible(playlistRowSpacingSlider);
   playlistRowSpacingSlider.setRange(
-      LegacyDesignTokens::Layout::playlistMinimumRowHeight,
-      LegacyDesignTokens::Layout::playlistMaximumRowHeight, 1.0);
+      DesignTokens::Layout::playlistMinimumRowHeight,
+      DesignTokens::Layout::playlistMaximumRowHeight, 1.0);
   playlistRowSpacingSlider.setValue(
       getAppSettings().getPlaylistManualRowHeight());
   playlistRowSpacingSlider.setSliderStyle(juce::Slider::LinearHorizontal);

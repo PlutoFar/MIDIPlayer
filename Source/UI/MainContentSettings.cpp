@@ -100,7 +100,7 @@ void MainContentComponent::loadSettings() {
   core.setPlayMode(savedMode);
 
   fluentLookAndFeel.setUIFont(settings.getUIFontName());
-  fluentLookAndFeel.setUIFontSize(settings.getLegacyUIFontSize());
+  fluentLookAndFeel.setUIFontSize(settings.getUIFontSize());
   fluentLookAndFeel.setPlaylistFont(settings.getPlaylistFontName());
 
   playlistPanel.refresh();

@@ -13,7 +13,7 @@
 class SvgButton : public juce::Button, public juce::Timer {
 public:
   explicit SvgButton(const juce::String& svgString,
-                     float visualSize = LegacyDesignTokens::Icon::toolbar)
+                     float visualSize = DesignTokens::Icon::toolbar)
       : juce::Button(""), iconVisualSize(visualSize) {
     setMouseClickGrabsKeyboardFocus(false);
     auto xml = juce::XmlDocument::parse(svgString);
@@ -199,7 +199,7 @@ public:
                                      systemGlyphSize);
           else
             laf->drawIconGlyph(g, buttonText, getLocalBounds().toFloat(),
-                               LegacyDesignTokens::Icon::toolbar);
+                               DesignTokens::Icon::toolbar);
         } else {
           g.setFont(laf->getBodyFont());
           g.drawText(buttonText, getLocalBounds(),
@@ -666,7 +666,7 @@ FluentLookAndFeel::createDocumentWindowButton(int buttonType) {
     b->setButtonText(L"\uE922");
   }
 
-  b->setSystemGlyphSize(LegacyDesignTokens::Icon::windowCaption);
+  b->setSystemGlyphSize(DesignTokens::Icon::windowCaption);
 
   return b;
 }
@@ -676,10 +676,10 @@ inline void FluentLookAndFeel::positionDocumentWindowButtons(
     int titleBarH, juce::Button *minimiseButton, juce::Button *maximiseButton,
     juce::Button *closeButton, bool positionTitleBarButtonsOnLeft) {
   const int margin =
-      LegacyDesignTokens::Layout::dialogCaptionButtonOuterMargin;
+      DesignTokens::Layout::dialogCaptionButtonOuterMargin;
   const int buttonHeight = juce::jmax(1, titleBarH);
   const int buttonWidth =
-      LegacyDesignTokens::Layout::dialogCaptionButtonWidth;
+      DesignTokens::Layout::dialogCaptionButtonWidth;
   const int outerRight = juce::jmax(window.getWidth(), titleBarX + titleBarW);
   const int rightAlignedY = 0;
   const int rightAlignedHeight = buttonHeight + juce::jmax(0, titleBarY);

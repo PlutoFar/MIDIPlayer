@@ -1,5 +1,5 @@
 #include "ExportDialog.h"
-#include "LegacyExportTask.h"
+#include "OfflineExportThread.h"
 #include "MainContentComponent.h"
 #include "SettingsPersistence.h"
 

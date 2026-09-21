@@ -5,7 +5,7 @@
 // Units: JUCE 组件几何和字体高度为逻辑单位，显示器 DPI 由 peer 处理。
 
 #include "ComboBoxAnimationSupport.h"
-#include "LegacyDesignTokens.h"
+#include "DesignTokens.h"
 #include "../Utils/UserSettings.h"
 #include "../Utils/Win11Helpers.h"
 #include "FluentDialogSupport.h"
@@ -282,12 +282,12 @@ public:
 
   juce::String uiFontName = "Source Han Sans SC";
   juce::String playlistFontName = "Microsoft YaHei UI";
-  float uiFontSize = LegacyDesignTokens::Typography::defaultLegacyBody;
+  float uiFontSize = DesignTokens::Typography::defaultBodySize;
 
   void setUIFont(const juce::String &fontName) { uiFontName = fontName; }
   void setUIFontSize(float size) {
-    uiFontSize = juce::jlimit(LegacyDesignTokens::Typography::minimumBody,
-                              LegacyDesignTokens::Typography::maximumBody,
+    uiFontSize = juce::jlimit(DesignTokens::Typography::minimumBody,
+                              DesignTokens::Typography::maximumBody,
                               size);
   }
   void setPlaylistFont(const juce::String &fontName) {
@@ -299,10 +299,10 @@ public:
   const juce::String &getPlaylistFontName() const { return playlistFontName; }
 
   juce::Font getDefaultFont(
-      float size = LegacyDesignTokens::Typography::body,
+      float size = DesignTokens::Typography::body,
       bool semibold = false) const {
     const float adjustedSize =
-        LegacyDesignTokens::Typography::resolve(size, uiFontSize);
+        DesignTokens::Typography::resolve(size, uiFontSize);
     juce::FontOptions options(uiFontName, scaled(adjustedSize),
                               semibold ? juce::Font::bold : juce::Font::plain);
     juce::Font font(options);
@@ -324,34 +324,34 @@ public:
   }
 
   juce::Font getBodyFont(bool semibold = false) const {
-    return getDefaultFont(LegacyDesignTokens::Typography::body, semibold);
+    return getDefaultFont(DesignTokens::Typography::body, semibold);
   }
 
   juce::Font getBodyLargeFont(bool semibold = false) const {
-    return getDefaultFont(LegacyDesignTokens::Typography::bodyLarge,
+    return getDefaultFont(DesignTokens::Typography::bodyLarge,
                           semibold);
   }
 
   juce::Font getWindowTitleFont(bool semibold = true) const {
-    return getDefaultFont(LegacyDesignTokens::Typography::windowTitle,
+    return getDefaultFont(DesignTokens::Typography::windowTitle,
                           semibold);
   }
 
   juce::Font getCaptionFont(bool semibold = false) const {
-    return getDefaultFont(LegacyDesignTokens::Typography::caption, semibold);
+    return getDefaultFont(DesignTokens::Typography::caption, semibold);
   }
 
   juce::Font getNavigationFont(bool semibold = false) const {
-    return getDefaultFont(LegacyDesignTokens::Typography::navigation,
+    return getDefaultFont(DesignTokens::Typography::navigation,
                           semibold);
   }
 
   juce::Font getSubtitleFont(bool semibold = false) const {
-    return getDefaultFont(LegacyDesignTokens::Typography::subtitle, semibold);
+    return getDefaultFont(DesignTokens::Typography::subtitle, semibold);
   }
 
   juce::Font getTitleFont(bool semibold = true) const {
-    return getDefaultFont(LegacyDesignTokens::Typography::title, semibold);
+    return getDefaultFont(DesignTokens::Typography::title, semibold);
   }
 
   juce::AlertWindow *createAlertWindow(
@@ -365,7 +365,7 @@ public:
   }
 
   int getAlertWindowButtonHeight() override {
-    return LegacyDesignTokens::Layout::controlHeight(uiFontSize);
+    return DesignTokens::Layout::controlHeight(uiFontSize);
   }
 
   juce::Font getAlertWindowTitleFont() override {
@@ -399,7 +399,7 @@ public:
   }
 
   juce::Font getIconFont(
-      float size = LegacyDesignTokens::Icon::toolbar) const {
+      float size = DesignTokens::Icon::toolbar) const {
     // 图标字体探测使用静态缓存；运行期间安装字体不会刷新。
     static bool hasFluentIcons = []() {
       auto fonts = juce::Font::findAllTypefaceNames();
@@ -525,7 +525,7 @@ public:
       g.setColour(button.getToggleState() ? juce::Colours::white
                                           : colors.textPrimary);
       drawIconGlyph(g, text, button.getLocalBounds().toFloat(),
-                    juce::jmin(LegacyDesignTokens::Icon::toolbar,
+                    juce::jmin(DesignTokens::Icon::toolbar,
                                button.getHeight() * 0.6f));
       return;
     } else {
@@ -541,14 +541,14 @@ public:
   void drawCircularButton(juce::Graphics &g, juce::Rectangle<float> bounds,
                           const juce::String &icon, bool, bool, bool) {
     g.setColour(colors.textPrimary);
-    drawIconGlyph(g, icon, bounds, LegacyDesignTokens::Icon::primary);
+    drawIconGlyph(g, icon, bounds, DesignTokens::Icon::primary);
   }
 
   int getSliderThumbRadius(juce::Slider &slider) override {
     if (slider.getSliderStyle() == juce::Slider::LinearHorizontal ||
         slider.getSliderStyle() == juce::Slider::LinearVertical)
       return scaledInt(juce::roundToInt(
-          LegacyDesignTokens::Slider::thumbDiameter * 0.5f));
+          DesignTokens::Slider::thumbDiameter * 0.5f));
     return juce::LookAndFeel_V4::getSliderThumbRadius(slider);
   }
 
@@ -605,9 +605,9 @@ public:
     auto bounds =
         juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height);
     const float trackHeight =
-        scaled(LegacyDesignTokens::Slider::trackThickness);
+        scaled(DesignTokens::Slider::trackThickness);
     const float thumbSize =
-        scaled(LegacyDesignTokens::Slider::thumbDiameter);
+        scaled(DesignTokens::Slider::thumbDiameter);
     float thumbRadius = thumbSize / 2.0f;
 
     // 滑块布局将圆点中心限制在组件内侧；轨道延伸到组件边界，
@@ -649,7 +649,7 @@ public:
     float thumbY = bounds.getCentreY() - thumbRadius;
 
     float innerSize =
-        scaled(LegacyDesignTokens::Slider::innerThumbDiameter);
+        scaled(DesignTokens::Slider::innerThumbDiameter);
     const bool preciseThumbHover = static_cast<bool>(
         slider.getProperties().getWithDefault("fluentPreciseThumbHover", false));
     bool thumbHovered = slider.isMouseOver();
@@ -664,10 +664,10 @@ public:
     if (isEnabled) {
       if (slider.isMouseButtonDown())
         innerSize = scaled(
-            LegacyDesignTokens::Slider::pressedInnerThumbDiameter);
+            DesignTokens::Slider::pressedInnerThumbDiameter);
       else if (thumbHovered)
         innerSize =
-            scaled(LegacyDesignTokens::Slider::hoverInnerThumbDiameter);
+            scaled(DesignTokens::Slider::hoverInnerThumbDiameter);
     }
 
     float innerRadius = innerSize / 2.0f;
@@ -815,7 +815,7 @@ public:
 
     const int itemHeight = juce::jmax(
         label.getHeight(),
-        LegacyDesignTokens::Layout::controlHeight(uiFontSize));
+        DesignTokens::Layout::controlHeight(uiFontSize));
     const int visibleItems = juce::jlimit(1, 9, box.getNumItems());
     const int estimatedHeight = visibleItems * itemHeight + scaledInt(12);
     const auto userBounds =
@@ -963,18 +963,18 @@ public:
     const auto font = getBodyFont();
     const int width =
         juce::GlyphArrangement::getStringWidthInt(font, text) + 24;
-    return {width, LegacyDesignTokens::Layout::controlHeight(uiFontSize)};
+    return {width, DesignTokens::Layout::controlHeight(uiFontSize)};
   }
 
   juce::Point<int> getFluentValueTooltipSize(const juce::String &text) const {
     const auto font = getCaptionFont();
     const int width = juce::GlyphArrangement::getStringWidthInt(font, text) +
-                      LegacyDesignTokens::Slider::volumeTooltipHorizontalPadding *
+                      DesignTokens::Slider::volumeTooltipHorizontalPadding *
                           2;
     const int height = juce::jmax(
-        LegacyDesignTokens::Slider::volumeTooltipMinimumHeight,
-        LegacyDesignTokens::Typography::lineHeight(
-            LegacyDesignTokens::Typography::caption, uiFontSize) +
+        DesignTokens::Slider::volumeTooltipMinimumHeight,
+        DesignTokens::Typography::lineHeight(
+            DesignTokens::Typography::caption, uiFontSize) +
             8);
     return {width, height};
   }
@@ -1077,12 +1077,12 @@ public:
 
     auto title = window.getName();
     auto titleBounds = juce::Rectangle<int>(0, 0, w, h).reduced(
-        LegacyDesignTokens::Layout::dialogTitleHorizontalPadding, 0);
+        DesignTokens::Layout::dialogTitleHorizontalPadding, 0);
     if (auto *closeButton = window.getCloseButton())
       titleBounds.setRight(juce::jmin(
           titleBounds.getRight(),
           closeButton->getX() -
-              LegacyDesignTokens::Layout::dialogTitleHorizontalPadding));
+              DesignTokens::Layout::dialogTitleHorizontalPadding));
     else
       titleBounds.setRight(juce::jmin(titleBounds.getRight(),
                                      titleSpaceX + titleSpaceW));

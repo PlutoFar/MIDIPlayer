@@ -79,10 +79,10 @@ int runPersistenceTests() {
 
   {
     UserSettings settings(settingsFile);
-    expect(failures, settings.getUIFontSize() == 14.0f,
+    expect(failures, settings.getBaseUIFontSize() == 14.0f,
            "UI font size should default to 14");
-    expect(failures, settings.getLegacyUIFontSize() == 16.0f,
-           "Legacy UI font size should migrate the old default to 16");
+    expect(failures, settings.getUIFontSize() == 16.0f,
+           "Effective UI font size should migrate the old default to 16");
     expect(failures, settings.getPlaylistRowSpacingAutomatic() &&
                          settings.getPlaylistManualRowHeight() == 48,
            "playlist row spacing should default to automatic with a 48-pixel "
@@ -92,10 +92,10 @@ int runPersistenceTests() {
                settings.getDialogMaterialOpacity() == 0.78f &&
                settings.getDialogMaterialStrength() == 24,
            "dialog materials should default to Acrylic with balanced values");
-    settings.setUIFontSize(30.0f);
-    expect(failures, settings.getUIFontSize() == 20.0f,
+    settings.setBaseUIFontSize(30.0f);
+    expect(failures, settings.getBaseUIFontSize() == 20.0f,
            "UI font size should clamp to the supported maximum");
-    settings.setUIFontSize(18.0f);
+    settings.setBaseUIFontSize(18.0f);
     settings.setDialogMaterialType(WindowMaterial::Type::Aero);
     settings.setDialogMaterialOpacity(0.1f);
     settings.setDialogMaterialStrength(80);
@@ -105,10 +105,10 @@ int runPersistenceTests() {
   }
   {
     UserSettings settings(settingsFile);
-    expect(failures, settings.getUIFontSize() == 18.0f,
+    expect(failures, settings.getBaseUIFontSize() == 18.0f,
            "UI font size should persist");
-    expect(failures, settings.getLegacyUIFontSize() == 18.0f,
-           "Legacy UI font size should preserve a larger migrated value");
+    expect(failures, settings.getUIFontSize() == 18.0f,
+           "Effective UI font size should preserve a larger configured value");
     expect(failures,
            settings.getDialogMaterialType() ==
                    WindowMaterial::Type::Aero &&
@@ -120,21 +120,21 @@ int runPersistenceTests() {
     settings.setPlaylistManualRowHeight(200);
     expect(failures, settings.getPlaylistManualRowHeight() == 96,
            "manual playlist row height should clamp to the supported maximum");
-    settings.setLegacyUIFontSize(30.0f);
-    expect(failures, settings.getLegacyUIFontSize() == 22.0f,
-           "Legacy UI font size should clamp to the supported maximum");
+    settings.setUIFontSize(30.0f);
+    expect(failures, settings.getUIFontSize() == 22.0f,
+           "Effective UI font size should clamp to the supported maximum");
     settings.setUIFontSize(8.0f);
-    expect(failures, settings.getUIFontSize() == 12.0f,
-           "UI font size should clamp to the supported minimum");
-    expect(failures, settings.save(), "Legacy UI font size should save");
+    expect(failures, settings.getUIFontSize() == 14.0f,
+           "Effective UI font size should clamp to the supported minimum");
+    expect(failures, settings.save(), "UI font size should save");
   }
   {
     UserSettings settings(settingsFile);
-    expect(failures, settings.getLegacyUIFontSize() == 22.0f,
-           "Legacy UI font size should persist independently");
-    settings.setLegacyUIFontSize(8.0f);
-    expect(failures, settings.getLegacyUIFontSize() == 14.0f,
-           "Legacy UI font size should clamp to the supported minimum");
+    expect(failures, settings.getUIFontSize() == 14.0f,
+           "Effective UI font size should persist independently");
+    settings.setUIFontSize(8.0f);
+    expect(failures, settings.getUIFontSize() == 14.0f,
+           "Effective UI font size should clamp to the supported minimum");
   }
 
   tempDir.deleteRecursively();

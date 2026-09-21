@@ -166,23 +166,24 @@ public:
     settings.setValue("uiFontName", fontName);
   }
 
-  float getUIFontSize() const {
+  float getBaseUIFontSize() const {
     return juce::jlimit(
         12.0f, 20.0f,
         (float)settings.getDoubleValue("uiFontSize", 14.0));
   }
-  void setUIFontSize(float size) {
+  void setBaseUIFontSize(float size) {
     settings.setValue("uiFontSize", juce::jlimit(12.0f, 20.0f, size));
   }
 
-  float getLegacyUIFontSize() const {
-    const float migratedSize = juce::jmax(16.0f, getUIFontSize());
+  // Compatibility: 保留读取历史序列化键，使升级后的配置继续使用当前字号。
+  float getUIFontSize() const {
+    const float migratedSize = juce::jmax(16.0f, getBaseUIFontSize());
     return juce::jlimit(
         14.0f, 22.0f,
         (float)settings.getDoubleValue("legacyUiFontSize", migratedSize));
   }
 
-  void setLegacyUIFontSize(float size) {
+  void setUIFontSize(float size) {
     settings.setValue("legacyUiFontSize",
                       juce::jlimit(14.0f, 22.0f, size));
   }

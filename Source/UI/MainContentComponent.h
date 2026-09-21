@@ -11,8 +11,8 @@
 #include "CustomControls.h"
 #include "CustomLookAndFeel.h"
 #include "FluentSettingsStyle.h"
-#include "LegacyIconAssets.h"
-#include "LegacyTransportWidgets.h"
+#include "IconAssets.h"
+#include "TransportWidgets.h"
 #include "NavigationSidebar.h"
 #include "PlaylistPanel.h"
 #include "PluginWindowLifecycle.h"
@@ -157,7 +157,7 @@ private:
 
   void drawIconButton(juce::Graphics &g, juce::Button &btn,
                       const juce::String &icon,
-                      float iconSize = LegacyDesignTokens::Icon::toolbar);
+                      float iconSize = DesignTokens::Icon::toolbar);
 
   void drawIconButtonCombined(juce::Graphics &g, juce::Button &btn,
                               const juce::String &mainIcon,

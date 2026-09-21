@@ -10,7 +10,7 @@ MainContentComponent::MainContentComponent(
   setWantsKeyboardFocus(true);
   loadSettings();
 
-  auto xml = juce::XmlDocument::parse(LegacyIconAssets::sequentialPlaybackSvg);
+  auto xml = juce::XmlDocument::parse(IconAssets::sequentialPlaybackSvg);
   if (xml != nullptr) {
     sequentialIconDrawable = juce::Drawable::createFromSVG(*xml);
   }
@@ -339,14 +339,14 @@ void MainContentComponent::paintOverChildren(juce::Graphics &g) {
   drawIconButton(g, openPluginBtn, L"\uE8A7");
   drawIconButton(g, exportBtn, L"\uE896");
 
-  drawIconButton(g, prevBtn, L"\uE892", LegacyDesignTokens::Icon::transport);
+  drawIconButton(g, prevBtn, L"\uE892", DesignTokens::Icon::transport);
   drawPlayButton(g, playBtn, isPlaying);
-  drawIconButton(g, nextBtn, L"\uE893", LegacyDesignTokens::Icon::transport);
-  drawIconButton(g, stopBtn, L"\uE71A", LegacyDesignTokens::Icon::transport);
+  drawIconButton(g, nextBtn, L"\uE893", DesignTokens::Icon::transport);
+  drawIconButton(g, stopBtn, L"\uE71A", DesignTokens::Icon::transport);
 
   float vol = (float)volumeSlider.getValue();
   const auto volIcon = getVolumeIconGlyph(vol);
-  drawIconButton(g, volumeBtn, volIcon, LegacyDesignTokens::Icon::transport);
+  drawIconButton(g, volumeBtn, volIcon, DesignTokens::Icon::transport);
 
   juce::String loopIcon;
   bool isSequential = false;
@@ -380,7 +380,7 @@ void MainContentComponent::paintOverChildren(juce::Graphics &g) {
         playbackModeAnimationScale, playbackModeAnimationScale, b.getCentreX(),
         b.getCentreY()));
     drawIconButton(g, loopModeBtn, loopIcon,
-                   LegacyDesignTokens::Icon::transport);
+                   DesignTokens::Icon::transport);
     g.restoreState();
   }
 
@@ -408,27 +408,27 @@ void MainContentComponent::handleAsyncUpdate() {
   int navWidth = navigation.getPreferredWidth();
   navigation.setBounds(area.removeFromLeft(navWidth));
 
-  const int transportHeight = LegacyDesignTokens::Layout::transportHeight(
+  const int transportHeight = DesignTokens::Layout::transportHeight(
       fluentLookAndFeel.getUIFontSize());
   auto transportArea = area.removeFromBottom(transportHeight);
   transportBar.setBounds(transportArea);
   layoutTransportBar(transportArea);
 
-  constexpr int padding = LegacyDesignTokens::Layout::contentHorizontalPadding;
+  constexpr int padding = DesignTokens::Layout::contentHorizontalPadding;
   auto content =
-      area.reduced(padding, LegacyDesignTokens::Layout::contentVerticalPadding);
+      area.reduced(padding, DesignTokens::Layout::contentVerticalPadding);
 
   auto header =
-      content.removeFromTop(LegacyDesignTokens::Layout::pageHeaderHeight(
+      content.removeFromTop(DesignTokens::Layout::pageHeaderHeight(
           fluentLookAndFeel.getUIFontSize()));
 
-  constexpr int btnSize = LegacyDesignTokens::Layout::toolbarButtonSize;
-  constexpr int comboWidth = LegacyDesignTokens::Layout::pluginSelectorWidth;
+  constexpr int btnSize = DesignTokens::Layout::toolbarButtonSize;
+  constexpr int comboWidth = DesignTokens::Layout::pluginSelectorWidth;
   const int availableComboWidth =
       header.getWidth() - btnSize * 4 -
-      LegacyDesignTokens::Layout::pageTitleMinimumWidth;
+      DesignTokens::Layout::pageTitleMinimumWidth;
   const int actualComboWidth =
-      juce::jlimit(LegacyDesignTokens::Layout::pluginSelectorMinimumWidth,
+      juce::jlimit(DesignTokens::Layout::pluginSelectorMinimumWidth,
                    comboWidth, availableComboWidth);
 
   openPluginBtn.setBounds(
@@ -439,13 +439,13 @@ void MainContentComponent::handleAsyncUpdate() {
       header.removeFromRight(btnSize).withSizeKeepingCentre(btnSize, btnSize));
   scanBtn.setBounds(
       header.removeFromRight(btnSize).withSizeKeepingCentre(btnSize, btnSize));
-  const int controlHeight = LegacyDesignTokens::Layout::controlHeight(
+  const int controlHeight = DesignTokens::Layout::controlHeight(
       fluentLookAndFeel.getUIFontSize());
   pluginSelector.setBounds(
       header.removeFromRight(actualComboWidth)
           .withSizeKeepingCentre(actualComboWidth, controlHeight));
   pageTitle.setBounds(header.removeFromLeft(juce::jmin(
-      LegacyDesignTokens::Layout::pageTitleWidth, header.getWidth())));
+      DesignTokens::Layout::pageTitleWidth, header.getWidth())));
 
   content.removeFromTop(12);
 
@@ -461,33 +461,33 @@ void MainContentComponent::handleAsyncUpdate() {
 }
 
 void MainContentComponent::layoutTransportBar(juce::Rectangle<int> area) {
-  area = area.reduced(LegacyDesignTokens::Layout::transportHorizontalPadding,
-                      LegacyDesignTokens::Layout::transportVerticalPadding);
+  area = area.reduced(DesignTokens::Layout::transportHorizontalPadding,
+                      DesignTokens::Layout::transportVerticalPadding);
 
   progressSlider.setBounds(
-      area.removeFromTop(LegacyDesignTokens::Layout::transportProgressHeight));
-  area.removeFromTop(LegacyDesignTokens::Layout::transportProgressGap);
+      area.removeFromTop(DesignTokens::Layout::transportProgressHeight));
+  area.removeFromTop(DesignTokens::Layout::transportProgressGap);
 
   auto controlRow = area;
-  constexpr int btnSize = LegacyDesignTokens::Layout::transportButtonSize;
+  constexpr int btnSize = DesignTokens::Layout::transportButtonSize;
   constexpr int playBtnSize =
-      LegacyDesignTokens::Layout::transportPrimaryButtonSize;
+      DesignTokens::Layout::transportPrimaryButtonSize;
 
   auto volumeArea = controlRow.removeFromRight(
-      LegacyDesignTokens::Layout::transportVolumeAreaWidth);
+      DesignTokens::Layout::transportVolumeAreaWidth);
   loopModeBtn.setBounds(volumeArea.removeFromLeft(btnSize).reduced(2));
   volumeBtn.setBounds(volumeArea.removeFromLeft(btnSize).reduced(2));
 
   volumeSlider.setBounds(volumeArea.reduced(4, 4));
 
-  constexpr int gap = LegacyDesignTokens::Layout::controlGap;
+  constexpr int gap = DesignTokens::Layout::controlGap;
   int controlsWidth = btnSize * 3 + playBtnSize + gap * 3;
 
   // 为居中的播放控制预留空间后，动态分配左侧曲目信息宽度。
   constexpr int minTrackWidth =
-      LegacyDesignTokens::Layout::transportMinimumTrackWidth;
+      DesignTokens::Layout::transportMinimumTrackWidth;
   constexpr int centerPadding =
-      LegacyDesignTokens::Layout::transportCentrePadding;
+      DesignTokens::Layout::transportCentrePadding;
   int availableForTrack =
       (controlRow.getWidth() - controlsWidth) / 2 - centerPadding;
   const int maximumTrackWidth =
@@ -497,12 +497,12 @@ void MainContentComponent::layoutTransportBar(juce::Rectangle<int> area) {
 
   auto leftInfo = controlRow.removeFromLeft(trackInfoWidth);
   trackLabel.setBounds(
-      leftInfo.removeFromTop(LegacyDesignTokens::Typography::lineHeight(
-          LegacyDesignTokens::Typography::body,
+      leftInfo.removeFromTop(DesignTokens::Typography::lineHeight(
+          DesignTokens::Typography::body,
           fluentLookAndFeel.getUIFontSize())));
   timeLabel.setBounds(
-      leftInfo.removeFromTop(LegacyDesignTokens::Typography::lineHeight(
-          LegacyDesignTokens::Typography::body,
+      leftInfo.removeFromTop(DesignTokens::Typography::lineHeight(
+          DesignTokens::Typography::body,
           fluentLookAndFeel.getUIFontSize())));
 
   int controlsHeight = playBtnSize;
@@ -600,7 +600,7 @@ void MainContentComponent::toggleLoopMode() {
 
   modeToast.show(toastText, loopModeBtn.getBounds());
   playbackModeAnimationScale =
-      LegacyDesignTokens::Motion::playbackModeInitialScale;
+      DesignTokens::Motion::playbackModeInitialScale;
 
   repaint();
 }
@@ -990,11 +990,11 @@ void MainContentComponent::drawIconButtonCombined(juce::Graphics &g,
 
   auto mainArea = btn.getBounds().translated(-2, -1);
   fluentLookAndFeel.drawIconGlyph(g, mainIcon, mainArea.toFloat(),
-                                  LegacyDesignTokens::Icon::toolbar);
+                                  DesignTokens::Icon::toolbar);
 
   auto subArea = btn.getBounds().translated(6, 6);
   fluentLookAndFeel.drawIconGlyph(g, subIcon, subArea.toFloat(),
-                                  LegacyDesignTokens::Icon::overlay);
+                                  DesignTokens::Icon::overlay);
 }
 
 void MainContentComponent::drawSequentialIcon(juce::Graphics &g,
@@ -1017,7 +1017,7 @@ void MainContentComponent::drawSequentialIcon(juce::Graphics &g,
 
   if (getAppSettings().getSequentialIconListStyle()) {
     fluentLookAndFeel.drawIconGlyph(g, L"\uEA42", btn.getBounds().toFloat(),
-                                    LegacyDesignTokens::Icon::transport);
+                                    DesignTokens::Icon::transport);
   } else {
     if (sequentialIconDrawable != nullptr) {
       if (lastSequentialIconColor != iconColor) {
@@ -1027,8 +1027,8 @@ void MainContentComponent::drawSequentialIcon(juce::Graphics &g,
       }
       fluentLookAndFeel.drawDrawableIcon(
           g, *sequentialIconDrawable, btn.getBounds().toFloat(),
-          LegacyDesignTokens::Icon::transport *
-              LegacyIconAssets::sequentialPlaybackOpticalScale);
+          DesignTokens::Icon::transport *
+              IconAssets::sequentialPlaybackOpticalScale);
     }
   }
 }
@@ -1055,7 +1055,7 @@ void MainContentComponent::drawPlayButton(juce::Graphics &g, juce::Button &btn,
                         : colors.textSecondary.withAlpha(0.4f));
   fluentLookAndFeel.drawIconGlyph(g, isPlaying ? L"\uE769" : L"\uE768",
                                   btn.getBounds().toFloat(),
-                                  LegacyDesignTokens::Icon::primary);
+                                  DesignTokens::Icon::primary);
 
   if (!isEnabled) {
     g.setColour(colors.background.withAlpha(0.3f));

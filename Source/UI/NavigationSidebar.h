@@ -153,18 +153,18 @@ public:
 
   void resized() override {
     auto area = getLocalBounds();
-    const int itemHeight = LegacyDesignTokens::Layout::navigationItemHeight(
+    const int itemHeight = DesignTokens::Layout::navigationItemHeight(
         fluentLookAndFeel.getUIFontSize());
     constexpr int collapseHeight =
-        LegacyDesignTokens::Layout::navigationCollapseHeight;
+        DesignTokens::Layout::navigationCollapseHeight;
     constexpr int topPadding =
-        LegacyDesignTokens::Layout::navigationTopPadding;
+        DesignTokens::Layout::navigationTopPadding;
     constexpr int sidePadding =
-        LegacyDesignTokens::Layout::navigationSidePadding;
+        DesignTokens::Layout::navigationSidePadding;
 
     auto collapseArea = area.removeFromTop(collapseHeight);
     constexpr int toggleSize =
-        LegacyDesignTokens::Layout::navigationPaneToggleButtonSize;
+        DesignTokens::Layout::navigationPaneToggleButtonSize;
     const int expandedX = sidePadding;
     const int collapsedX = (collapseArea.getWidth() - toggleSize) / 2;
     const int toggleX = juce::roundToInt(
@@ -206,7 +206,7 @@ public:
     g.setColour(colors.textPrimary);
     fluentLookAndFeel.drawSystemIconGlyph(
         g, L"\uE700", collapseBtn.getBounds().toFloat(),
-        LegacyDesignTokens::Icon::paneToggle);
+        DesignTokens::Icon::paneToggle);
     g.restoreState();
 
     for (size_t i = 0; i < items.size(); ++i) {
@@ -298,7 +298,7 @@ private:
     }
 
     constexpr int iconAreaWidth =
-        LegacyDesignTokens::Layout::navigationIconSlot;
+        DesignTokens::Layout::navigationIconSlot;
     auto iconArea = getAnimatedIconArea(
         bounds, indicatorPadding + indicatorWidth + 4);
 
@@ -317,7 +317,7 @@ private:
     g.setColour(isSelected ? colors.accentPrimary : colors.textPrimary);
     fluentLookAndFeel.drawIconGlyph(
         g, item.icon, iconArea.toFloat(),
-        LegacyDesignTokens::Icon::navigation);
+        DesignTokens::Icon::navigation);
     g.restoreState();
 
     drawAnimatedLabel(
@@ -337,7 +337,7 @@ private:
     drawKeyboardFocus(g, bounds, item.id);
 
     constexpr int iconAreaWidth =
-        LegacyDesignTokens::Layout::navigationIconSlot;
+        DesignTokens::Layout::navigationIconSlot;
     auto iconArea = getAnimatedIconArea(bounds, 8);
 
     float scale = 1.0f;
@@ -356,12 +356,12 @@ private:
       g.setColour(isPinned ? colors.accentPrimary : colors.textPrimary);
       fluentLookAndFeel.drawIconGlyph(
           g, isPinned ? L"\uE840" : L"\uE718", iconArea.toFloat(),
-          LegacyDesignTokens::Icon::navigation);
+          DesignTokens::Icon::navigation);
     } else {
       g.setColour(colors.textPrimary);
       fluentLookAndFeel.drawIconGlyph(
           g, item.icon, iconArea.toFloat(),
-          LegacyDesignTokens::Icon::navigation);
+          DesignTokens::Icon::navigation);
     }
     g.restoreState();
 
@@ -417,7 +417,7 @@ private:
   getAnimatedIconArea(juce::Rectangle<int> bounds,
                       int expandedLeftInset) const {
     constexpr int iconAreaWidth =
-        LegacyDesignTokens::Layout::navigationIconSlot;
+        DesignTokens::Layout::navigationIconSlot;
     const int expandedX = bounds.getX() + expandedLeftInset;
     const int collapsedX =
         bounds.getX() + (bounds.getWidth() - iconAreaWidth) / 2;

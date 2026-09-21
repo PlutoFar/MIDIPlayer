@@ -1532,7 +1532,7 @@ public:
           g.setColour(isBright ? juce::Colours::black.withAlpha(0.85f)
                                : juce::Colours::white.withAlpha(0.95f));
           laf->drawIconGlyph(g, L"\uE73E", r.toFloat(),
-                             LegacyDesignTokens::Icon::small);
+                             DesignTokens::Icon::small);
         }
       }
     }
@@ -1592,7 +1592,7 @@ public:
       g.setColour(isEnabled() ? iconColour : iconColour.withAlpha(0.3f));
       if (laf != nullptr)
         laf->drawSystemIconGlyph(g, left ? L"\uE76B" : L"\uE76C", bounds,
-                                 LegacyDesignTokens::Icon::small);
+                                 DesignTokens::Icon::small);
 
       if (hasKeyboardFocus(false)) {
         g.setColour(iconColour);

@@ -48,7 +48,7 @@ public:
             ? juce::DocumentWindow::closeButton
             : 0,
         false);
-    setTitleBarHeight(LegacyDesignTokens::Layout::dialogTitleBarHeight);
+    setTitleBarHeight(DesignTokens::Layout::dialogTitleBarHeight);
     setTitleBarTextCentred(false);
     setDraggable(false);
     addToDesktop();
@@ -203,7 +203,7 @@ private:
 };
 
 inline int controlHeight(const FluentLookAndFeel &lookAndFeel) {
-  return LegacyDesignTokens::Layout::controlHeight(
+  return DesignTokens::Layout::controlHeight(
       lookAndFeel.getUIFontSize());
 }
 

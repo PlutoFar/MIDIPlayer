@@ -21,9 +21,9 @@
 #include "UI/ExportPresetSupport.h"
 #include "UI/FluentDialogSupport.h"
 #include "UI/FluentSettingsStyle.h"
-#include "UI/LegacyTransportWidgets.h"
+#include "UI/TransportWidgets.h"
 #include "UI/CustomControls.h"
-#include "UI/LegacyIconAssets.h"
+#include "UI/IconAssets.h"
 #include "UI/PlaylistAnimationSupport.h"
 #include "UI/PluginWindowLifecycle.h"
 #include "UI/SidebarAnimationSupport.h"
@@ -147,12 +147,12 @@ void testProductionIconVisualBounds() {
     }
   }
 
-  constexpr float productionIconSize = LegacyDesignTokens::Icon::transport;
+  constexpr float productionIconSize = DesignTokens::Icon::transport;
   const auto reference =
       renderGlyphIconBounds(lookAndFeel, L"\uE995", productionIconSize);
   const auto sequential = renderSvgIconBounds(
-      lookAndFeel, LegacyIconAssets::sequentialPlaybackSvg,
-      productionIconSize * LegacyIconAssets::sequentialPlaybackOpticalScale);
+      lookAndFeel, IconAssets::sequentialPlaybackSvg,
+      productionIconSize * IconAssets::sequentialPlaybackOpticalScale);
   std::cout << "Production icon bounds: sequential=" << sequential.toString()
             << ", reference=" << reference.toString() << '\n';
   expect(!sequential.isEmpty() && !reference.isEmpty(),
@@ -165,13 +165,13 @@ void testProductionIconVisualBounds() {
          "custom playback SVG should match the reference Fluent icon centre");
 
   const auto paneToggle = renderSystemGlyphBounds(
-      lookAndFeel, L"\uE700", LegacyDesignTokens::Icon::paneToggle,
-      (float)LegacyDesignTokens::Layout::navigationPaneToggleButtonSize);
+      lookAndFeel, L"\uE700", DesignTokens::Icon::paneToggle,
+      (float)DesignTokens::Layout::navigationPaneToggleButtonSize);
   expect(!paneToggle.isEmpty(),
          "NavigationView pane toggle glyph must render visibly");
-  expect(paneToggle.getWidth() <= LegacyDesignTokens::Icon::paneToggle + 1.0f &&
+  expect(paneToggle.getWidth() <= DesignTokens::Icon::paneToggle + 1.0f &&
              paneToggle.getHeight() <=
-                 LegacyDesignTokens::Icon::paneToggle + 1.0f,
+                 DesignTokens::Icon::paneToggle + 1.0f,
          "NavigationView pane toggle must preserve its official 20px metrics");
   expect(std::abs(paneToggle.getCentreX() - 64) <= 1 &&
              std::abs(paneToggle.getCentreY() - 64) <= 1,
@@ -790,25 +790,25 @@ int main(int argc, char *argv[]) {
       "caption-layout", juce::Colours::transparentBlack, 0, false);
   interactionLookAndFeel.positionDocumentWindowButtons(
       captionLayoutWindow, 0, 0, 400,
-      LegacyDesignTokens::Layout::dialogTitleBarHeight, &minimiseButton,
+      DesignTokens::Layout::dialogTitleBarHeight, &minimiseButton,
       &maximiseButton, &closeButton, false);
   expect(closeButton.getBounds() ==
              juce::Rectangle<int>(
-                 400 - LegacyDesignTokens::Layout::dialogCaptionButtonWidth -
-                     LegacyDesignTokens::Layout::dialogCaptionButtonOuterMargin,
-                 0, LegacyDesignTokens::Layout::dialogCaptionButtonWidth,
-                 LegacyDesignTokens::Layout::dialogTitleBarHeight),
+                 400 - DesignTokens::Layout::dialogCaptionButtonWidth -
+                     DesignTokens::Layout::dialogCaptionButtonOuterMargin,
+                 0, DesignTokens::Layout::dialogCaptionButtonWidth,
+                 DesignTokens::Layout::dialogTitleBarHeight),
          "dialog close button should use the standard caption target and inset");
 
   captionLayoutWindow.setSize(400, 240);
   interactionLookAndFeel.positionDocumentWindowButtons(
       captionLayoutWindow, 1, 1, 398,
-      LegacyDesignTokens::Layout::dialogTitleBarHeight, &minimiseButton,
+      DesignTokens::Layout::dialogTitleBarHeight, &minimiseButton,
       &maximiseButton, &closeButton, false);
   expect(closeButton.getRight() == captionLayoutWindow.getWidth() &&
              closeButton.getY() == 0 &&
              closeButton.getBottom() ==
-                 1 + LegacyDesignTokens::Layout::dialogTitleBarHeight,
+                 1 + DesignTokens::Layout::dialogTitleBarHeight,
          "right-aligned caption buttons should cover the outer window corner");
 
   juce::Component managedDialogContent;
@@ -905,7 +905,7 @@ int main(int argc, char *argv[]) {
   VolumeSlider volumeTooltipSlider;
   volumeTooltipSlider.setLookAndFeel(&sliderLookAndFeel);
   volumeTooltipSlider.setBounds(
-      700, 200, LegacyDesignTokens::Slider::volumeControlWidth, 40);
+      700, 200, DesignTokens::Slider::volumeControlWidth, 40);
   volumeTooltipSlider.setValue(0.86, juce::dontSendNotification);
   const auto volumeTooltipInfo =
       getVolumeTooltipInfo(volumeTooltipSlider);
@@ -916,17 +916,17 @@ int main(int argc, char *argv[]) {
   const auto volumeTooltipPlacement = TooltipPlacement::place(
       sliderLookAndFeel.getFluentValueTooltipSize(volumeTooltipInfo.text),
       volumeTooltipInfo.anchorBounds, {0, 0, 900, 280}, {}, {},
-      LegacyDesignTokens::Slider::volumeTooltipGap, 8);
+      DesignTokens::Slider::volumeTooltipGap, 8);
   expect(volumeTooltipPlacement.getBottom() ==
              volumeTooltipInfo.anchorBounds.getY() -
-                 LegacyDesignTokens::Slider::volumeTooltipGap,
+                 DesignTokens::Slider::volumeTooltipGap,
          "volume tooltips should remain close to the visible thumb");
   const auto volumeThumbBounds = volumeTooltipSlider.getThumbBounds();
   const auto volumeThumbCentre = volumeThumbBounds.getCentre();
   expect(volumeTooltipSlider.isPointOverThumb(volumeThumbCentre) &&
              !volumeTooltipSlider.isPointOverThumb(
                  volumeThumbCentre.translated(
-                     LegacyDesignTokens::Slider::thumbDiameter * 0.5f + 0.5f,
+                     DesignTokens::Slider::thumbDiameter * 0.5f + 0.5f,
                      0.0f)),
          "volume thumb hover detection should end at the visible circle");
 
@@ -934,7 +934,7 @@ int main(int argc, char *argv[]) {
   highVolumeSlider.setLookAndFeel(&sliderLookAndFeel);
   highVolumeSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
   highVolumeSlider.setBounds(
-      0, 0, LegacyDesignTokens::Slider::volumeControlWidth, 40);
+      0, 0, DesignTokens::Slider::volumeControlWidth, 40);
   const auto minimumThumbCentre = highVolumeSlider.getPositionOfValue(0.0);
   const auto maximumThumbCentre = highVolumeSlider.getPositionOfValue(1.0);
   highVolumeSlider.setValue(0.99, juce::dontSendNotification);
@@ -950,14 +950,14 @@ int main(int argc, char *argv[]) {
       (highVolumeSlider.getPositionOfValue(highVolumeSlider.getValue()) +
        highVolumeThumbRadius);
   highVolumeSlider.setValue(1.0, juce::dontSendNotification);
-  expect(LegacyDesignTokens::Layout::transportVolumeAreaWidth -
-                 LegacyDesignTokens::Layout::transportButtonSize * 2 - 8 >=
-             LegacyDesignTokens::Slider::volumeControlWidth &&
-             LegacyDesignTokens::Slider::volumeControlWidth ==
-                 LegacyDesignTokens::Slider::volumeTrackLength &&
+  expect(DesignTokens::Layout::transportVolumeAreaWidth -
+                 DesignTokens::Layout::transportButtonSize * 2 - 8 >=
+             DesignTokens::Slider::volumeControlWidth &&
+             DesignTokens::Slider::volumeControlWidth ==
+                 DesignTokens::Slider::volumeTrackLength &&
              std::abs(maximumThumbCentre - minimumThumbCentre -
-                      (LegacyDesignTokens::Slider::volumeControlWidth -
-                       LegacyDesignTokens::Slider::thumbDiameter)) <
+                      (DesignTokens::Slider::volumeControlWidth -
+                       DesignTokens::Slider::thumbDiameter)) <
                  0.01f &&
              std::abs(minimumThumbCentre - highVolumeThumbRadius) < 0.01f &&
              std::abs((maximumThumbCentre + highVolumeThumbRadius) -
@@ -966,7 +966,7 @@ int main(int argc, char *argv[]) {
              highVolumeRemainder >= 1.0f &&
              std::abs(highVolumeSlider.getNormalisableRange().skew -
                       1.0) < 0.001 &&
-             LegacyDesignTokens::Slider::innerThumbDiameter == 8.0f &&
+             DesignTokens::Slider::innerThumbDiameter == 8.0f &&
              highVolumeSlider.getSliderSnapsToMousePosition(),
          "volume sliders should preserve a 120-pixel visual track, exact "
          "endpoints, and absolute pointer tracking");
@@ -1057,15 +1057,15 @@ int main(int argc, char *argv[]) {
          "bottom transport tooltips should stay close to their anchor even "
          "when they cross the progress track");
 
-  expect(LegacyDesignTokens::Layout::playlistRowHeight(12.0f) == 44 &&
-             LegacyDesignTokens::Layout::playlistRowHeight(16.0f) == 44 &&
-             LegacyDesignTokens::Layout::playlistRowHeight(22.0f) == 44 &&
-             LegacyDesignTokens::Layout::playlistRowHeight(36.0f) == 52 &&
-             LegacyDesignTokens::Layout::playlistRowHeight(16.0f, false, 72) ==
+  expect(DesignTokens::Layout::playlistRowHeight(12.0f) == 44 &&
+             DesignTokens::Layout::playlistRowHeight(16.0f) == 44 &&
+             DesignTokens::Layout::playlistRowHeight(22.0f) == 44 &&
+             DesignTokens::Layout::playlistRowHeight(36.0f) == 52 &&
+             DesignTokens::Layout::playlistRowHeight(16.0f, false, 72) ==
                  72 &&
-             LegacyDesignTokens::Layout::playlistRowHeight(16.0f, false, 12) ==
+             DesignTokens::Layout::playlistRowHeight(16.0f, false, 12) ==
                  44 &&
-             LegacyDesignTokens::Layout::playlistRowHeight(36.0f, false, 120) ==
+             DesignTokens::Layout::playlistRowHeight(36.0f, false, 120) ==
                  96,
          "single-line playlist rows should use measured font height and fixed "
          "vertical padding while respecting manual row-height limits");
@@ -1107,12 +1107,12 @@ int main(int argc, char *argv[]) {
   while (advanceNavigationIconScale(navigationIconScale, true, false))
     ;
   expect(navigationIconScale ==
-             LegacyDesignTokens::Motion::navigationHoverScale,
+             DesignTokens::Motion::navigationHoverScale,
          "all sidebar icons should share the same hover-scale animation");
   while (advanceNavigationIconScale(navigationIconScale, true, true))
     ;
   expect(navigationIconScale ==
-             LegacyDesignTokens::Motion::navigationPressedScale,
+             DesignTokens::Motion::navigationPressedScale,
          "all sidebar icons should share the same pressed-scale animation");
 
   PlaylistAnimationState playlistMotion;

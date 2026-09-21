@@ -11,7 +11,7 @@
 
 inline float volumeLevelToGain(float level) {
   return std::pow(juce::jlimit(0.0f, 1.0f, level),
-                  LegacyDesignTokens::Slider::volumeGainExponent);
+                  DesignTokens::Slider::volumeGainExponent);
 }
 
 inline juce::String getVolumeIconGlyph(float volume) {
@@ -28,7 +28,7 @@ class VolumeSlider final : public juce::Slider {
 public:
   VolumeSlider() {
     setSliderStyle(juce::Slider::LinearHorizontal);
-    setRange(0.0, 1.0, LegacyDesignTokens::Slider::volumeStep);
+    setRange(0.0, 1.0, DesignTokens::Slider::volumeStep);
     setSliderSnapsToMousePosition(true);
     setVelocityBasedMode(false);
     getProperties().set("fluentPreciseThumbHover", true);
@@ -39,14 +39,14 @@ public:
       return false;
 
     const auto centre = getThumbCentre();
-    const float radius = LegacyDesignTokens::Slider::thumbDiameter * 0.5f;
+    const float radius = DesignTokens::Slider::thumbDiameter * 0.5f;
     const auto delta = point - centre;
     return delta.x * delta.x + delta.y * delta.y <= radius * radius;
   }
 
   juce::Rectangle<float> getThumbBounds() const {
     const auto centre = getThumbCentre();
-    const float diameter = LegacyDesignTokens::Slider::thumbDiameter;
+    const float diameter = DesignTokens::Slider::thumbDiameter;
     const float radius = diameter * 0.5f;
     return {centre.x - radius, centre.y - radius, diameter, diameter};
   }
@@ -134,7 +134,7 @@ public:
   void showValueAt(const juce::String &text, juce::Rectangle<int> anchor,
                    juce::Rectangle<int> parentArea) {
     showTooltip(text, anchor, parentArea, {}, {}, Presentation::compactValue,
-                LegacyDesignTokens::Slider::volumeTooltipGap, 8);
+                DesignTokens::Slider::volumeTooltipGap, 8);
   }
 
   void showForTarget(const juce::String &text, juce::Rectangle<int> anchor,

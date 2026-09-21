@@ -5,11 +5,11 @@
 #include <algorithm>
 #include <cmath>
 
-namespace LegacyDesignTokens {
+namespace DesignTokens {
 
 namespace Typography {
 constexpr float referenceBody = 14.0f;
-constexpr float defaultLegacyBody = 16.0f;
+constexpr float defaultBodySize = 16.0f;
 constexpr float minimumBody = 14.0f;
 constexpr float maximumBody = 22.0f;
 constexpr float minimumResolvedSize = 12.0f;
@@ -159,4 +159,4 @@ inline int transportHeight(float configuredBodySize) {
 }
 } // namespace Layout
 
-} // namespace LegacyDesignTokens
+} // namespace DesignTokens

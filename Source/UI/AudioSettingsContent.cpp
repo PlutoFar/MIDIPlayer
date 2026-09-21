@@ -211,13 +211,13 @@ void AudioSettingsContent::resized() {
 }
 
 int AudioSettingsContent::getStatusTitleHeight() const {
-  return LegacyDesignTokens::Typography::lineHeight(
-      LegacyDesignTokens::Typography::body, fluentLookAndFeel.getUIFontSize());
+  return DesignTokens::Typography::lineHeight(
+      DesignTokens::Typography::body, fluentLookAndFeel.getUIFontSize());
 }
 
 int AudioSettingsContent::getStatusDetailHeight() const {
-  return LegacyDesignTokens::Typography::lineHeight(
-             LegacyDesignTokens::Typography::caption,
+  return DesignTokens::Typography::lineHeight(
+             DesignTokens::Typography::caption,
              fluentLookAndFeel.getUIFontSize()) +
          statusDetailVerticalSafetyPadding;
 }

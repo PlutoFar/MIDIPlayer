@@ -3,15 +3,15 @@
 // Contract: 消息线程独占；图标缩放和宽度/文字透明度由调用方逐帧推进。
 // Ordering: 折叠先隐藏文字再收缩宽度，展开先扩展宽度再显示文字；宽度为逻辑像素。
 
-#include "LegacyDesignTokens.h"
+#include "DesignTokens.h"
 #include <algorithm>
 #include <cmath>
 
 inline float getNavigationIconTargetScale(bool isHovered, bool isPressed) {
   if (isPressed)
-    return LegacyDesignTokens::Motion::navigationPressedScale;
+    return DesignTokens::Motion::navigationPressedScale;
   if (isHovered)
-    return LegacyDesignTokens::Motion::navigationHoverScale;
+    return DesignTokens::Motion::navigationHoverScale;
   return 1.0f;
 }
 
@@ -39,9 +39,9 @@ public:
   };
 
   static constexpr float expandedWidth =
-      static_cast<float>(LegacyDesignTokens::Layout::sidebarExpandedWidth);
+      static_cast<float>(DesignTokens::Layout::sidebarExpandedWidth);
   static constexpr float collapsedWidth =
-      static_cast<float>(LegacyDesignTokens::Layout::sidebarCollapsedWidth);
+      static_cast<float>(DesignTokens::Layout::sidebarCollapsedWidth);
 
   void reset(bool collapsed) {
     targetCollapsed = collapsed;
