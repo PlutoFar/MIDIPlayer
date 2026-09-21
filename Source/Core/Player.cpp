@@ -84,7 +84,7 @@ bool Core::Impl::beginMidiLoad(const juce::File &file, bool addToList, bool auto
 
 void Core::Impl::play() {
   StateLock lock(stateMutex);
-  if (!canStartPlayback())
+  if (!canStartPlayback() || engine.getMidiPlayer().getPlaying())
     return;
   ++trackSwitchGeneration;
   isHandlingTrackEnd = false;
@@ -112,8 +112,7 @@ void Core::Impl::togglePlay() {
   if (mp.getPlaying()) {
     mp.setPlaying(false);
   } else {
-    // 恢复播放前在当前位置追踪 CC、音符、踏板和弯音状态，避免暂停期间
-    // allSoundOff 清理过的控制状态丢失。
+    // 恢复当前位置的控制器、踏板和弯音；已播放音符不重新触发。
     const double pos = mp.getPositionInSamples();
     mp.seekTo(pos, true);
     mp.setPlaying(true);

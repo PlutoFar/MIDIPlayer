@@ -20,7 +20,7 @@ inline void appendChasedControllers(const juce::MidiMessageSequence &sequence,
       for (const auto &message : updates) {
         if (message.isController()) {
           const int cc = message.getControllerNumber();
-          if (cc == 0 || cc == 32 || cc == 64 || cc == 66 || cc >= 120)
+          if (cc == 0 || cc == 32 || cc == 64 || cc == 66 || cc == 67 || cc >= 120)
             continue;
         }
         output.addEvent(message, 0);

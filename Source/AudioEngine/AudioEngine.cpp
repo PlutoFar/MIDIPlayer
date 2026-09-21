@@ -274,6 +274,8 @@ void AudioEngine::renderRealtimeBlock(juce::AudioBuffer<float> &buffer,
     }
 
     fadeOutSamples -= samplesToFade;
+  } else if (!isPlaying) {
+    buffer.clear();
   } else if (isPlaying && fadeOutSamples != fadeOutDuration) {
     fadeOutSamples = fadeOutDuration;
     stopCleanupDone = false;

@@ -658,6 +658,8 @@ int main(int argc, char *argv[]) {
   if (runBridgeWorkerChildIfRequested(argc, argv))
     return 0;
 
+  const bool midiPlaybackOnly = makeCommandLine(argc, argv) == "--midi-playback";
+  if (!midiPlaybackOnly) {
   testProductionIconVisualBounds();
 
   const auto customDialogPolicy = getFluentDialogWindowPolicy(false);
@@ -1921,6 +1923,8 @@ int main(int argc, char *argv[]) {
   expect(hints.getActiveTarget() == ExportHintTarget::bitDepth,
          "hint should update after the popup closes");
 
+  }
+
   MidiPlayer midiPlayer;
   auto playingSequence = std::make_unique<juce::MidiMessageSequence>();
   addEvent(*playingSequence, juce::MidiMessage::noteOn(1, 60, (juce::uint8)100),
@@ -1985,20 +1989,22 @@ int main(int argc, char *argv[]) {
   juce::MidiBuffer activeSeekEvents;
   activeSeekPlayer.processBlock(activeSeekEvents, 128);
   const int oldNoteOffIndex = findNoteEventIndex(activeSeekEvents, false, 1, 62);
-  const int chasedNoteOnIndex = findNoteEventIndex(activeSeekEvents, true, 1, 62);
-  expect(oldNoteOffIndex >= 0 && chasedNoteOnIndex > oldNoteOffIndex,
-         "seek should release the old key before chasing the target key state");
+  expect(oldNoteOffIndex >= 0 && findNoteEventIndex(activeSeekEvents, true, 1, 62) < 0,
+         "seek should release the old key without retriggering it");
   const int pedalOffIndex = findControllerIndex(activeSeekEvents, 1, 64, 0);
-  const int chasedPedalOnIndex = findControllerIndex(activeSeekEvents, 1, 64, 127);
-  expect(pedalOffIndex >= 0 && chasedPedalOnIndex > pedalOffIndex,
-         "seek should release the old pedal before chasing the target pedal state");
+  expect(pedalOffIndex >= 0 && findControllerIndex(activeSeekEvents, 1, 64, 127) < 0,
+         "seek should finish the reset block before restoring the pedal");
 
   expect(findControllerSamplePosition(activeSeekEvents, 1, 64, 0) == 0,
          "seek should reset sustain at sample 0");
-  expect(findControllerSamplePosition(activeSeekEvents, 1, 64, 127) == 1,
-         "seek should restore sustain at sample 1");
-  expect(findNoteSamplePosition(activeSeekEvents, true, 1, 62) == 1,
-         "seek should restore active notes at sample 1");
+  juce::MidiBuffer activeSeekPedals;
+  activeSeekPlayer.processBlock(activeSeekPedals, 128);
+  expect(findControllerSamplePosition(activeSeekPedals, 1, 64, 127) == 0,
+         "seek should restore sustain at the start of a separate block");
+  expect(activeSeekPedals.getNumEvents() == 1,
+         "pedal restore should contain only the pedal used by the MIDI file");
+  expect(findNoteSamplePosition(activeSeekPedals, true, 1, 62) < 0,
+         "seek should leave previously played notes released");
   expect(activeSeekPlayer.getPositionInSamples() == 500.0,
          "the silent seek reconstruction block must not advance playback");
 
@@ -2011,8 +2017,9 @@ int main(int argc, char *argv[]) {
   activeSeekPlayer.triggerStopCleanup();
   juce::MidiBuffer chasedNoteCleanup;
   activeSeekPlayer.processBlock(chasedNoteCleanup, 128);
-  expect(containsNoteOff(chasedNoteCleanup, 1, 62),
-         "stop cleanup should release notes restored by seek chase");
+  expect(!containsNoteOff(chasedNoteCleanup, 1, 62) &&
+             containsController(chasedNoteCleanup, 1, 64, 0),
+         "stop cleanup should release the restored pedal without repeating old key releases");
 
   MidiPlayer pauseResumePlayer;
   auto pauseResumeSequence = std::make_unique<juce::MidiMessageSequence>();
@@ -2048,10 +2055,14 @@ int main(int argc, char *argv[]) {
   pauseResumePlayer.setPlaying(true);
   juce::MidiBuffer pauseResumeChase;
   pauseResumePlayer.processBlock(pauseResumeChase, 128);
-  expect(findControllerSamplePosition(pauseResumeChase, 1, 64, 127) == 1,
-         "resume should restore the sustained CC64 state at sample 1");
-  expect(findNoteSamplePosition(pauseResumeChase, true, 1, 65) == 1,
-         "resume should restore the sustained note at sample 1");
+  expect(findControllerIndex(pauseResumeChase, 1, 64, 127) < 0,
+         "resume should keep pedal restore out of the reset block");
+  juce::MidiBuffer pauseResumePedals;
+  pauseResumePlayer.processBlock(pauseResumePedals, 128);
+  expect(findControllerSamplePosition(pauseResumePedals, 1, 64, 127) == 0,
+         "resume should restore the sustained CC64 state before playback continues");
+  expect(findNoteSamplePosition(pauseResumePedals, true, 1, 65) < 0,
+         "resume should not retrigger the old note");
   expect(pauseResumePlayer.getPositionInSamples() == draggedPausedPosition,
          "resume reconstruction should preserve the seek target");
 
@@ -2115,12 +2126,14 @@ int main(int argc, char *argv[]) {
   expect(foundSysEx,
          "MIDI playback should preserve GS/XG system-exclusive messages");
 
+  if (!midiPlaybackOnly) {
   runRealPluginBridgeSmokeIfRequested();
 
   failures += miditest::runWorkerPathTests();
   failures += miditest::runCoreTests();
   failures += miditest::runExportTaskTests();
   failures += miditest::runPersistenceTests();
+  }
 
   if (failures == 0)
     std::cout << "All tests passed\n";

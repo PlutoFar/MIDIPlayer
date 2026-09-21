@@ -2,7 +2,7 @@
 
 #include "../Utils/DebugLogger.h"
 #include "MusicalTimeline.h"
-#include "MidiNoteChase.h"
+#include "MidiPedalChase.h"
 #include "MidiControllerChase.h"
 #include <array>
 #include <atomic>
@@ -12,7 +12,7 @@
 #include <juce_core/juce_core.h>
 #include <memory>
 
-// Responsibilities: 发布不可变 MIDI 序列，按采样位置生成事件并重建 seek 后的控制器/音符状态。
+// Responsibilities: 发布不可变 MIDI 序列，按采样位置生成事件并重建 seek 后的控制器状态。
 // Concurrency: `setSequence`、`setSampleRate`、`seekTo` 只有一个串行生产方；
 // 消息线程、命令线程与独占导出线程的生产权由 `Core` 协调。`processBlock` 同时只能有一个消费方。
 // Ownership: 序列和 seek 消息归本对象持有；析构前必须停止生产方与实时/离线消费方。
@@ -33,11 +33,6 @@ public:
   // Failures: 槽位不可用时记录日志并保留旧快照；此 void 接口不报告发布失败。
   void setSequence(std::unique_ptr<juce::MidiMessageSequence> newSequence,
                    double newSampleRate) {
-    if (hasSequence()) {
-      pendingAllNotesOff.store(true);
-      seekOccurred.store(true, std::memory_order_release);
-    }
-
     const double rate = sanitiseSampleRate(newSampleRate);
     auto snapshot = createSnapshot(std::move(newSequence), rate, 0.0);
     publishSnapshot(std::move(snapshot), false);
@@ -76,7 +71,9 @@ public:
     applyPublishedSequence();
 
     // Ordering: 停止清理由 `AudioEngine` 淡出后触发；seek 清理块由引擎静音并接续淡入。
-    if (pendingAllNotesOff.exchange(false)) {
+    // Ordering: 过期的暂停清理不能覆盖已恢复的踏板；切曲清理由消费方交接序列时产生。
+    const bool stopCleanup = pendingStopCleanup.exchange(false) && !isPlaying.load();
+    if (pendingAllNotesOff.exchange(false) || stopCleanup) {
       recoveryMessages.clear();
       recoveryIndex = 0;
       recoveryIsSeek = false;
@@ -84,10 +81,10 @@ public:
       resetControllersOnCleanup = false;
     }
 
-    const bool appliedSeek = hasSeekRequest && applyPendingSeekRequest(buffer, numSamples);
+    const bool appliedSeek = hasSeekRequest && applyPendingSeekRequest();
     renderPosition = currentPositionInSamples.load();
     renderPlaying = isPlaying.load();
-    const bool recovered = writeRecoveryMessages(buffer, numSamples, recoveryPacketBytes);
+    const bool recovered = writeRecoveryMessages(buffer, numSamples, recoveryPacketBytes, mode);
     // Ordering: 实时定位留出清理块；离线定位在同块开始正常序列，不写入准备空块。
     if ((appliedSeek || recovered) && mode == ProcessMode::realtime)
       return;
@@ -133,7 +130,7 @@ public:
     if (play && !hasSequence())
       return;
     // Ordering: 暂停后由引擎淡出并清理声部；核心恢复前调用 `seekTo(currentPos, true)`
-    // 重建控制器、音色选择、弯音及活跃音符状态。
+    // 重建控制器、音色选择、弯音和踏板；旧音符不重新触发。
     if (!play)
       sequenceEnded.store(false, std::memory_order_release);
     else
@@ -161,12 +158,12 @@ public:
         isPlaying.load(std::memory_order_acquire) || forceChaseWhilePaused;
 
     if (request.emitChase) {
-      pendingAllNotesOff.store(false);
-      restoreControllersState(&currentSequence->sequenceSamples,
-                              request.position, request.index,
+      appendChasedControllers(currentSequence->sequenceSamples, request.index,
                               request.chaseMessages);
-      restoreActiveNotes(&currentSequence->sequenceSamples, request.position,
-                         request.index, request.chaseMessages);
+      // Ordering: 音色/控制器恢复完成后再恢复踏板，避免 VST3 的复位参数覆盖踏板值。
+      juce::MidiBuffer pedals;
+      appendChasedPedals(currentSequence->sequenceSamples, request.index, pedals);
+      request.chaseMessages.addEvents(pedals, 0, -1, 1);
     }
 
     pendingSeekRequests[(size_t)producerSeekSlot] = std::move(request);
@@ -217,6 +214,7 @@ public:
     setSampleRate(rate);
     seekTo(0.0);
     pendingAllNotesOff.store(true);
+    pendingStopCleanup.store(false);
     activeNotes = {};
     recoveryMessages.clear();
     recoveryIndex = 0;
@@ -237,7 +235,7 @@ public:
 
   // Preconditions: 引擎已完成停止淡出；下一次 `processBlock` 写入音符和踏板释放事件。
   void triggerStopCleanup() {
-    pendingAllNotesOff.store(true);
+    pendingStopCleanup.store(true);
   }
 
 private:
@@ -290,6 +288,7 @@ private:
   std::atomic<bool> sequenceLoaded{false};
   std::atomic<bool> sequenceEnded{false};
   std::atomic<bool> pendingAllNotesOff{false};
+  std::atomic<bool> pendingStopCleanup{false};
   std::atomic<bool> seekOccurred{false};
   std::atomic<bool> cleanupOccurred{false};
 
@@ -452,6 +451,12 @@ private:
       sequenceSlots[(size_t)oldSlot].state.store(SlotState::Retired,
                                                  std::memory_order_release);
 
+    // Ordering: 清理与新序列在同一消费块交接，禁止旧序列的延迟清理进入新曲目。
+    if (oldSlot >= 0) {
+      pendingAllNotesOff.store(true);
+      seekOccurred.store(true, std::memory_order_release);
+    }
+
     auto *active = next.snapshot.get();
     nextMessageIndex = active != nullptr ? active->initialMessageIndex : 0;
     currentPositionInSamples.store(
@@ -484,7 +489,7 @@ private:
           continue;
 
         buffer.addEvent(juce::MidiMessage::noteOff(channel, note), 0);
-        channelNotes[(size_t)note] = false;
+        // Ownership: 按键状态由 addTrackedEvent 在实际发送时更新，分包取消不能提前遗失状态。
       }
 
       // AudioEngine 会静音包含这些释放事件的音频块，避免声部切断瞬态。
@@ -504,8 +509,7 @@ private:
   }
 
   // Preconditions: 本消费块已取得定位槽位，并消费了此前发布的序列。
-  bool applyPendingSeekRequest(juce::MidiBuffer &buffer, int numSamples) {
-    juce::ignoreUnused(buffer, numSamples);
+  bool applyPendingSeekRequest() {
     auto *active = getAudioThreadSnapshot();
     const auto &request = pendingSeekRequests[(size_t)consumerSeekSlot];
     if (active == nullptr || request.generation != active->generation)
@@ -522,25 +526,38 @@ private:
       recoveryIsSeek = true;
       addStateResetMessages(recoveryMessages, true);
       for (const auto metadata : request.chaseMessages)
-        recoveryMessages.addEvent(metadata.data, metadata.numBytes, 1);
+        recoveryMessages.addEvent(metadata.data, metadata.numBytes,
+                                  metadata.samplePosition + 1);
+    } else if (recoveryIsSeek) {
+      // Ordering: 暂停定位取消尚未发送的恢复消息，暂停清理仍由引擎淡出触发。
+      recoveryMessages.clear();
+      recoveryIndex = 0;
+      recoveryIsSeek = false;
     }
     return true;
   }
 
-  // Ordering: 恢复消息按原顺序分批发送，每批为桥接的静音准备块；音乐时间保持在定位点。
-  bool writeRecoveryMessages(juce::MidiBuffer &buffer, int numSamples, int maxBytes) {
+  // Ordering: 实时恢复的清理、控制器和踏板分别占用处理块，块内从采样 0 生效。
+  // Reason: VST3 将各 CC 转为独立参数队列，同块内的复位与踏板不能依赖 MIDI 排序。
+  bool writeRecoveryMessages(juce::MidiBuffer &buffer, int numSamples, int maxBytes,
+                             ProcessMode mode) {
     int index = 0, bytes = 0;
+    int phase = -1;
     bool emitted = false, complete = true;
     for (const auto metadata : recoveryMessages) {
       if (index++ < recoveryIndex)
         continue;
-      if (bytes + metadata.numBytes + 8 > maxBytes) {
+      if ((mode == ProcessMode::realtime && phase >= 0 &&
+           metadata.samplePosition != phase) ||
+          bytes + metadata.numBytes + 8 > maxBytes) {
         complete = false;
         break;
       }
       bytes += metadata.numBytes + 8;
+      phase = metadata.samplePosition;
       addTrackedEvent(buffer, metadata.getMessage(),
-                      juce::jmin(metadata.samplePosition, numSamples - 1));
+                      mode == ProcessMode::realtime ? 0
+                          : juce::jmin(metadata.samplePosition, numSamples - 1));
       ++recoveryIndex;
       emitted = true;
     }
@@ -555,23 +572,6 @@ private:
         cleanupOccurred.store(true, std::memory_order_release);
     }
     return emitted;
-  }
-
-  // Ordering: JUCE 保留 RPN/NRPN 选择与数据输入的顺序；踏板由音符恢复阶段处理。
-  void restoreControllersState(juce::MidiMessageSequence *seq,
-                               double timeInSamples, int nextIndex,
-                               juce::MidiBuffer &buffer) {
-    juce::ignoreUnused(timeInSamples);
-    appendChasedControllers(*seq, nextIndex, buffer);
-  }
-
-  // Preconditions: `nextIndex` 指向首个不早于定位点的事件。
-  // Postconditions: 恢复按键及延音/保持踏板维持的音符，后续事件仍按原时间发送。
-  static void restoreActiveNotes(const juce::MidiMessageSequence *seq,
-                                 double timeInSamples, int nextIndex,
-                                 juce::MidiBuffer &buffer) {
-    juce::ignoreUnused(timeInSamples);
-    appendChasedNotes(*seq, nextIndex, buffer);
   }
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiPlayer)
