@@ -223,16 +223,7 @@ private:
 
   void showOpenFileDialog();
 
-#if JUCE_WINDOWS
-  bool isFileAssociatedToSelf();
-
-  bool registerFileAssociation();
-
-  void removeFileAssociation();
-#endif // JUCE_WINDOWS
-
-  std::unique_ptr<juce::ToggleButton> createDontShowAgainToggle();
-
+  void updateFileAssociation();
   void showFileAssociationPrompt();
 
   // Ordering: 自动加载完成后只按插件策略打开编辑器；首次音色选择后的播放由用户发起。

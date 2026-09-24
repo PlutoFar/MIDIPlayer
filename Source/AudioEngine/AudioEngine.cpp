@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "AudioThreadPriority.h"
 #include "../Utils/DebugLogger.h"
 #include "ExportAudioProcessing.h"
 
@@ -165,15 +166,27 @@ bool AudioEngine::startRealtimeRenderer(double rate, int devicePeriod) {
   stopCleanupDone = false;
   renderLatencySamples.store(devicePeriod * 2 + bridge.getLatencySamples());
   setLatencySamples(renderLatencySamples.load());
-  if (startThread(juce::Thread::Priority::high))
-    return true;
-  const juce::String error = L"无法启动音频渲染线程。";
+  renderThreadStarted.reset();
+  juce::String error = L"无法启动音频渲染线程。";
+  if (startThread(juce::Thread::Priority::high)) {
+    renderThreadStarted.wait(-1);
+    if (renderThreadStartResult.wasOk())
+      return true;
+    error = renderThreadStartResult.getErrorMessage();
+    stopRealtimeRenderer();
+  }
   setLastPluginError(error);
   bridge.failRenderSession(error);
   return false;
 }
 
 void AudioEngine::run() {
+  AudioThreadPriority priority;
+  renderThreadStartResult = priority.enableRealtime();
+  renderThreadStarted.signal();
+  if (renderThreadStartResult.failed())
+    return;
+
   try {
     while (!threadShouldExit()) {
       if (requiresPrepare()) {

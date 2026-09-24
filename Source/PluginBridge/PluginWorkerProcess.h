@@ -6,6 +6,7 @@
 
 #include "PluginBridgeProtocol.h"
 #include "PluginBridgeSharedBlock.h"
+#include "../AudioEngine/AudioThreadPriority.h"
 
 #include <cstdlib>
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -99,10 +100,29 @@ private:
     explicit BlockProcessingThread(PluginWorkerProcess &owner)
         : juce::Thread("Plugin bridge block processor"), worker(owner) {}
 
-    void run() override { worker.processBlocksUntilStopped(); }
+    // Preconditions: 上一次渲染线程已停止；准备命令串行调用。
+    juce::Result startProcessing(bool nonRealtime) {
+      realtime = !nonRealtime;
+      started.reset();
+      if (!startThread(juce::Thread::Priority::normal))
+        return juce::Result::fail("unable to start plugin render thread");
+      started.wait(-1);
+      return startResult;
+    }
+
+    void run() override {
+      AudioThreadPriority priority;
+      startResult = realtime ? priority.enableRealtime() : juce::Result::ok();
+      started.signal();
+      if (startResult.wasOk())
+        worker.processBlocksUntilStopped();
+    }
 
   private:
     PluginWorkerProcess &worker;
+    bool realtime = false;
+    juce::WaitableEvent started;
+    juce::Result startResult{juce::Result::ok()};
   };
 
   void addFormats() {
@@ -264,12 +284,6 @@ private:
     }
 
     processMidi.ensureSize(SharedBlockLayout::maxMidiBytes);
-    if (!blockThread.startThread(juce::Thread::Priority::highest)) {
-      unloadPlugin();
-      sendStatus(StatusCode::pluginLoadFailed, "unable to start render thread",
-                 Command::loadPlugin);
-      return;
-    }
     sendStatus(StatusCode::ok, "plugin loaded", Command::loadPlugin);
   }
 
@@ -298,10 +312,16 @@ private:
                  command);
       return;
     }
+    // Ordering: 在线程退出时解除旧调度；实时播放和独占导出各自建立对应的线程调度。
+    stopBlockThread();
     const juce::ScopedLock lock(pluginLock);
     if (plugin == nullptr) {
       sendStatus(StatusCode::pluginLoadFailed, "plugin not loaded",
                  command);
+      return;
+    }
+    if (!sharedBlock->resetEvents()) {
+      sendStatus(StatusCode::sharedBlockFailed, sharedBlock->getLastErrorMessage(), command);
       return;
     }
 
@@ -342,6 +362,11 @@ private:
     plugin->setNonRealtime(request.nonRealtime);
     plugin->prepareToPlay(request.sampleRate, request.blockSize);
     plugin->reset();
+    const auto threadResult = blockThread.startProcessing(request.nonRealtime);
+    if (threadResult.failed()) {
+      sendStatus(StatusCode::renderFailed, threadResult.getErrorMessage(), command);
+      return;
+    }
     if (command == Command::endExport) {
       savedPluginState.reset();
       hasSavedPluginState = false;

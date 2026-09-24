@@ -84,6 +84,8 @@ public:
     auto midiFile = parseMidiFileFromCommandLine(commandLine);
 
     if (mainWindow != nullptr) {
+      mainWindow->setMinimised(false);
+      mainWindow->setVisible(true);
       mainWindow->toFront(true);
 
       if (midiFile.existsAsFile()) {

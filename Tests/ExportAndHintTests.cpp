@@ -658,6 +658,16 @@ int main(int argc, char *argv[]) {
   if (runBridgeWorkerChildIfRequested(argc, argv))
     return 0;
 
+  if (makeCommandLine(argc, argv) == "--plugin-bridge") {
+    if (juce::SystemStats::getEnvironmentVariable("MIDI_PLAYER_PLUGIN_BRIDGE_SMOKE_XML", "").isEmpty() ||
+        juce::SystemStats::getEnvironmentVariable("MIDI_PLAYER_PLUGIN_BRIDGE_SMOKE_NAME", "").isEmpty()) {
+      std::cerr << "--plugin-bridge requires a plugin XML path and plugin name\n";
+      return 1;
+    }
+    runRealPluginBridgeSmokeIfRequested();
+    return failures == 0 ? 0 : 1;
+  }
+
   const bool midiPlaybackOnly = makeCommandLine(argc, argv) == "--midi-playback";
   if (!midiPlaybackOnly) {
   testProductionIconVisualBounds();

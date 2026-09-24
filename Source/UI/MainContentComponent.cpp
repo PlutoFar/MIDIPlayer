@@ -1137,23 +1137,6 @@ void MainContentComponent::showOpenFileDialog() {
       });
 }
 
-bool MainContentComponent::isFileAssociatedToSelf() {
-  return isMidiFileAssociatedToSelf();
-}
-
-void MainContentComponent::removeFileAssociation() {
-  removeMidiFileAssociation();
-}
-
-std::unique_ptr<juce::ToggleButton>
-MainContentComponent::createDontShowAgainToggle() {
-  auto toggle =
-      std::make_unique<juce::ToggleButton>(L"\u4e0d\u518d\u63d0\u793a");
-  toggle->setColour(juce::ToggleButton::textColourId, juce::Colours::white);
-  toggle->setSize(200, 24);
-  return toggle;
-}
-
 void MainContentComponent::setPendingShellOpen(bool pending) {
   pendingShellOpen = pending;
 }

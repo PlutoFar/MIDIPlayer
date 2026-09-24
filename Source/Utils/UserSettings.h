@@ -312,20 +312,6 @@ public:
     settings.setValue("sidebarCollapsed", collapsed);
   }
 
-  bool getFileAssociated() const {
-    return settings.getBoolValue("fileAssociated", false);
-  }
-  void setFileAssociated(bool associated) {
-    settings.setValue("fileAssociated", associated);
-  }
-
-  bool getDontShowFileAssocPrompt() const {
-    return settings.getBoolValue("dontShowFileAssocPrompt", false);
-  }
-  void setDontShowFileAssocPrompt(bool dontShow) {
-    settings.setValue("dontShowFileAssocPrompt", dontShow);
-  }
-
   bool getAlwaysOnTop() const {
     return settings.getBoolValue("alwaysOnTop", false);
   }

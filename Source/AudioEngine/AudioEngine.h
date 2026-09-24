@@ -130,6 +130,9 @@ private:
   bool startRealtimeRenderer(double rate, int devicePeriod);
   void stopRealtimeRenderer();
   void renderRealtimeBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &);
+  // Ordering: 启动结果在线程注册 MMCSS 后发布，设备回调只在成功后恢复。
+  juce::WaitableEvent renderThreadStarted;
+  juce::Result renderThreadStartResult{juce::Result::ok()};
   RealtimeAudioBuffer realtimeAudio;
   juce::AudioBuffer<float> realtimeBlock;
   juce::MidiBuffer realtimeMidi;

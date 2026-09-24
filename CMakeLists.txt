@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.27)
 
-project(ModernMidiPlayer VERSION 1.2.2 LANGUAGES C CXX)
+project(ModernMidiPlayer VERSION 1.2.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,6 +28,7 @@ option(MIDIPLAYER_ENABLE_ASIO
 # Shared by the JUCE desktop application, plugin worker and native tests.
 # ============================================================================
 add_library(MidiCore STATIC
+    Source/Utils/WindowsFileAssociation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/AudioDevices.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Library.cpp
@@ -35,6 +36,7 @@ add_library(MidiCore STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Playlist.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/ExportTask.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioThreadPriority.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioDeviceService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/PluginLibrary.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/OfflineRenderer.cpp
@@ -177,6 +179,8 @@ if(MSVC)
 endif()
 
 if(WIN32)
+    target_link_libraries(MidiCore PUBLIC avrt advapi32 shell32 shlwapi)
+
     # Ordering: JUCE's resource rule must rerun when version metadata changes.
     foreach(app IN ITEMS MidiPlayer MidiWorker)
         get_target_property(resource_dir ${app} JUCE_GENERATED_SOURCES_DIRECTORY)

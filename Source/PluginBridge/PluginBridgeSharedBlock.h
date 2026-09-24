@@ -51,6 +51,7 @@ __declspec(dllimport) HANDLE __stdcall
 CreateEventW(LPSECURITY_ATTRIBUTES lpEventAttributes, BOOL bManualReset,
              BOOL bInitialState, LPCWSTR lpName);
 __declspec(dllimport) BOOL __stdcall SetEvent(HANDLE hEvent);
+__declspec(dllimport) BOOL __stdcall ResetEvent(HANDLE hEvent);
 __declspec(dllimport) DWORD __stdcall WaitForSingleObject(HANDLE hHandle,
                                                          DWORD dwMilliseconds);
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE hObject);
@@ -162,6 +163,21 @@ public:
   // Ordering: 先写完整共享块，再发送对应事件；失败返回 `false` 并记录系统诊断。
   bool signalRequest() { return signal(requestEvent, "request"); }
   bool signalResponse() { return signal(responseEvent, "response"); }
+
+  // Preconditions: 宿主没有渲染请求，工作线程已停止；仅在重新准备插件时调用。
+  // Ordering: 清除停止线程的唤醒事件，防止新线程处理上一会话的共享块。
+  bool resetEvents() {
+#if JUCE_WINDOWS
+    if (!ResetEvent(requestEvent) || !ResetEvent(responseEvent)) {
+      setLastWindowsError("ResetEvent failed");
+      return false;
+    }
+    return true;
+#else
+    lastError = "plugin bridge shared blocks are Windows-only";
+    return false;
+#endif
+  }
 
   // Contract: `timeoutMs` 为毫秒，负值表示无限等待；调用方必须安排终止唤醒。
   // Failures: 超时和句柄/系统错误通过不同的 `WaitResult` 值返回，不自动重试。

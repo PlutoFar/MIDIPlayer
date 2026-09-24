@@ -223,54 +223,43 @@ bool MainContentComponent::savePlaylistAs() {
   return false;
 }
 
-bool MainContentComponent::registerFileAssociation() {
-  return registerMidiFileAssociation();
+void MainContentComponent::updateFileAssociation() {
+#if JUCE_WINDOWS
+  const auto result = registerMidiFileAssociation();
+  if (result.failed()) {
+    showPluginMessage(L"文件关联失败", result.getErrorMessage());
+    return;
+  }
+
+  // 已有默认项指向本程序时，更新打开命令即可；其他默认选择交由系统确认。
+  if (isMidiFileAssociatedToSelf())
+    return;
+  if (!juce::URL("ms-settings:defaultapps").launchInDefaultBrowser())
+    showPluginMessage(L"无法打开默认应用设置",
+                      L"请在 Windows 设置中为 .mid 和 .midi 选择 MIDI 播放器。");
+#endif
 }
 
 void MainContentComponent::showFileAssociationPrompt() {
 #if JUCE_WINDOWS
-  if (isFileAssociatedToSelf() || getAppSettings().getDontShowFileAssocPrompt())
+  if (isMidiFileAssociatedToSelf())
     return;
 
   auto *alertWindow = fluentLookAndFeel.createAlertWindow(
       L"\u6587\u4EF6\u5173\u8054",
-      L"\u662F\u5426\u5C06 .mid \u548C .midi \u6587\u4EF6\u5173\u8054\u5230 "
-      L"MIDI \u64AD\u653E\u5668\uFF1F\n\n"
-      L"\u5173\u8054\u540E\uFF0C\u53CC\u51FB MIDI "
-      L"\u6587\u4EF6\u5373\u53EF\u81EA\u52A8\u6253\u5F00\u672C\u5E94\u7528"
-      L"\u8FDB\u884C\u64AD\u653E\u3002",
+      L".mid 或 .midi 文件尚未关联到当前播放器。是否更新文件关联？",
       {}, {}, {}, juce::MessageBoxIconType::QuestionIcon, 0, this);
 
-  alertWindow->addButton(L"\u5173\u8054", 1);
-  alertWindow->addButton(L"\u4e0d\u5173\u8054", 0);
-
-  auto dontShowToggle = createDontShowAgainToggle();
-  auto *togglePtr = dontShowToggle.get();
-  alertWindow->addCustomComponent(dontShowToggle.release());
+  alertWindow->addButton(L"更新关联", 1);
+  alertWindow->addButton(L"暂不更新", 0);
 
   auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
 
   alertWindow->enterModalState(
       true,
-      juce::ModalCallbackFunction::create([safeThis, togglePtr](int result) {
-        if (safeThis == nullptr)
-          return;
-
-        bool dontShowAgain =
-            (togglePtr != nullptr) ? togglePtr->getToggleState() : false;
-
-        if (result == 1) {
-          if (safeThis->registerFileAssociation()) {
-            getAppSettings().setFileAssociated(true);
-            getAppSettings().setDontShowFileAssocPrompt(true);
-            saveAppSettingsWithFeedback();
-          }
-        } else {
-          if (dontShowAgain) {
-            getAppSettings().setDontShowFileAssocPrompt(true);
-            saveAppSettingsWithFeedback();
-          }
-        }
+      juce::ModalCallbackFunction::create([safeThis](int result) {
+        if (safeThis != nullptr && result == 1)
+          safeThis->updateFileAssociation();
       }),
       true);
 #endif

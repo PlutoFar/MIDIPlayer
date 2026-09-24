@@ -7,7 +7,7 @@
 <p align="center">Windows x64 MIDI 播放器与 VST3 乐器宿主</p>
 
 <p align="center">
-  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.2">v1.2.2</a>
+  <a href="https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.3">v1.2.3</a>
   ·
   <a href="https://github.com/PlutoFar/MIDIPlayer/releases">发布版本</a>
   ·
@@ -58,9 +58,9 @@ MIDI Player 是 Windows MIDI（乐器数字接口）文件播放器，支持通�
 
 ## 下载与快速开始
 
-当前发布包：`MIDIPlayer-v1.2.2-Windows-x64.zip`，已包含便携模式标记。
+当前发布包：`MIDIPlayer-v1.2.3-Windows-x64.zip`，已包含便携模式标记。
 
-下载地址：[GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.2)
+下载地址：[GitHub Releases](https://github.com/PlutoFar/MIDIPlayer/releases/tag/v1.2.3)
 
 1. 将压缩包解压到具有写入权限的目录。
 2. 确认 `MidiPlayer.exe` 与 `MidiWorker.exe` 位于同一目录。
@@ -94,6 +94,8 @@ C:\Program Files\Common Files\VST3\
 发布包默认使用 `portable.dat`。故障定位期间将标记改为 `portable_debug.dat`，复现问题后提交 `debug_log.txt`。
 
 升级时退出程序，保留原目录的 `Settings/` 和 `VST3/`，再解压新版本。播放列表文件及其引用的 MIDI 文件保存在用户选择的位置。
+
+程序每次启动时检查 `.mid` 和 `.midi` 的默认打开程序。两者均指向当前运行的 `MidiPlayer.exe` 时跳过提示；任一关联不匹配时，询问是否更新。选择“更新关联”后注册当前程序，仍需更改默认应用时打开 Windows 设置；选择“暂不更新”保留现有关联。
 
 ## 从源码构建
 
