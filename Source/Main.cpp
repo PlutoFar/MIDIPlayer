@@ -192,12 +192,10 @@ public:
       if (content && content->hasUnsavedChanges()) {
         isClosing = true;
 
-        juce::String summary = content->getPlaylistChangeSummary();
-        juce::String message = L"播放列表有以下未保存的更改：\n\n" + summary +
-                               L"\n\n是否保存更改？";
+        const auto summary = content->getPlaylistChangeSummary();
 
         int result = juce::AlertWindow::showYesNoCancelBox(
-            juce::AlertWindow::QuestionIcon, L"未保存的更改", message,
+            juce::AlertWindow::QuestionIcon, L"未保存的更改", summary,
             L"保存并退出", L"不保存", L"取消", this);
 
         if (result == 1) {

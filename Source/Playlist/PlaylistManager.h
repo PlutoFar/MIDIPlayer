@@ -309,6 +309,6 @@ public:
     if (changeLog.reordered)
       details.add(L"列表排序已变更");
 
-    return details.joinIntoString("\n - ");
+    return details.joinIntoString("\n");
   }
 };
