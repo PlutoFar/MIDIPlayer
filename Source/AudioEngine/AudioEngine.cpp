@@ -24,18 +24,15 @@ void AudioEngine::prepareToPlay(double sampleRate, int blockSize) {
   deviceRevision.fetch_add(1);
 }
 
-bool AudioEngine::preparePlugin(std::function<void(double)> prepareMidi) {
-  double sampleRate;
-  int blockSize;
-  unsigned revision;
-  bool wasSuspended;
-  {
-    const juce::ScopedLock lock(getCallbackLock());
-    sampleRate = deviceSampleRate.load();
-    blockSize = deviceBlockSize.load();
-    revision = deviceRevision.load();
-    wasSuspended = isSuspended();
-  }
+AudioEngine::DeviceConfiguration AudioEngine::deviceConfiguration() {
+  const juce::ScopedLock lock(getCallbackLock());
+  return {deviceSampleRate.load(), deviceBlockSize.load(), configurationRevision()};
+}
+
+bool AudioEngine::preparePlugin(DeviceConfiguration configuration,
+                                std::function<void(double)> prepareMidi) {
+  const auto [sampleRate, blockSize, revision] = configuration;
+  const bool wasSuspended = isSuspended();
   suspendProcessing(true);
   stopRealtimeRenderer();
   const bool ok = bridge.prepare(sampleRate, blockSize);
@@ -360,7 +357,7 @@ bool AudioEngine::loadPlugin(const juce::PluginDescription &description,
     return false;
   }
 
-  if (!preparePlugin(std::move(prepareMidi))) {
+  if (!preparePlugin(deviceConfiguration(), std::move(prepareMidi))) {
     setLastPluginError(bridge.getLastError());
     bridge.unloadPlugin();
     suspendProcessing(false);

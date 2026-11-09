@@ -4,6 +4,7 @@
 #include "TrackId.h"
 
 #include <juce_data_structures/juce_data_structures.h>
+#include <optional>
 
 // Responsibilities: 曲目顺序、可用性、未保存变更及 JSON 持久化；不控制音频播放。
 // Ownership: 持有曲目记录；返回的指针/引用只在下一次列表修改前有效。
@@ -119,6 +120,37 @@ public:
       if (tracks[index].id == id)
         return index;
     return -1;
+  }
+
+  std::optional<int> occurrenceOf(midi::TrackId id) const {
+    const int row = findTrackIndex(id);
+    if (row < 0)
+      return std::nullopt;
+    int occurrence = 0;
+    for (int index = 0; index < row; ++index)
+      if (tracks[index].file == tracks[row].file)
+        ++occurrence;
+    return occurrence;
+  }
+
+  // 没有旧绑定时只匹配唯一条目，避免将正在播放的文件绑定到任意重复行。
+  midi::TrackId bindFile(const juce::File &file,
+                         std::optional<int> occurrence) const {
+    midi::TrackId match = 0;
+    int index = 0;
+    for (const auto &track : tracks) {
+      if (track.file != file)
+        continue;
+      if (occurrence) {
+        if (index++ == *occurrence)
+          return track.id;
+      } else {
+        if (match != 0)
+          return 0;
+        match = track.id;
+      }
+    }
+    return match;
   }
 
   // Side effect: 重新检查文件存在性并更新记录；返回 `false` 仍可能已将条目标记为不可用。

@@ -113,6 +113,15 @@ private:
          command == PluginBridge::Command::beginExport ||
          command == PluginBridge::Command::endExport) &&
         sharedBlock != nullptr) {
+      const auto request = PluginBridge::prepareRequestFromValueTree(tree);
+      const auto rejectedRate = juce::SystemStats::getEnvironmentVariable(
+          "MIDI_PLAYER_TEST_REJECTED_SAMPLE_RATE", "");
+      if (rejectedRate.isNotEmpty() && request.sampleRate == rejectedRate.getDoubleValue()) {
+        sendMessageToCoordinator(PluginBridge::makeStatusReply(
+            PluginBridge::StatusCode::invalidCommand, "test device preparation rejected",
+            command));
+        return;
+      }
       sendMessageToCoordinator(PluginBridge::makeStatusReply(
           PluginBridge::StatusCode::ok, "test plugin prepared",
           command));
@@ -209,7 +218,7 @@ int runPluginBridgeTests() {
   };
 
   {
-    std::cout << "  Worker path and scanner exit" << std::endl;
+    std::cout << "  Worker path, scanner output and cancellation" << std::endl;
     const TestDirectory directory;
     const auto player = directory.path.getChildFile("MidiPlayer.exe");
     const auto worker = directory.path.getChildFile("MidiWorker.exe");
@@ -220,11 +229,32 @@ int runPluginBridgeTests() {
            "worker resolution should prefer the adjacent executable");
 
     juce::KnownPluginList source, destination;
-    juce::String diagnostic;
+    juce::PluginDescription scannedPlugin;
+    scannedPlugin.name = "Scanner fixture";
+    scannedPlugin.pluginFormatName = "VST3";
+    scannedPlugin.fileOrIdentifier = directory.path.getChildFile("Fixture.vst3").getFullPathName();
+    scannedPlugin.uniqueId = 1;
+    expect(source.addType(scannedPlugin), "the scanner fixture catalog should contain one plugin");
     const auto testExe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
-    expect(!PluginBridge::scanPluginListInChildProcess(
-               source, destination, {}, diagnostic, testExe) && diagnostic.isNotEmpty(),
-           "scanner process failure should return a diagnostic");
+    expect(PluginBridge::scanPluginListInChildProcess(source, destination, {}, testExe).wasOk() &&
+               destination.getNumTypes() == 1,
+           "scanner output larger than the pipe buffer should allow catalog publication");
+
+    juce::KnownPluginList empty;
+    setTestEnvironmentVariable(L"MIDI_PLAYER_TEST_SCAN_FAIL", L"1");
+    const auto failed = PluginBridge::scanPluginListInChildProcess(empty, destination, {}, testExe);
+    clearTestEnvironmentVariable(L"MIDI_PLAYER_TEST_SCAN_FAIL");
+    expect(failed.failed() && failed.getErrorMessage().contains("scanner fixture failure marker") &&
+               destination.getNumTypes() == 1,
+           "a failed scan should include the final diagnostic and keep the previous catalog");
+
+    const auto ready = directory.path.getChildFile("scanner-ready");
+    setTestEnvironmentVariable(L"MIDI_PLAYER_TEST_SCAN_READY", ready.getFullPathName().toWideCharPointer());
+    const auto cancelled = PluginBridge::scanPluginListInChildProcess(
+        empty, destination, [&] { return ready.existsAsFile(); }, testExe);
+    clearTestEnvironmentVariable(L"MIDI_PLAYER_TEST_SCAN_READY");
+    expect(cancelled.failed() && ready.existsAsFile() && destination.getNumTypes() == 1,
+           "cancellation after heavy output should finish without publishing a catalog");
   }
 
   auto pluginTempDir =

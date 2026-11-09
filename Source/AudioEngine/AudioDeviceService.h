@@ -19,6 +19,8 @@ public:
   juce::String setDriver(const juce::String &name);
   juce::String apply(const juce::AudioDeviceManager::AudioDeviceSetup &setup);
   juce::String showControlPanel();
+  bool needsRecovery() const { return recoveryRequested; }
+  juce::String recoverDefaultDevice();
   // Side effect: 向当前输出设备发送 JUCE 测试音；可用性由调用方决定。
   void playTestSound();
   // Concurrency: 以下查询读取原子可用性、构造期标记或加锁诊断，可跨线程使用。
@@ -45,6 +47,7 @@ private:
   juce::String error;
   bool firstRun = false;
   bool restoredWithFallback = false;
-  bool recovering = false;
+  bool observedDevice = false;
+  bool recoveryRequested = false;
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioDeviceService)
 };

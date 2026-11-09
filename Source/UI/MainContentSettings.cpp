@@ -1,4 +1,5 @@
 #include "AudioSettingsContent.h"
+#include "BackgroundSettingsDialog.h"
 #include "FontSettingsContent.h"
 #include "MainContentComponent.h"
 

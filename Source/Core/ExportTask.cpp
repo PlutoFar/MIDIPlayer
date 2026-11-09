@@ -37,19 +37,14 @@ ExportOutcome Core::runExport(const ExportRequest &request,
   auto &core = *impl;
   {
     Impl::StateLock lock(core.stateMutex);
-    if (core.exportActiveFlag.load() || core.commandTaskActive.load() ||
-        core.pluginScanActive.load() || core.audioConfigurationActive.load())
-      return fail(L"当前操作尚未结束，无法开始导出。");
     if (!core.engine.hasPluginLoaded())
       return fail(L"请先加载乐器插件。");
-    if (targetFile == core.currentMidiFile)
+    if (targetFile == core.loadedTrack.source)
       return fail(L"导出目标不能覆盖正在播放的 MIDI 文件。");
-    core.exportActiveFlag.store(true);
+    if (!core.audioSession.begin(Impl::Operation::exportAudio))
+      return fail(L"当前操作尚未结束，无法开始导出。");
   }
-  struct ExportAdmission {
-    std::atomic<bool> &active;
-    ~ExportAdmission() { active.store(false); }
-  } admission{core.exportActiveFlag};
+  Impl::SessionOperation exporting{core};
 
   std::unique_ptr<juce::MidiMessageSequence> sequence;
   if (const auto parsed = readMidiSequence(sourceFile, sequence); parsed.failed())

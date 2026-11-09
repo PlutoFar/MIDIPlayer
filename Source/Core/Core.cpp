@@ -28,13 +28,12 @@ AppState Core::Impl::buildState() {
   StateLock lock(stateMutex);
   AppState s;
 
-  s.plugin.scanning = pluginScanActive.load();
-  s.task.audioChangeInProgress = commandChangesAudio.load() || audioConfigurationActive.load();
-  s.task.commandActive = commandTaskActive.load() || pluginScanActive.load() ||
-                         audioConfigurationActive.load();
+  s.plugin.scanning = audioSession.isScanning();
+  s.task.audioChangeInProgress = audioSession.isChangingAudio();
+  s.task.commandActive = audioSession.hasControlTask();
   s.plugin.loaded = engine.hasPluginLoaded();
   s.plugin.loadedName = toW(engine.getLoadedPluginName());
-  s.plugin.workerCrashed = engine.hasPluginWorkerCrashed();
+  s.plugin.workerCrashed = workerCrashed();
 
   auto &mp = engine.getMidiPlayer();
   s.transport.playing = mp.getPlaying();
@@ -43,8 +42,8 @@ AppState Core::Impl::buildState() {
   const double duration = mp.getDurationInSamples();
   s.transport.positionSeconds = juce::jmin(mp.getPositionInSamples(), duration) / sampleRate;
   s.transport.durationSeconds = duration / sampleRate;
-  s.transport.currentTrackIndex = currentTrackIndex;
-  s.transport.currentMidiName = toW(currentMidiName);
+  s.transport.currentTrackIndex = currentTrackIndex();
+  s.transport.currentMidiName = toW(loadedTrack.source.getFileNameWithoutExtension());
   s.transport.lastError = toW(midiErrorText);
 
   s.playlist = buildPlaylistSummary();
@@ -56,8 +55,11 @@ AppState Core::Impl::buildState() {
   s.audio.underrunCount = engine.getUnderrunCount();
   s.audio.renderLatencySamples = engine.getRenderLatencySamples();
   s.audio.lastInitError = toW(audio.lastError());
+  s.audio.outputNeedsPreparation = engine.requiresPrepare();
+  if (s.audio.outputNeedsPreparation)
+    s.audio.preparationError = toW(audioSession.deviceError(engine.configurationRevision()));
 
-  s.task.exportActive = exportActiveFlag.load();
+  s.task.exportActive = audioSession.isExporting();
 
   return s;
 }
@@ -66,7 +68,7 @@ PlaylistState Core::Impl::buildPlaylistState() {
   StateLock lock(stateMutex);
   PlaylistState result;
   static_cast<PlaylistSummary &>(result) = buildPlaylistSummary();
-  result.currentTrackIndex = currentTrackIndex;
+  result.currentTrackIndex = currentTrackIndex();
   result.tracks.reserve(static_cast<size_t>(playlist.size()));
   for (const auto &track : playlist.getTracks())
     result.tracks.push_back({track.id, toW(track.name), pathToW(track.file),
@@ -120,12 +122,14 @@ std::wstring Core::loadedPluginName() const {
   return toW(impl->engine.getLoadedPluginName());
 }
 bool Core::workerCrashed() const {
-  return impl->engine.hasPluginWorkerCrashed();
+  Impl::StateLock lock(impl->stateMutex);
+  return impl->workerCrashed();
 }
 std::wstring Core::pluginError() const {
-  return toW(impl->engine.getPluginWorkerError());
+  Impl::StateLock lock(impl->stateMutex);
+  const auto &failure = impl->audioSession.workerFailure();
+  return toW(failure ? *failure : impl->engine.getPluginWorkerError());
 }
-void Core::terminateCrashedWorker() { impl->terminateCrashedWorker(); }
 void Core::cancelPendingPluginOperation() {
   impl->engine.cancelPendingPluginOperation();
 }
@@ -150,8 +154,9 @@ void Core::next() { impl->next(); }
 void Core::prev() { impl->prev(); }
 void Core::playTrack(TrackId id) {
   Impl::StateLock lock(impl->stateMutex);
-  if (impl->exportActiveFlag.load() || impl->commandChangesAudio.load() ||
-      !impl->engine.hasPluginLoaded() || impl->engine.hasPluginWorkerCrashed())
+  if (!impl->audioSession.isIdle() ||
+      !impl->audio.hasDevice() || !impl->engine.hasPluginLoaded() ||
+      impl->engine.requiresPrepare())
     return;
   if (const auto *track = impl->playlist.getTrack(impl->playlist.findTrackIndex(id)))
     impl->beginMidiLoad(track->file, track->id);
@@ -160,7 +165,7 @@ void Core::seek(double ratio) { impl->seek(ratio); }
 void Core::volume(float value) { impl->volume(value); }
 int Core::currentTrackIndex() const {
   Impl::StateLock lock(impl->stateMutex);
-  return impl->currentTrackIndex;
+  return impl->currentTrackIndex();
 }
 
 // playlist

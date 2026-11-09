@@ -65,6 +65,8 @@ struct AudioState {
   uint64_t underrunCount = 0;
   int renderLatencySamples = 0;
   std::wstring lastInitError;
+  bool outputNeedsPreparation = false;
+  std::wstring preparationError;
 };
 
 struct TaskState {

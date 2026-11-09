@@ -35,6 +35,37 @@ int runBackgroundTests() {
   expect(failures, history.remove(blueFile, blueFile).failed() && blueFile.existsAsFile(),
          "history should protect the active image");
 
+  using midi::background::Material;
+  using midi::background::RenderRequest;
+  using midi::background::RenderResult;
+  using midi::background::Renderer;
+  bool obsoleteDelivered = false;
+  std::optional<RenderResult> latest;
+  {
+    Renderer renderer;
+    expect(failures,
+           renderer.submit({1, redFile, {}, Material::Acrylic, 30, true},
+                           [&](RenderResult) { obsoleteDelivered = true; }) &&
+           renderer.submit({2, blueFile, {}, Material::GaussianBlur, 5, true},
+                           [&](RenderResult result) { latest = std::move(result); }),
+           "the renderer should accept independent image and material requests");
+    expect(failures, waitForBackground([&] { return latest.has_value(); }) &&
+                         !obsoleteDelivered && latest->processed.isValid() &&
+                         !latest->palette.empty() &&
+                         latest->palette.front().getBlue() > latest->palette.front().getRed(),
+           "the renderer should deliver only the latest image and palette");
+  }
+  {
+    Renderer renderer;
+    expect(failures, renderer.submit(
+        RenderRequest{3, redFile, {}, Material::None, 5, false},
+        [&](RenderResult) { obsoleteDelivered = true; }),
+        "the renderer should accept a request before its owner is destroyed");
+  }
+  juce::MessageManager::getInstance()->runDispatchLoopUntil(5);
+  expect(failures, !obsoleteDelivered,
+         "destroying the renderer should cancel pending callbacks");
+
   UserSettings settings(directory.path.getChildFile("Settings.xml"));
   settings.finishPersistence();
   settings.setMonetEnabled(true);

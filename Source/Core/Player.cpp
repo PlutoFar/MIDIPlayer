@@ -8,9 +8,8 @@
 namespace midi {
 
 bool Core::Impl::canStartPlayback() {
-  return engine.getMidiPlayer().hasSequence() && engine.hasPluginLoaded() &&
-         !engine.hasPluginWorkerCrashed() && !commandChangesAudio.load() &&
-         !exportActiveFlag.load();
+  return audio.hasDevice() && engine.getMidiPlayer().hasSequence() && engine.hasPluginLoaded() &&
+         !engine.requiresPrepare() && audioSession.allowsSequenceChange();
 }
 
 bool Core::Impl::beginMidiLoad(const juce::File &file, TrackId trackId,
@@ -18,7 +17,7 @@ bool Core::Impl::beginMidiLoad(const juce::File &file, TrackId trackId,
                               std::function<void()> onPluginMissing) {
   const int generation = trackSwitchGeneration + 1;
   midiErrorText.clear();
-  const auto accepted = startCommandTask(
+  const auto accepted = startCommandTask(Operation::loadMidi,
       [this, file, trackId] {
         std::unique_ptr<juce::MidiMessageSequence> sequence;
         const auto parsed = readMidiSequence(file, sequence);
@@ -27,13 +26,11 @@ bool Core::Impl::beginMidiLoad(const juce::File &file, TrackId trackId,
 
         StateLock resultLock(stateMutex);
         engine.getMidiPlayer().setSequence(std::move(sequence), engine.liveSampleRate());
-        currentMidiFile = file;
-        currentMidiName = file.getFileNameWithoutExtension();
+        loadedTrack = {file, trackId};
         if (trackId == 0) {
           playlist.addFile(file);
-          currentTrackIndex = playlist.findTrackIndex(file);
-        } else {
-          currentTrackIndex = playlist.findTrackIndex(trackId);
+          if (const auto *entry = playlist.getTrack(playlist.findTrackIndex(file)))
+            loadedTrack.id = entry->id;
         }
         return juce::Result::ok();
       },
@@ -78,7 +75,7 @@ void Core::Impl::play() {
 
 void Core::Impl::pause() {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (audioSession.isExporting())
     return;
   ++trackSwitchGeneration;
   engine.getMidiPlayer().setPlaying(false);
@@ -102,7 +99,7 @@ void Core::Impl::togglePlay() {
 
 void Core::Impl::stop() {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load())
+  if (audioSession.isExporting())
     return;
   resetPlayback();
 }
@@ -113,9 +110,21 @@ void Core::Impl::resetPlayback() {
   engine.getMidiPlayer().seekTo(0);
 }
 
+void Core::Impl::clearLoadedTrack() {
+  ++trackSwitchGeneration;
+  loadedTrack = {};
+  auto &player = engine.getMidiPlayer();
+  player.setPlaying(false);
+  player.setSequence(nullptr, engine.liveSampleRate());
+}
+
+int Core::Impl::currentTrackIndex() const {
+  return loadedTrack.id == 0 ? -1 : playlist.findTrackIndex(loadedTrack.id);
+}
+
 void Core::Impl::seek(double ratio) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandChangesAudio.load())
+  if (!audioSession.allowsSequenceChange())
     return;
   auto &mp = engine.getMidiPlayer();
   const double dur = mp.getDurationInSamples();
@@ -125,19 +134,17 @@ void Core::Impl::seek(double ratio) {
 
 void Core::Impl::volume(float value) {
   StateLock lock(stateMutex);
-  if (!exportActiveFlag.load())
+  if (!audioSession.isExporting())
     engine.setMasterVolume(value);
 }
 
 void Core::Impl::next() {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandTaskActive.load() || pluginScanActive.load() ||
-      audioConfigurationActive.load())
-    return;
-  if (playlist.isEmpty() || !engine.hasPluginLoaded())
+  if (!audioSession.isIdle() || playlist.isEmpty() ||
+      !audio.hasDevice() || !engine.hasPluginLoaded() || engine.requiresPrepare())
     return;
 
-  const int nextIndex = playlist.getNextIndex(currentTrackIndex);
+  const int nextIndex = playlist.getNextIndex(currentTrackIndex());
   if (nextIndex == -1) {
     resetPlayback();
     return;
@@ -150,13 +157,11 @@ void Core::Impl::next() {
 
 void Core::Impl::prev() {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandTaskActive.load() || pluginScanActive.load() ||
-      audioConfigurationActive.load())
-    return;
-  if (playlist.isEmpty() || !engine.hasPluginLoaded())
+  if (!audioSession.isIdle() || playlist.isEmpty() ||
+      !audio.hasDevice() || !engine.hasPluginLoaded() || engine.requiresPrepare())
     return;
 
-  const int previousIndex = playlist.getPreviousIndex(currentTrackIndex);
+  const int previousIndex = playlist.getPreviousIndex(currentTrackIndex());
   if (previousIndex == -1) {
     resetPlayback();
     return;
@@ -168,35 +173,9 @@ void Core::Impl::prev() {
 
 void Core::Impl::handleTrackEnd() {
   resetPlayback();
-  const int nextIndex = playlist.getNextIndex(currentTrackIndex);
+  const int nextIndex = playlist.getNextIndex(currentTrackIndex());
   if (const auto *track = playlist.getTrack(nextIndex))
     beginMidiLoad(track->file, track->id);
-}
-
-void Core::Impl::timerCallback() {
-  StateLock lock(stateMutex);
-  auto &player = engine.getMidiPlayer();
-  if (engine.hasPluginWorkerCrashed())
-    player.setPlaying(false);
-  if (exportActiveFlag.load() || commandTaskActive.load() ||
-      pluginScanActive.load() || audioConfigurationActive.load())
-    return;
-
-  if (!scrubbing && player.hasFinished())
-    handleTrackEnd();
-  if (!commandTaskActive.load() && engine.requiresPrepare())
-    startCommandTask(
-        [this] {
-          const bool prepared = engine.preparePlugin([this](double rate) {
-            StateLock lock(stateMutex);
-            auto &player = engine.getMidiPlayer();
-            player.setSampleRate(rate);
-            player.seekTo(player.getPositionInSamples(), player.getPlaying());
-          });
-          return prepared ? juce::Result::ok()
-                          : juce::Result::fail(engine.getLastPluginError());
-        },
-        {});
 }
 
 } // namespace midi

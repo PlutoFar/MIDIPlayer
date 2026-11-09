@@ -7,7 +7,7 @@ namespace midi {
 
 bool Core::Impl::addToPlaylist(const juce::File &file) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandChangesAudio.load())
+  if (!audioSession.allowsSequenceChange())
     return false;
   const bool ok = playlist.addFile(file);
   return ok;
@@ -15,7 +15,7 @@ bool Core::Impl::addToPlaylist(const juce::File &file) {
 
 int Core::Impl::addFilesToPlaylist(const std::vector<juce::File> &files) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandChangesAudio.load())
+  if (!audioSession.allowsSequenceChange())
     return 0;
   int added = 0;
   for (const auto &file : files) {
@@ -27,46 +27,25 @@ int Core::Impl::addFilesToPlaylist(const std::vector<juce::File> &files) {
 
 bool Core::Impl::removeTrack(TrackId id) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandChangesAudio.load())
+  if (!audioSession.allowsSequenceChange())
     return false;
-  const int index = playlist.findTrackIndex(id);
-  const bool ok = playlist.removeTrack(index);
-  if (ok) {
-    if (currentTrackIndex == index) {
-      ++trackSwitchGeneration;
-      currentTrackIndex = -1;
-      currentMidiFile = {};
-      currentMidiName = {};
-      engine.getMidiPlayer().setPlaying(false);
-      engine.getMidiPlayer().setSequence(nullptr, engine.liveSampleRate());
-    } else if (currentTrackIndex > index) {
-      --currentTrackIndex;
-    }
-  }
-  return ok;
+  if (!playlist.removeTrack(playlist.findTrackIndex(id)))
+    return false;
+  if (loadedTrack.id == id)
+    clearLoadedTrack();
+  return true;
 }
 
 bool Core::Impl::moveTrack(TrackId id, int toIndex) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandChangesAudio.load())
+  if (!audioSession.allowsSequenceChange())
     return false;
-  const int fromIndex = playlist.findTrackIndex(id);
-  const bool ok = playlist.moveTrack(fromIndex, toIndex);
-  if (ok) {
-    if (currentTrackIndex == fromIndex) {
-      currentTrackIndex = toIndex;
-    } else if (fromIndex < currentTrackIndex && currentTrackIndex <= toIndex) {
-      --currentTrackIndex;
-    } else if (toIndex <= currentTrackIndex && currentTrackIndex < fromIndex) {
-      ++currentTrackIndex;
-    }
-  }
-  return ok;
+  return playlist.moveTrack(playlist.findTrackIndex(id), toIndex);
 }
 
 bool Core::Impl::refreshTrack(int index) {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandChangesAudio.load())
+  if (!audioSession.allowsSequenceChange())
     return false;
   const bool ok = playlist.refreshTrack(index);
   return ok;
@@ -74,18 +53,13 @@ bool Core::Impl::refreshTrack(int index) {
 
 bool Core::Impl::clearPlaylist() {
   StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandChangesAudio.load())
+  if (!audioSession.allowsSequenceChange())
     return false;
-  ++trackSwitchGeneration;
   playlist.clear();
-  currentTrackIndex = -1;
-  currentMidiFile = {};
-  currentMidiName = {};
+  clearLoadedTrack();
   currentPlaylistFile = {};
   playlistErrorText.clear();
   settings.setLastPlaylistPath({});
-  engine.getMidiPlayer().setPlaying(false);
-  engine.getMidiPlayer().setSequence(nullptr, engine.liveSampleRate());
   return true;
 }
 
@@ -102,7 +76,7 @@ bool Core::Impl::saveList(const juce::File &file) {
   uint64_t revision;
   {
     StateLock lock(stateMutex);
-    if (exportActiveFlag.load() || commandChangesAudio.load()) {
+    if (!audioSession.allowsSequenceChange()) {
       playlistErrorText = L"当前操作尚未结束，无法保存播放列表。";
       return false;
     }
@@ -129,16 +103,18 @@ bool Core::Impl::loadList(const juce::File &file) {
   const auto result = PlaylistManager::read(file, loadedTracks);
   {
     StateLock lock(stateMutex);
-    if (exportActiveFlag.load() || commandChangesAudio.load()) {
+    if (!audioSession.allowsSequenceChange()) {
       playlistErrorText = L"当前操作尚未结束，无法加载播放列表。";
       return false;
     }
     playlistErrorText = result.getErrorMessage();
     if (result.failed())
       return false;
+    const auto occurrence = playlist.occurrenceOf(loadedTrack.id);
     playlist.replace(std::move(loadedTracks));
     currentPlaylistFile = file;
-    currentTrackIndex = playlist.findTrackIndex(currentMidiFile);
+    // JSON 不保存会话 ID。保留同一路径的条目序号，条目缺失时解除绑定。
+    loadedTrack.id = playlist.bindFile(loadedTrack.source, occurrence);
     ++trackSwitchGeneration;
   }
   settings.setLastPlaylistPath(file.getFullPathName());

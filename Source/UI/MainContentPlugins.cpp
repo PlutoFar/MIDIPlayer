@@ -186,16 +186,18 @@ void MainContentComponent::openPluginWindow() {
     return;
 
   const int requestGeneration = pluginGeneration;
+  const int editorRequest = ++editorRequestGeneration;
   auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
   const auto pluginName = juce::String(core.loadedPluginName().c_str());
   LOG_DEBUG("Scheduling plugin editor for " + pluginName + " in " +
             juce::String(pluginEditorOpenDelayMs) + " ms");
 
-  juce::Timer::callAfterDelay(pluginEditorOpenDelayMs, [safeThis, requestGeneration]() {
+  juce::Timer::callAfterDelay(pluginEditorOpenDelayMs, [safeThis, requestGeneration, editorRequest]() {
     if (safeThis == nullptr)
       return;
 
     if (safeThis->pluginGeneration != requestGeneration ||
+        safeThis->editorRequestGeneration != editorRequest ||
         !safeThis->core.hasPluginLoaded())
       return;
 
@@ -214,6 +216,7 @@ void MainContentComponent::openPluginWindow() {
 }
 
 void MainContentComponent::closePluginWindow() {
+  ++editorRequestGeneration;
   core.closeEditor();
 }
 
@@ -230,7 +233,6 @@ void MainContentComponent::handlePluginWorkerCrash() {
     unloadBtn.setEnabled(false);
     contentLabel.setText(L"插件进程已停止，请重新选择插件",
                          juce::dontSendNotification);
-    core.terminateCrashedWorker();
   }
 
   if (pluginWorkerCrashAlertShown)

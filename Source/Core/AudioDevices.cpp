@@ -12,15 +12,10 @@ juce::String
 Core::Impl::configureAudio(std::function<juce::String()> operation) {
   {
     StateLock lock(stateMutex);
-    if (commandTaskActive.load() || exportActiveFlag.load() ||
-        audioConfigurationActive.load())
+    if (!audioSession.begin(Operation::configureDevice))
       return L"当前操作尚未结束，无法修改音频设备";
-    audioConfigurationActive.store(true);
   }
-  struct Completion {
-    std::atomic<bool> &active;
-    ~Completion() { active.store(false); }
-  } completion{audioConfigurationActive};
+  SessionOperation configuring{*this};
   // Concurrency: 原生控制面板可能泵送消息；操作标记保持置位，但不持有 `stateMutex`。
   return operation();
 }
@@ -39,7 +34,8 @@ juce::String Core::showAudioControlPanel() {
 }
 
 void Core::playTestSound() {
-  if (!impl->exportActiveFlag.load() && !impl->commandTaskActive.load())
+  Impl::StateLock lock(impl->stateMutex);
+  if (impl->audioSession.isIdle())
     impl->audio.playTestSound();
 }
 

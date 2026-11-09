@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core.h"
+#include "AudioSession.h"
 
 #include "../AudioEngine/AudioDeviceService.h"
 #include "../AudioEngine/AudioEngine.h"
@@ -8,7 +9,6 @@
 #include "../Playlist/PlaylistManager.h"
 #include "../Utils/UserSettings.h"
 
-#include <atomic>
 #include <functional>
 #include <juce_events/juce_events.h>
 #include <memory>
@@ -22,6 +22,7 @@ namespace midi {
 // Ordering: 成员逆序析构使 `audio` 先解除设备回调，之后才销毁 `engine`。
 struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
   using StateLock = std::lock_guard<std::mutex>;
+  using Operation = AudioSession::Operation;
 
   UserSettings &settings;
   AudioEngine engine;
@@ -29,23 +30,30 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
   PluginLibrary library;
   PlaylistManager playlist;
   mutable std::mutex stateMutex;
-  std::atomic<bool> pluginScanActive{false};
-  std::atomic<bool> commandTaskActive{false};
-  std::atomic<bool> commandChangesAudio{false};
-  std::atomic<bool> audioConfigurationActive{false};
+  AudioSession audioSession;
 
-  // Invariant: 文件、名称和列表索引共同描述当前曲目；-1 表示未绑定列表项。
-  int currentTrackIndex = -1;
-  juce::File currentMidiFile;
-  juce::String currentMidiName;
+  // 用于由调用线程执行的扫描、设备配置和导出。持有者在受理后、锁外构造。
+  struct SessionOperation {
+    explicit SessionOperation(Impl &core) : owner(core) {}
+    SessionOperation(const SessionOperation &) = delete;
+    SessionOperation &operator=(const SessionOperation &) = delete;
+    Impl &owner;
+    ~SessionOperation() {
+      StateLock lock(owner.stateMutex);
+      owner.audioSession.finish();
+    }
+  };
+
+  // 已载入的文件可以在列表之外继续播放。行号由当前列表和绑定 ID 派生。
+  struct LoadedTrack {
+    juce::File source;
+    TrackId id = 0;
+  } loadedTrack;
   juce::File currentPlaylistFile;
   juce::String playlistErrorText;
   // Invariant: 延迟播放只接受当前代次；暂停、停止及曲目替换递增此值使旧请求失效。
   int trackSwitchGeneration = 0;
   bool scrubbing = false;
-
-  // Concurrency: 导出在核心锁内受理，结束时解除实时控制的互斥限制。
-  std::atomic<bool> exportActiveFlag{false};
 
   explicit Impl(UserSettings &settings);
   ~Impl() override;
@@ -56,17 +64,15 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
   PlaylistSummary buildPlaylistSummary() const;
   // Preconditions: 消息线程持有 stateMutex；后台操作不能等待消息线程回调。
   // Postconditions: 返回受理结果，执行结果在消息线程无锁交付。
-  // Ordering: `changesAudio` 只控制播放互斥；所有插件任务仍共享同一命令执行顺序。
-  juce::Result startCommandTask(std::function<juce::Result()> operation,
-                                CommandCompletion completion,
-                                bool changesAudio = true);
+  juce::Result startCommandTask(Operation operation,
+                                std::function<juce::Result()> work,
+                                CommandCompletion completion = {});
   void handleAsyncUpdate() override;
   void timerCallback() override;
-  // Concurrency: join 后才读取工作线程结果；回调和延迟关闭标记仅由消息线程访问。
+  // Concurrency: join 后才读取工作线程结果，完成回调由消息线程访问。
   std::thread commandTask;
   CommandCompletion commandCompletion;
   juce::Result commandResult{juce::Result::ok()};
-  bool closeEditorWhenIdle = false;
   // Ordering: 在锁内受理设备操作，释放锁后执行原生调用，结束时清除互斥标记。
   juce::String configureAudio(std::function<juce::String()> operation);
 
@@ -77,7 +83,8 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
   juce::Result unloadAsync(CommandCompletion completion);
   juce::Result editorAsync(CommandCompletion completion);
   void closeEditor();
-  void terminateCrashedWorker();
+  void closeEditorWhenIdle();
+  bool workerCrashed() const;
 
   // Preconditions: 查询和命令受理均由调用方持有 stateMutex。
   bool canStartPlayback();
@@ -90,6 +97,8 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
   void togglePlay();
   void stop();
   void resetPlayback();
+  void clearLoadedTrack();
+  int currentTrackIndex() const;
   void seek(double ratio);
   void volume(float value);
   void next();

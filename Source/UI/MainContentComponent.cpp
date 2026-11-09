@@ -275,13 +275,14 @@ void MainContentComponent::timerCallback() {
   }
 
   const bool canControlPlayback = hasPlugin && !state.task.exportActive &&
-                                  !state.task.audioChangeInProgress;
+                                  !state.task.audioChangeInProgress &&
+                                  state.audio.hasDevice && !state.audio.outputNeedsPreparation;
   playBtn.setEnabled(canControlPlayback);
   stopBtn.setEnabled(canControlPlayback);
   prevBtn.setEnabled(canControlPlayback && !state.task.commandActive);
   nextBtn.setEnabled(canControlPlayback && !state.task.commandActive);
   progressSlider.setEnabled(canControlPlayback && hasTrack);
-  exportBtn.setEnabled(canControlPlayback && hasTrack &&
+  exportBtn.setEnabled(hasPlugin && hasTrack && !state.task.exportActive &&
                        !state.task.commandActive);
 
   if (!hasPlugin) {
@@ -298,6 +299,11 @@ void MainContentComponent::timerCallback() {
     lastMidiErrorShown = midiError;
     if (midiError.isNotEmpty())
       showOperationError(L"MIDI 加载失败", transport.lastError);
+  }
+  if (state.audio.preparationError != lastAudioPreparationError) {
+    lastAudioPreparationError = state.audio.preparationError;
+    if (!lastAudioPreparationError.empty())
+      showOperationError(L"实时音频配置失败", lastAudioPreparationError);
   }
 
   if (playbackModeAnimationScale < 1.0f) {
@@ -751,8 +757,6 @@ void MainContentComponent::backgroundSettingsChanged() {
 void MainContentComponent::dialogMaterialChanged(bool backdropChanged) {
   refreshDialogMaterials(backdropChanged);
 }
-
-void MainContentComponent::backgroundSettingsClosed() {}
 
 void MainContentComponent::onAccentColorChanged(juce::Colour newColor) {
   getAppSettings().setThemeAccentColor(newColor.toString());

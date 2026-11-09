@@ -1,5 +1,4 @@
 #include "PluginLibrary.h"
-#include "../PluginBridge/PluginScanProcess.h"
 #include "../Utils/UserSettings.h"
 
 PluginLibrary::PluginLibrary(juce::File cacheFile) : file(std::move(cacheFile)) {
@@ -9,14 +8,6 @@ PluginLibrary::PluginLibrary(juce::File cacheFile) : file(std::move(cacheFile)) 
 void PluginLibrary::copyPluginListTo(juce::KnownPluginList &destination) const {
   if (auto xml = pluginList.createXml())
     destination.recreateFromXml(*xml);
-}
-
-juce::Result PluginLibrary::scanPlugins(
-    juce::KnownPluginList &destination, const std::function<bool()> &shouldCancel) {
-  juce::String diagnostic;
-  const bool succeeded = PluginBridge::scanPluginListInChildProcess(
-      destination, destination, shouldCancel, diagnostic);
-  return succeeded ? juce::Result::ok() : juce::Result::fail(diagnostic);
 }
 
 juce::Result PluginLibrary::savePluginList(const juce::XmlElement &xml) const {

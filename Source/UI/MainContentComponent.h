@@ -7,6 +7,7 @@
 #include "../Utils/Win11Helpers.h"
 #include "../Utils/WindowsFileAssociation.h"
 #include "BackgroundComponent.h"
+#include "BackgroundSettingsListener.h"
 #include "CustomControls.h"
 #include "CustomLookAndFeel.h"
 #include "FluentSettingsStyle.h"
@@ -33,7 +34,7 @@ class MainContentComponent : public juce::Component,
                              public juce::Timer,
                              public PlaylistPanel::Listener,
                              public NavigationSidebar::Listener,
-                             public BackgroundSettingsDialog::Listener,
+                             public BackgroundSettingsListener,
                              public juce::AsyncUpdater {
 public:
   MainContentComponent(midi::Core &c,
@@ -105,7 +106,6 @@ public:
 
   void dialogMaterialChanged(bool backdropChanged) override;
 
-  void backgroundSettingsClosed() override;
 
   void onAccentColorChanged(juce::Colour newColor);
 
@@ -287,6 +287,8 @@ private:
   bool pluginWorkerRecoveryHandled = false;
   bool pendingShellOpen = false;
   int pluginGeneration = 0;
+  int editorRequestGeneration = 0;
+  std::wstring lastAudioPreparationError;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainContentComponent)
 };

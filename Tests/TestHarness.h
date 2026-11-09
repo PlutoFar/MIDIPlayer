@@ -40,5 +40,6 @@ int runExportTaskTests();
 int runPersistenceTests();
 int runShellTests();
 int runBackgroundTests();
+int runAudioSessionTests();
 
 } // namespace miditest

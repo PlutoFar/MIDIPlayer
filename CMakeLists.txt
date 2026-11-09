@@ -48,6 +48,7 @@ endif()
 # Shared process dispatch and platform audio-thread scheduling.
 add_library(MidiPluginProcess STATIC
     Source/PluginBridge/PluginProcessEntry.cpp
+    Source/PluginBridge/PluginScanProcess.cpp
     Source/Utils/AudioThreadPriority.cpp
 )
 target_link_libraries(MidiPluginProcess PUBLIC
@@ -65,6 +66,7 @@ endif()
 # ============================================================================
 add_library(MidiCore STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/AudioSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/AudioDevices.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Library.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Player.cpp
@@ -113,6 +115,7 @@ target_sources(MidiPlayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/AudioSettingsContent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/BackgroundHistory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/BackgroundRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/FontSettingsContent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/Utils/WindowsFileAssociation.cpp
 )
@@ -185,10 +188,12 @@ target_sources(MidiTests PRIVATE
     Tests/ExportEncodingTests.cpp
     Tests/CoreTests.cpp
     Tests/ExportTaskTests.cpp
+    Tests/AudioSessionTests.cpp
     Tests/PersistenceTests.cpp
     Tests/ShellTests.cpp
     Tests/BackgroundTests.cpp
     Source/UI/BackgroundHistory.cpp
+    Source/UI/BackgroundRenderer.cpp
 )
 
 target_link_libraries(MidiTests PRIVATE
@@ -199,11 +204,11 @@ target_link_libraries(MidiTests PRIVATE
 )
 
 enable_testing()
-foreach(suite IN ITEMS midi-playback plugin-bridge export-encoding export-task
+foreach(suite IN ITEMS midi-playback plugin-bridge export-encoding export-task audio-session
                        playlist persistence shell background)
     add_test(NAME ${suite} COMMAND MidiTests --suite ${suite})
 endforeach()
-set_tests_properties(plugin-bridge export-task PROPERTIES TIMEOUT 60)
+set_tests_properties(plugin-bridge export-task audio-session PROPERTIES TIMEOUT 60)
 
 if(WIN32)
 

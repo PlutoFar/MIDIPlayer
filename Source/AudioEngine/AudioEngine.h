@@ -38,9 +38,17 @@ public:
   // Concurrency: 取消可从其他线程发起；重置仅用于受理下一项任务、启动其线程之前。
   void cancelPendingPluginOperation() { bridge.cancelPendingOperation(); }
   void resetPluginCancellation() { bridge.resetCancellation(); }
-  // Ordering: 捕获设备配置及修订号，暂停实时处理后发出 `prepare`，恢复调用前的暂停状态。
+  struct DeviceConfiguration {
+    double sampleRate;
+    int blockSize;
+    unsigned revision;
+  };
+  DeviceConfiguration deviceConfiguration();
+  unsigned configurationRevision() const { return deviceRevision.load(); }
+  // Ordering: 暂停实时处理后应用本次受理的设备配置，恢复调用前的暂停状态。
   // Failures: 返回 `false` 并记录插件诊断；失败不发布新的已配置修订号。
-  bool preparePlugin(std::function<void(double)> prepareMidi = {});
+  bool preparePlugin(DeviceConfiguration configuration,
+                     std::function<void(double)> prepareMidi = {});
   // Postconditions: 采样率单位为 Hz；修订号不一致时，实时输出等待重配置完成。
   double liveSampleRate() const { return deviceSampleRate.load(); }
   bool requiresPrepare() const {

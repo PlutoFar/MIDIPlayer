@@ -4,6 +4,7 @@ AudioDeviceService::AudioDeviceService(juce::AudioProcessor &processor,
                                        juce::File settingsFile)
     : file(std::move(settingsFile)) {
   restore();
+  observedDevice = hasDevice();
   manager.addChangeListener(this);
   player.setProcessor(&processor);
   manager.addAudioCallback(&player);
@@ -134,18 +135,30 @@ juce::String AudioDeviceService::showControlPanel() {
 
 void AudioDeviceService::playTestSound() { manager.playTestSound(); }
 
-void AudioDeviceService::changeListenerCallback(juce::ChangeBroadcaster *) {
-  if (recovering)
-    return;
-  juce::String diagnostic;
-  if (manager.getCurrentAudioDevice() != nullptr) {
-    diagnostic = save();
-  } else if (file.existsAsFile()) {
-    juce::ScopedValueSetter<bool> recovery(recovering, true);
-    diagnostic = manager.initialiseWithDefaultDevices(0, 2);
-    if (diagnostic.isEmpty() && manager.getCurrentAudioDevice() != nullptr)
-      diagnostic = save();
-  }
+juce::String AudioDeviceService::recoverDefaultDevice() {
+  recoveryRequested = false;
+  if (manager.getCurrentAudioDevice() != nullptr)
+    return {};
+  auto diagnostic = manager.initialiseWithDefaultDevices(0, 2);
+  if (diagnostic.isEmpty())
+    diagnostic = manager.getCurrentAudioDevice() != nullptr
+                     ? save() : juce::String(L"没有可用的音频输出设备");
   publishStatus(diagnostic);
+  sendChangeMessage();
+  return diagnostic;
+}
+
+void AudioDeviceService::changeListenerCallback(juce::ChangeBroadcaster *) {
+  const bool available = manager.getCurrentAudioDevice() != nullptr;
+  if (available) {
+    recoveryRequested = false;
+    publishStatus(save());
+  } else {
+    // 只在设备由可用变为断开时申请恢复。失败后等待设备变化或用户重新配置。
+    if (observedDevice)
+      recoveryRequested = file.existsAsFile();
+    deviceAvailable.store(false);
+  }
+  observedDevice = available;
   sendChangeMessage();
 }

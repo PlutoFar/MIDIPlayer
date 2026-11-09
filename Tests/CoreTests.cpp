@@ -1,5 +1,6 @@
 #include "TestHarness.h"
 #include "Core/Core.h"
+#include "Playlist/PlaylistManager.h"
 #include "Utils/UserSettings.h"
 #include <optional>
 
@@ -89,6 +90,30 @@ int runCoreTests() {
   expect(failures, core.loadList(pathOf(playlistFile)) &&
                        !core.removeTrack(secondId),
          "an identity from the previous list should never delete a reloaded row");
+
+  const auto duplicateList = directory.path.getChildFile("duplicates.json");
+  PlaylistManager::Tracks duplicates;
+  duplicates.add({second, "second", true});
+  duplicates.add({third, "third", true});
+  duplicates.add({second, "second", true});
+  if (PlaylistManager::write(duplicateList, duplicates).failed() ||
+      !core.loadList(pathOf(duplicateList)))
+    throw std::runtime_error("Could not create playlist with repeated paths");
+  snapshot = core.playlistState();
+  expect(failures, snapshot.currentTrackIndex == 0,
+         "the first occurrence should bind to the previously selected file");
+  if (snapshot.tracks.size() != 3)
+    return failures + 1;
+  expect(failures, core.moveTrack(snapshot.tracks[0].id, 2) &&
+                       core.saveList(pathOf(duplicateList)) &&
+                       core.loadList(pathOf(duplicateList)) &&
+                       core.currentTrackIndex() == 2,
+         "reload should rebind to the same occurrence of a repeated file");
+  expect(failures, core.loadList(pathOf(playlistFile)) &&
+                       core.currentTrackIndex() == -1 && core.state().transport.hasSequence,
+         "if the selected occurrence disappears, keep the sequence without a row binding");
+  expect(failures, openAndWait(core, second) == true,
+         "opening the source explicitly should bind its current playlist row");
   snapshot = core.playlistState();
   if (snapshot.tracks.empty())
     return failures + 1;

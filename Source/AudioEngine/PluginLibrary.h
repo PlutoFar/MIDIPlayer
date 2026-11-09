@@ -12,8 +12,6 @@ public:
   // Preconditions: 调用方持有目录访问锁；复制到独立目录，调用方拥有 `destination`。
   void copyPluginListTo(juce::KnownPluginList &destination) const;
   // Preconditions: `destination` 由扫描调用独占；取消回调不得抛出异常。
-  static juce::Result scanPlugins(juce::KnownPluginList &destination,
-                                  const std::function<bool()> &shouldCancel);
   juce::Result savePluginList(const juce::XmlElement &xml) const;
   void publishPluginList(const juce::XmlElement &xml);
   // Ownership: 返回借用引用；调用方必须在访问期间继续持有核心目录锁。

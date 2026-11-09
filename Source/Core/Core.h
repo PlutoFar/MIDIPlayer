@@ -60,15 +60,13 @@ public:
   juce::Result loadAsync(const PluginId &id, CommandCompletion completion);
   juce::Result unloadAsync(CommandCompletion completion);
   juce::Result editorAsync(CommandCompletion completion);
-  // Ordering: 插件任务执行中记录关闭请求，待该任务结束后处理；重复请求合并。
+  // Ordering: 会话忙时记录关闭请求，空闲后处理；重复请求合并。
   void closeEditor();
   // Postconditions: 下面的插件查询返回独立值，`pluginError` 是进程诊断。
   bool hasPluginLoaded() const;
   std::wstring loadedPluginName() const;
   bool workerCrashed() const;
   std::wstring pluginError() const;
-  // Preconditions: 消息线程调用；只为崩溃进程尝试受理后台回收任务。
-  void terminateCrashedWorker();
   // Concurrency: 只置取消标记并唤醒命令等待；不在调用线程销毁进程或共享内存。
   void cancelPendingPluginOperation();
 
