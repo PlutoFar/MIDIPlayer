@@ -169,7 +169,7 @@ int Core::currentTrackIndex() const {
 }
 
 // playlist
-bool Core::addToPlaylist(const std::wstring &path) {
+juce::Result Core::addToPlaylist(const std::wstring &path) {
   return impl->addToPlaylist(fileFromPath(path));
 }
 int Core::addFilesToPlaylist(const std::vector<std::wstring> &paths) {
@@ -183,7 +183,7 @@ bool Core::removeTrack(TrackId id) { return impl->removeTrack(id); }
 bool Core::moveTrack(TrackId id, int toIndex) {
   return impl->moveTrack(id, toIndex);
 }
-bool Core::refreshTrack(int index) { return impl->refreshTrack(index); }
+juce::Result Core::refreshTrack(int index) { return impl->refreshTrack(index); }
 int Core::findTrackIndex(const std::wstring &path) const {
   Impl::StateLock lock(impl->stateMutex);
   return impl->playlist.findTrackIndex(fileFromPath(path));

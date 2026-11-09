@@ -82,7 +82,7 @@ public:
 
   void comboBoxChanged(juce::ComboBox *c) override;
 
-  bool playlistSaveRequested() override;
+  void playlistSaveRequested() override;
 
   bool playlistClearRequested() override;
 
@@ -278,7 +278,7 @@ private:
   bool isMuted = false;
   double volumeBeforeMute = 1.0;
   float playbackModeAnimationScale = 1.0f;
-  ToastComponent modeToast;
+  ToastComponent operationToast;
   EmbeddedTooltip tooltipOverlay;
 
   std::atomic<uint32_t> lastSeekRequestTime{0};

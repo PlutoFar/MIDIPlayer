@@ -5,12 +5,11 @@
 
 namespace midi {
 
-bool Core::Impl::addToPlaylist(const juce::File &file) {
+juce::Result Core::Impl::addToPlaylist(const juce::File &file) {
   StateLock lock(stateMutex);
   if (!audioSession.allowsSequenceChange())
-    return false;
-  const bool ok = playlist.addFile(file);
-  return ok;
+    return juce::Result::fail(L"请等待当前操作完成后重试");
+  return playlist.addFile(file);
 }
 
 int Core::Impl::addFilesToPlaylist(const std::vector<juce::File> &files) {
@@ -19,7 +18,7 @@ int Core::Impl::addFilesToPlaylist(const std::vector<juce::File> &files) {
     return 0;
   int added = 0;
   for (const auto &file : files) {
-    if (playlist.addFile(file))
+    if (playlist.addFile(file).wasOk())
       ++added;
   }
   return added;
@@ -43,12 +42,11 @@ bool Core::Impl::moveTrack(TrackId id, int toIndex) {
   return playlist.moveTrack(playlist.findTrackIndex(id), toIndex);
 }
 
-bool Core::Impl::refreshTrack(int index) {
+juce::Result Core::Impl::refreshTrack(int index) {
   StateLock lock(stateMutex);
   if (!audioSession.allowsSequenceChange())
-    return false;
-  const bool ok = playlist.refreshTrack(index);
-  return ok;
+    return juce::Result::fail(L"请等待当前操作完成后重试");
+  return playlist.refreshTrack(index);
 }
 
 bool Core::Impl::clearPlaylist() {

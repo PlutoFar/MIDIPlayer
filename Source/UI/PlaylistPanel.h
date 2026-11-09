@@ -45,7 +45,7 @@ public:
     virtual ~Listener() = default;
     virtual void playlistTrackDoubleClicked(midi::TrackId id) = 0;
     virtual void playlistFilesDropped(const juce::StringArray &files) = 0;
-    virtual bool playlistSaveRequested() = 0;
+    virtual void playlistSaveRequested() = 0;
     virtual bool playlistClearRequested() = 0;
     virtual bool playlistLoadRequested(const juce::File &playlistFile) = 0;
     virtual bool playlistTrackMoveRequested(midi::TrackId id, int toIndex) = 0;
@@ -557,8 +557,8 @@ private:
           if (safeThis == nullptr)
             return;
 
-          auto file = fc.getResult();
-          if (file.existsAsFile())
+          const auto file = fc.getResult();
+          if (file != juce::File{})
             safeThis->performLoad(file);
         });
   }

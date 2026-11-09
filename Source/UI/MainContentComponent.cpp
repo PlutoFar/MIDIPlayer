@@ -1,5 +1,10 @@
 #include "MainContentComponent.h"
 
+namespace {
+constexpr auto noMidiToPlay = L"请先加载 MIDI 曲目";
+constexpr auto playbackTooltip = L"播放/暂停 (空格)";
+} // namespace
+
 MainContentComponent::MainContentComponent(
     midi::Core &c, FluentLookAndFeel &applicationLookAndFeel)
     : core(c), fluentLookAndFeel(applicationLookAndFeel),
@@ -100,7 +105,8 @@ MainContentComponent::MainContentComponent(
   progressTimeTooltip.setVisible(false);
 
   setupIconButton(prevBtn, L"\uE892", L"上一首 (←)");
-  setupIconButton(playBtn, L"\uE768", L"播放/暂停 (空格)");
+  setupIconButton(playBtn, L"\uE768", noMidiToPlay);
+  playBtn.setEnabled(false);
   setupIconButton(nextBtn, L"\uE893", L"下一首 (→)");
   setupIconButton(stopBtn, L"\uE71A", L"停止");
 
@@ -175,7 +181,7 @@ MainContentComponent::MainContentComponent(
     }
   });
 
-  addAndMakeVisible(modeToast);
+  addAndMakeVisible(operationToast);
   addChildComponent(tooltipOverlay);
   tooltipOverlay.setPaintedByParentOverlay(true);
   addMouseListener(&tooltipOverlay, true);
@@ -277,7 +283,8 @@ void MainContentComponent::timerCallback() {
   const bool canControlPlayback = hasPlugin && !state.task.exportActive &&
                                   !state.task.audioChangeInProgress &&
                                   state.audio.hasDevice && !state.audio.outputNeedsPreparation;
-  playBtn.setEnabled(canControlPlayback);
+  playBtn.setEnabled(canControlPlayback && hasTrack);
+  playBtn.setTooltip(hasTrack ? playbackTooltip : noMidiToPlay);
   stopBtn.setEnabled(canControlPlayback);
   prevBtn.setEnabled(canControlPlayback && !state.task.commandActive);
   nextBtn.setEnabled(canControlPlayback && !state.task.commandActive);
@@ -385,7 +392,7 @@ void MainContentComponent::paintOverChildren(juce::Graphics &g) {
     g.restoreState();
   }
 
-  modeToast.toFront(false);
+  operationToast.toFront(false);
   if (tooltipOverlay.isVisible()) {
     const auto tooltipBounds = tooltipOverlay.getBounds();
     juce::Graphics::ScopedSaveState saveState(g);
@@ -599,7 +606,7 @@ void MainContentComponent::toggleLoopMode() {
 
   // 切换模式时隐藏悬浮提示，避免与 ToastComponent 重叠。
 
-  modeToast.show(toastText, loopModeBtn.getBounds());
+  operationToast.show(toastText, loopModeBtn.getBounds());
   playbackModeAnimationScale =
       DesignTokens::Motion::playbackModeInitialScale;
 
@@ -699,7 +706,10 @@ void MainContentComponent::comboBoxChanged(juce::ComboBox *c) {
     loadSelectedPlugin();
 }
 
-bool MainContentComponent::playlistSaveRequested() { return savePlaylist(); }
+void MainContentComponent::playlistSaveRequested() {
+  if (savePlaylist())
+    operationToast.showTopCenter(L"播放列表已保存", getLocalBounds(), 3000);
+}
 
 bool MainContentComponent::playlistClearRequested() {
   return core.clearPlaylist();
@@ -707,6 +717,16 @@ bool MainContentComponent::playlistClearRequested() {
 
 bool MainContentComponent::playlistLoadRequested(
     const juce::File &playlistFile) {
+  if (hasUnsavedChanges()) {
+    const int choice = juce::AlertWindow::showYesNoCancelBox(
+        juce::AlertWindow::QuestionIcon, L"未保存的更改",
+        getPlaylistChangeSummary() + L"\n\n要加载「" +
+            playlistFile.getFileName() + L"」吗？",
+        L"保存并加载", L"不保存并加载", L"取消", this);
+    if (choice == 0 || (choice == 1 && !savePlaylist()))
+      return false;
+  }
+
   const bool loaded = core.loadList(
       std::wstring(playlistFile.getFullPathName().toWideCharPointer()));
   if (!loaded)
@@ -1059,6 +1079,10 @@ void MainContentComponent::showPluginMessage(const juce::String &title,
 }
 
 void MainContentComponent::togglePlayPause() {
+  if (!core.state().transport.hasSequence) {
+    operationToast.showTopCenter(noMidiToPlay, getLocalBounds(), 3000);
+    return;
+  }
   playbackPausedByPluginSwitch = false;
   core.togglePlay();
 }

@@ -39,6 +39,13 @@ void MainContentComponent::startPluginScan() {
   const bool completed = scanner->runThread();
   if (scanner->result.wasOk()) {
     updatePluginList();
+    if (completed) {
+      const int count = pluginSelector.getNumItems();
+      const auto message =
+          count == 0 ? juce::String(L"扫描完成，未发现 VST3 插件")
+                     : L"扫描完成，找到 " + juce::String(count) + L" 个 VST3 插件";
+      operationToast.showTopCenter(message, getLocalBounds(), 3000);
+    }
   } else if (completed) {
     showOperationError(L"插件扫描失败", std::wstring(scanner->result.getErrorMessage().toWideCharPointer()));
   }
@@ -113,7 +120,7 @@ void MainContentComponent::showPluginLoadSuccessToast(
     const juce::String &pluginName) {
   const auto title = pluginName.isEmpty() ? juce::String(L"插件加载成功")
                                          : L"插件加载成功: " + pluginName;
-  modeToast.showTopCenter(title, getLocalBounds(), 3000);
+  operationToast.showTopCenter(title, getLocalBounds(), 3000);
 }
 
 void MainContentComponent::loadPluginInfo(const midi::PluginInfo &plugin,

@@ -44,22 +44,21 @@ public:
   }
 
   // Preconditions: 输入本机文件；只校验存在性和 .mid/.midi 扩展名，内容解析由播放器执行。
-  // Postconditions: 接受后追加记录并更新变更计数；拒绝文件或重复项返回 `false`。
-  bool addFile(const juce::File &file, bool allowDuplicates = false) {
+  // Postconditions: 接受后追加记录并更新变更计数；拒绝时返回原因。
+  juce::Result addFile(const juce::File &file, bool allowDuplicates = false) {
     if (!file.existsAsFile())
-      return false;
+      return juce::Result::fail(L"文件不存在或不可用");
 
     if (!file.hasFileExtension(".mid;.midi"))
-      return false;
+      return juce::Result::fail(L"仅支持 .mid 和 .midi 文件");
 
-    if (!allowDuplicates && contains(file)) {
-      return false;
-    }
+    if (!allowDuplicates && contains(file))
+      return juce::Result::fail(L"文件已在播放列表中");
 
     tracks.add({file, file.getFileNameWithoutExtension(), true, ++nextTrackId});
     changeLog.added++;
     ++revision;
-    return true;
+    return juce::Result::ok();
   }
 
   // Postconditions: 接受的删除/移动更新变更摘要；无效索引或原位移动返回 `false`。
@@ -153,16 +152,16 @@ public:
     return match;
   }
 
-  // Side effect: 重新检查文件存在性并更新记录；返回 `false` 仍可能已将条目标记为不可用。
-  bool refreshTrack(int index) {
+  // Side effect: 文件不可用时更新条目状态，并返回失败原因。
+  juce::Result refreshTrack(int index) {
     if (index < 0 || index >= tracks.size())
-      return false;
+      return juce::Result::fail(L"曲目已不在播放列表中");
     auto &t = tracks.getReference(index);
     t.available = t.file.existsAsFile();
     if (!t.available)
-      return false;
+      return juce::Result::fail(L"文件不存在或不可用");
     t.name = t.file.getFileNameWithoutExtension();
-    return true;
+    return juce::Result::ok();
   }
 
   // Ordering: JSON 完整写入并关闭临时文件后替换目标。

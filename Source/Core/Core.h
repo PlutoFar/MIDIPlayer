@@ -99,11 +99,11 @@ public:
   // Preconditions: 文件必须存在且扩展名为 .mid/.midi；索引使用当前列表顺序。
   // Postconditions: 接受的变更同步维护当前索引；批量添加返回新增数量并排除重复项。
   // Failures: 导出期间拒绝修改；无效文件、索引或重复项返回 `false`/0，查询未命中返回 -1。
-  bool addToPlaylist(const std::wstring &path);
+  juce::Result addToPlaylist(const std::wstring &path);
   int addFilesToPlaylist(const std::vector<std::wstring> &paths);
   bool removeTrack(TrackId id);
   bool moveTrack(TrackId id, int toIndex);
-  bool refreshTrack(int index);
+  juce::Result refreshTrack(int index);
   int findTrackIndex(const std::wstring &path) const;
   bool clearPlaylist();
   // Postconditions: 持久化编号 1..4 对应 `PlaybackMode`；其他编号按当前实现归一为连续播放。

@@ -605,8 +605,8 @@ private:
         [safeThis](const juce::FileChooser &fc) {
           if (safeThis == nullptr)
             return;
-          auto result = fc.getResult();
-          if (result.existsAsFile())
+          const auto result = fc.getResult();
+          if (result != juce::File{})
             safeThis->showCropDialog(result);
         });
   }
@@ -671,9 +671,14 @@ private:
   };
 
   void showCropDialog(const juce::File &imageFile) {
-    auto img = juce::ImageFileFormat::loadFrom(imageFile);
-    if (img.isNull())
+    const auto img = juce::ImageFileFormat::loadFrom(imageFile);
+    if (img.isNull()) {
+      juce::AlertWindow::showMessageBoxAsync(
+          juce::AlertWindow::WarningIcon, L"无法读取背景图片",
+          imageFile.getFileName() + L"\n文件可能已移动、损坏或格式不受支持。",
+          L"确定", this);
       return;
+    }
     auto safeThis =
         juce::Component::SafePointer<BackgroundSettingsDialog>(this);
     auto *dialogContent = new CropDialog(

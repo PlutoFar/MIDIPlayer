@@ -3,11 +3,16 @@
 #include "MainContentComponent.h"
 #include "SettingsPersistence.h"
 
+#include <map>
+
 void MainContentComponent::playlistTrackRevealRequested(midi::TrackId id) {
   const auto path = core.trackFile(id);
-  juce::File file(juce::String(path.c_str()));
-  if (file.existsAsFile())
-    file.revealToUser();
+  const juce::File file(juce::String(path.c_str()));
+  if (!file.existsAsFile()) {
+    showPluginMessage(L"无法打开文件位置", L"曲目文件已移动或不可用。");
+    return;
+  }
+  file.revealToUser();
 }
 
 void MainContentComponent::playlistFilesDropped(
@@ -25,62 +30,78 @@ void MainContentComponent::playlistFilesDropped(
     }
   }
 
-  enum class DupAction { AddNewOnly, OverwriteExisting, Cancel };
-  DupAction action = DupAction::AddNewOnly;
+  bool overwriteDuplicates = false;
 
   if (!duplicateFiles.isEmpty()) {
-    int result = juce::AlertWindow::showYesNoCancelBox(
+    const int result = juce::AlertWindow::showYesNoCancelBox(
         juce::AlertWindow::QuestionIcon, L"发现重复文件",
         L"检测到 " + juce::String(duplicateFiles.size()) +
             L" 个文件已在列表中。\n\n"
-            L"「仅保存新的」= 跳过重复，只添加新文件\n"
-            L"「保存并覆盖」= 添加新文件，并刷新已有条目",
-        L"仅保存新的", L"保存并覆盖", L"取消");
+            L"可仅添加新曲目，或同时刷新重复条目。",
+        L"仅添加新曲目", L"添加并刷新", L"取消", this);
 
     if (result == 0)
       return;
-    if (result == 1)
-      action = DupAction::AddNewOnly;
-    else if (result == 2)
-      action = DupAction::OverwriteExisting;
+    overwriteDuplicates = result == 2;
   }
 
-  bool anythingChanged = false;
+  std::map<juce::String, int> failureCounts;
+  int failedCount = 0;
+  const auto recordFailure = [&](const juce::Result &result) {
+    ++failedCount;
+    ++failureCounts[result.getErrorMessage()];
+  };
   const int firstInsertedRow =
       static_cast<int>(core.playlistState().tracks.size());
   int insertedRowCount = 0;
-  for (const auto &f : newFiles) {
-    const juce::File file(f);
-    if (core.addToPlaylist(
-            std::wstring(file.getFullPathName().toWideCharPointer()))) {
-      anythingChanged = true;
+  for (const auto &path : newFiles) {
+    const auto result = core.addToPlaylist(path.toWideCharPointer());
+    if (result.wasOk())
       ++insertedRowCount;
-    }
-  }
-
-  std::vector<int> overwrittenRows;
-  if (action == DupAction::OverwriteExisting) {
-    for (const auto &f : duplicateFiles) {
-      const juce::File file(f);
-      const int idx = core.findTrackIndex(
-          std::wstring(file.getFullPathName().toWideCharPointer()));
-      if (idx >= 0) {
-        core.refreshTrack(idx);
-        overwrittenRows.push_back(idx);
-        anythingChanged = true;
-      }
-    }
-  }
-
-  if (anythingChanged) {
-    if (insertedRowCount > 0)
-      playlistPanel.refreshWithInsertedRows(firstInsertedRow, insertedRowCount);
     else
-      playlistPanel.refresh();
+      recordFailure(result);
+  }
 
-    if (!overwrittenRows.empty()) {
-      playlistPanel.startDropAnimation(overwrittenRows, false);
+  std::vector<int> refreshedRows;
+  if (overwriteDuplicates) {
+    for (const auto &path : duplicateFiles) {
+      const int row = core.findTrackIndex(path.toWideCharPointer());
+      const auto result = core.refreshTrack(row);
+      if (result.wasOk())
+        refreshedRows.push_back(row);
+      else
+        recordFailure(result);
     }
+  }
+
+  if (insertedRowCount > 0)
+    playlistPanel.refreshWithInsertedRows(firstInsertedRow, insertedRowCount);
+  else if (overwriteDuplicates)
+    playlistPanel.refresh(); // 刷新失败也可能改变曲目的可用状态。
+  if (!refreshedRows.empty())
+    playlistPanel.startDropAnimation(refreshedRows, false);
+
+  juce::StringArray summary;
+  if (insertedRowCount > 0)
+    summary.add(L"已添加 " + juce::String(insertedRowCount) + L" 首");
+  if (!refreshedRows.empty())
+    summary.add(L"已刷新 " + juce::String(refreshedRows.size()) + L" 首");
+  if (!overwriteDuplicates && !duplicateFiles.isEmpty())
+    summary.add(L"已跳过 " + juce::String(duplicateFiles.size()) + L" 首重复曲目");
+  if (failedCount > 0)
+    summary.add(L"未处理 " + juce::String(failedCount) + L" 首");
+
+  const auto message = summary.joinIntoString(juce::String(L"，"));
+  if (failedCount > 0) {
+    juce::StringArray reasons;
+    for (const auto &[reason, count] : failureCounts)
+      reasons.add(juce::String(count) + L" 首 · " + reason);
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::AlertWindow::WarningIcon, L"曲目导入结果",
+        message + L"\n\n" + reasons.joinIntoString("\n"),
+        L"确定", this);
+  } else if (message.isNotEmpty()) {
+    operationToast.showTopCenter(message, getLocalBounds(), 3000);
   }
 }
 

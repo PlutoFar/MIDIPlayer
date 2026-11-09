@@ -20,21 +20,26 @@ int runPersistenceTests() {
   missing.replaceWithText("MThd");
 
   PlaylistManager source;
-  expect(failures, source.addFile(first),
+  expect(failures, source.addFile(first).wasOk(),
          "playlist should accept an available MIDI file");
-  expect(failures, source.addFile(missing),
+  expect(failures, source.addFile(missing).wasOk(),
          "playlist should accept a second available MIDI file");
   const auto playlistFile = tempDir.getChildFile("library.json");
   const auto savedRevision = source.getRevision();
   expect(failures, PlaylistManager::write(playlistFile, source.getTracks()).wasOk(),
          "playlist JSON should save atomically");
-  expect(failures, source.addFile(first, true),
+  expect(failures, source.addFile(playlistFile).failed() && source.size() == 2,
+         "import should reject an existing file with an unsupported extension");
+  expect(failures, source.addFile(first, true).wasOk(),
          "existing playlist data can contain repeated paths");
   source.markSaved(savedRevision);
   expect(failures, source.hasChanges(),
          "completion of an older save should preserve later playlist edits");
   expect(failures, missing.deleteFile(),
          "test should make one persisted track unavailable");
+  expect(failures,
+         source.refreshTrack(1).failed() && !source.getTracks()[1].available,
+         "refresh should report a missing file and mark its row unavailable");
 
   PlaylistManager restored;
   PlaylistManager::Tracks tracks;
@@ -52,7 +57,7 @@ int runPersistenceTests() {
          "loaded playlist should start without unsaved changes");
 
   missing.replaceWithText("MThd");
-  expect(failures, restored.refreshTrack(1),
+  expect(failures, restored.refreshTrack(1).wasOk(),
          "refresh should recover a track after its path becomes available");
   expect(failures,
          restored.getTrack(1) != nullptr && restored.getTrack(1)->available,

@@ -106,11 +106,11 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
   void handleTrackEnd();
 
   // Postconditions: 列表命令在 `stateMutex` 内维护索引、路径及错误；失败以返回值报告。
-  bool addToPlaylist(const juce::File &file);
+  juce::Result addToPlaylist(const juce::File &file);
   int addFilesToPlaylist(const std::vector<juce::File> &files);
   bool removeTrack(TrackId id);
   bool moveTrack(TrackId id, int toIndex);
-  bool refreshTrack(int index);
+  juce::Result refreshTrack(int index);
   bool clearPlaylist();
   void setPlayMode(int mode);
   bool saveList(const juce::File &file);

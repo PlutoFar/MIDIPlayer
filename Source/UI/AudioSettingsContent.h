@@ -47,6 +47,7 @@ private:
 
   void refreshControls(bool rescanDevices);
 
+  void updateDeviceStatus();
   void updateControlEnabledState();
 
   midi::Core &core;

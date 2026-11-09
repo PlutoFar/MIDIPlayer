@@ -273,6 +273,7 @@ void AudioSettingsContent::beginDeviceChange(
   statusTitleLabel.setText(L"正在切换音频设备", juce::dontSendNotification);
   statusDetailLabel.setText(L"正在重新初始化音频引擎",
                             juce::dontSendNotification);
+  statusDetailLabel.setTooltip({});
   updateControlEnabledState();
   startTimerHz(60);
   repaint(statusCardBounds);
@@ -297,6 +298,11 @@ void AudioSettingsContent::finishDeviceChange(const juce::String &error,
   statusAnimation.complete(lastError.isEmpty());
   startTimerHz(60);
   repaint(statusCardBounds);
+  if (lastError.isNotEmpty()) {
+    juce::AlertWindow::showMessageBoxAsync(
+        juce::AlertWindow::WarningIcon, L"音频设置失败",
+        lastError + L"\n\n" + statusDetailLabel.getText(), L"确定", this);
+  }
 }
 
 void AudioSettingsContent::timerCallback() {
@@ -393,37 +399,52 @@ void AudioSettingsContent::refreshControls(bool rescanDevices) {
     }
     channelPairBox.setSelectedId(selectedPair, juce::dontSendNotification);
 
-    if (!deviceChangePending)
-      statusTitleLabel.setText(L"设备已连接", juce::dontSendNotification);
-    const auto latency = formatAudioBufferSize(deviceState.outputLatency,
-                                               deviceState.sampleRate);
-    if (!deviceChangePending)
-      statusDetailLabel.setText(juce::String(deviceState.bitDepth) +
-                                    L"-bit \u00B7 输出延迟 " + latency,
-                                juce::dontSendNotification);
-    const auto audioState = core.state().audio;
-    statusDetailLabel.setTooltip(deviceState.deviceName + L" \u00B7 " +
-                                 formatAudioSampleRate(deviceState.sampleRate) +
-                                 L" \u00B7 " +
-                                 juce::String(deviceState.bitDepth) +
-                                 L"-bit \u00B7 输出延迟 " + latency +
-                                 L"\n附加播放延迟上限 " +
-                                 formatAudioBufferSize(audioState.renderLatencySamples,
-                                                       deviceState.sampleRate) +
-                                 L"\n缓冲欠载 " + juce::String(audioState.underrunCount));
-  } else if (!deviceChangePending) {
-    statusTitleLabel.setText(lastError.isNotEmpty() ? L"设备切换失败"
-                                                    : L"未连接输出设备",
-                             juce::dontSendNotification);
-    statusDetailLabel.setText(
-        lastError.isNotEmpty() ? lastError : L"请选择驱动类型和输出设备",
-        juce::dontSendNotification);
   }
 
+  if (!deviceChangePending)
+    updateDeviceStatus();
+
   updateControlEnabledState();
-  controlPanelButton.setVisible(deviceState.hasDevice &&
-                                deviceState.hasControlPanel);
+  const bool showControlPanel = deviceState.hasDevice && deviceState.hasControlPanel;
+  if (controlPanelButton.isVisible() != showControlPanel) {
+    controlPanelButton.setVisible(showControlPanel);
+    resized();
+  }
   repaint();
+}
+
+void AudioSettingsContent::updateDeviceStatus() {
+  if (lastError.isNotEmpty()) {
+    statusTitleLabel.setText(L"音频设置失败", juce::dontSendNotification);
+    statusDetailLabel.setText(deviceState.hasDevice
+                                  ? L"当前设备 · " + deviceState.deviceName
+                                  : juce::String(L"未连接输出设备"),
+                              juce::dontSendNotification);
+    statusDetailLabel.setTooltip(lastError);
+    return;
+  }
+
+  if (!deviceState.hasDevice) {
+    statusTitleLabel.setText(L"未连接输出设备", juce::dontSendNotification);
+    statusDetailLabel.setText(L"请选择驱动类型和输出设备",
+                              juce::dontSendNotification);
+    statusDetailLabel.setTooltip({});
+    return;
+  }
+
+  const auto latency =
+      formatAudioBufferSize(deviceState.outputLatency, deviceState.sampleRate);
+  const auto details =
+      juce::String(deviceState.bitDepth) + L"-bit · 输出延迟 " + latency;
+  const auto audioState = core.state().audio;
+  statusTitleLabel.setText(L"设备已连接", juce::dontSendNotification);
+  statusDetailLabel.setText(details, juce::dontSendNotification);
+  statusDetailLabel.setTooltip(
+      deviceState.deviceName + L" · " +
+      formatAudioSampleRate(deviceState.sampleRate) + L" · " + details +
+      L"\n附加播放延迟上限 " +
+      formatAudioBufferSize(audioState.renderLatencySamples, deviceState.sampleRate) +
+      L"\n缓冲欠载 " + juce::String(audioState.underrunCount));
 }
 
 void AudioSettingsContent::updateControlEnabledState() {
