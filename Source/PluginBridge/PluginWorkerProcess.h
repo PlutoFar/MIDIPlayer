@@ -6,7 +6,7 @@
 
 #include "PluginBridgeProtocol.h"
 #include "PluginBridgeSharedBlock.h"
-#include "../AudioEngine/AudioThreadPriority.h"
+#include "../Utils/AudioThreadPriority.h"
 
 #include <cstdlib>
 #include <juce_audio_processors/juce_audio_processors.h>

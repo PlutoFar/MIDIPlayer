@@ -43,19 +43,14 @@ public:
   class Listener {
   public:
     virtual ~Listener() = default;
-    virtual void playlistTrackSelected(int index) = 0;
-    virtual void playlistTrackDoubleClicked(int index) = 0;
+    virtual void playlistTrackDoubleClicked(midi::TrackId id) = 0;
     virtual void playlistFilesDropped(const juce::StringArray &files) = 0;
     virtual bool playlistSaveRequested() = 0;
     virtual bool playlistClearRequested() = 0;
     virtual bool playlistLoadRequested(const juce::File &playlistFile) = 0;
-    virtual bool playlistTrackMoveRequested(int fromIndex, int toIndex,
-                                            int newCurrentIndex) = 0;
-    virtual bool playlistTrackRemoveRequested(int index,
-                                              int newCurrentIndex) = 0;
-    virtual void playlistTrackRevealRequested(int index) = 0;
-    virtual void playlistLoaded(const juce::File &playlistFile) = 0;
-    virtual void playlistTrackReordered(int newCurrentIndex) = 0;
+    virtual bool playlistTrackMoveRequested(midi::TrackId id, int toIndex) = 0;
+    virtual bool playlistTrackRemoveRequested(midi::TrackId id) = 0;
+    virtual void playlistTrackRevealRequested(midi::TrackId id) = 0;
   };
 
   PlaylistPanel(const midi::Core &c)
@@ -116,12 +111,13 @@ public:
   bool keyPressed(const juce::KeyPress &key, juce::Component *) override {
     const int selected = listBox.getSelectedRow();
     if (key == juce::KeyPress::deleteKey && selected >= 0) {
-      beginRemoveTrack(selected);
+      beginRemoveTrack(playlistState.tracks[static_cast<size_t>(selected)].id);
       return true;
     }
     if (key == juce::KeyPress::returnKey && selected >= 0) {
       if (auto *asyncListener = getAsyncListener())
-        asyncListener->playlistTrackDoubleClicked(selected);
+        asyncListener->playlistTrackDoubleClicked(
+            playlistState.tracks[static_cast<size_t>(selected)].id);
       return true;
     }
     return false;
@@ -134,21 +130,24 @@ public:
   }
 
   void setCurrentTrackIndex(int index) {
-    if (currentTrackIndex != index) {
-      animationState.startCurrentTrackTransition(currentTrackIndex, index);
-      ensureAnimationTimer();
-    }
+    if (currentTrackIndex == index || animationState.getRemovingRow() >= 0)
+      return;
+    animationState.startCurrentTrackTransition(currentTrackIndex, index);
+    ensureAnimationTimer();
     currentTrackIndex = index;
     listBox.repaint();
-    listBox.scrollToEnsureRowIsOnscreen(index);
+    if (index >= 0)
+      listBox.scrollToEnsureRowIsOnscreen(index);
   }
 
   int getCurrentTrackIndex() const { return currentTrackIndex; }
 
   void refresh() {
+    animationState.clearRemoval();
     playlistState = core.playlistState();
     updateRowHeight();
     listBox.updateContent();
+    setCurrentTrackIndex(playlistState.currentTrackIndex);
     listBox.repaint();
     updateCountLabel();
     repaint();
@@ -194,7 +193,7 @@ public:
   }
 
   int getNumRows() override {
-    return static_cast<int>(playlistState.trackNames.size());
+    return static_cast<int>(playlistState.tracks.size());
   }
 
   void paintListBoxItem(int, juce::Graphics &, int, int, bool) override {}
@@ -211,12 +210,11 @@ public:
 
   void paintPlaylistRow(int row, juce::Graphics &g, int width, int height,
                         bool rowIsSelected) {
-    if (!juce::isPositiveAndBelow(row, playlistState.trackNames.size()))
+    if (!juce::isPositiveAndBelow(row, playlistState.tracks.size()))
       return;
-    const auto trackName = juce::String(
-        playlistState.trackNames[static_cast<size_t>(row)].c_str());
-    const bool available =
-        playlistState.trackAvailable[static_cast<size_t>(row)];
+    const auto &track = playlistState.tracks[static_cast<size_t>(row)];
+    const juce::String trackName(track.name.c_str());
+    const bool available = track.available;
 
     auto area = juce::Rectangle<int>(0, 0, width, height).reduced(6, 2);
 
@@ -282,13 +280,12 @@ public:
   void listBoxItemClicked(int row, const juce::MouseEvent &e) override {
     if (e.mods.isPopupMenu())
       showContextMenu(row);
-    else if (listener)
-      listener->playlistTrackSelected(row);
   }
 
   void listBoxItemDoubleClicked(int row, const juce::MouseEvent &) override {
-    if (listener)
-      listener->playlistTrackDoubleClicked(row);
+    if (auto *target = getAsyncListener();
+        target != nullptr && juce::isPositiveAndBelow(row, getNumRows()))
+      target->playlistTrackDoubleClicked(playlistState.tracks[static_cast<size_t>(row)].id);
   }
 
   void backgroundClicked(const juce::MouseEvent &) override {
@@ -302,8 +299,9 @@ public:
     if (!animRows.empty())
       stopDropAnimation();
 
-    if (selectedRows.size() == 1)
-      return "trackIdx:" + juce::String(selectedRows[0]);
+    if (animationState.getRemovingRow() < 0 && selectedRows.size() == 1 &&
+        juce::isPositiveAndBelow(selectedRows[0], getNumRows()))
+      return "trackId:" + juce::String(playlistState.tracks[static_cast<size_t>(selectedRows[0])].id);
     return {};
   }
 
@@ -321,7 +319,7 @@ public:
     int rowHeight = listBox.getRowHeight();
 
     int newInsertIndex =
-        juce::jlimit(0, static_cast<int>(playlistState.trackNames.size()),
+        juce::jlimit(0, getNumRows(),
                      (localPoint.y + scrollY + rowHeight / 2) / rowHeight);
 
     if (newInsertIndex != dropInsertIndex) {
@@ -344,62 +342,31 @@ public:
     int rowHeight = listBox.getRowHeight();
 
     int insertIndex =
-        juce::jlimit(0, static_cast<int>(playlistState.trackNames.size()),
+        juce::jlimit(0, getNumRows(),
                      (localPoint.y + scrollY + rowHeight / 2) / rowHeight);
 
-    bool movedAnyTrack = false;
     auto desc = details.description.toString();
-    if (desc.startsWith("trackIdx:")) {
-      int srcRow = desc.substring(9).getIntValue();
-      if (srcRow >= 0 &&
-          srcRow < static_cast<int>(playlistState.trackNames.size()) &&
-          srcRow != insertIndex) {
-        int targetRow = insertIndex;
-        if (srcRow < insertIndex)
-          targetRow--;
-
-        if (targetRow != srcRow && targetRow >= 0) {
-          bool movedPlayingTrack = (srcRow == currentTrackIndex);
-          int newCurrentTrackIndex = currentTrackIndex;
-          if (srcRow == currentTrackIndex) {
-            newCurrentTrackIndex = targetRow;
-          } else if (srcRow < currentTrackIndex &&
-                     targetRow >= currentTrackIndex) {
-            newCurrentTrackIndex--;
-          } else if (srcRow > currentTrackIndex &&
-                     targetRow <= currentTrackIndex) {
-            newCurrentTrackIndex++;
-          }
-
-          bool moved = false;
-          if (auto *asyncListener = getAsyncListener()) {
-            moved = asyncListener->playlistTrackMoveRequested(
-                srcRow, targetRow, newCurrentTrackIndex);
-          }
-
-          if (moved) {
-            movedAnyTrack = true;
-            currentTrackIndex = newCurrentTrackIndex;
-            animationState.setCurrentTrackImmediate(currentTrackIndex);
-            if (movedPlayingTrack) {
-              animationState.clearReorder();
-            } else {
-              animationState.startReorder(srcRow, targetRow,
-                                          (float)listBox.getRowHeight());
-            }
-            listBox.selectRow(targetRow);
-            startDropAnimation(targetRow, movedPlayingTrack);
-            ensureAnimationTimer();
-          }
-        }
-      }
-    }
-
     dropInsertIndex = -1;
-    refresh();
     repaint();
-    if (movedAnyTrack && listener)
-      listener->playlistTrackReordered(currentTrackIndex);
+    if (!desc.startsWith("trackId:") || animationState.getRemovingRow() >= 0)
+      return;
+    const auto id = desc.substring(8).getLargeIntValue();
+    const int sourceRow = rowForTrack(id);
+    const int targetRow = insertIndex - (sourceRow < insertIndex ? 1 : 0);
+    auto *target = getAsyncListener();
+    if (sourceRow < 0 || targetRow == sourceRow || target == nullptr ||
+        !target->playlistTrackMoveRequested(id, targetRow))
+      return;
+
+    const bool movedPlayingTrack = sourceRow == currentTrackIndex;
+    refresh();
+    animationState.setCurrentTrackImmediate(currentTrackIndex);
+    if (movedPlayingTrack)
+      animationState.clearReorder();
+    else
+      animationState.startReorder(sourceRow, targetRow, (float)listBox.getRowHeight());
+    listBox.selectRow(targetRow);
+    startDropAnimation(targetRow, movedPlayingTrack);
   }
 
   void paintOverChildren(juce::Graphics &g) override {
@@ -407,7 +374,7 @@ public:
     const auto colors =
         laf != nullptr ? laf->getColors() : FluentLookAndFeel::FluentColors{};
 
-    if (playlistState.trackNames.empty()) {
+    if (playlistState.tracks.empty()) {
       g.setColour(colors.textSecondary);
       if (laf != nullptr)
         g.setFont(laf->getBodyLargeFont());
@@ -495,7 +462,7 @@ private:
 
   void updateCountLabel() {
     countLabel.setText(
-        juce::String(static_cast<int>(playlistState.trackNames.size())) +
+        juce::String(getNumRows()) +
             L" 个曲目",
         juce::dontSendNotification);
   }
@@ -543,12 +510,8 @@ private:
                 if (auto *listener = safeThis->getAsyncListener())
                   cleared = listener->playlistClearRequested();
 
-                if (cleared) {
-                  safeThis->currentTrackIndex = -1;
+                if (cleared)
                   safeThis->refresh();
-                  if (auto *listener = safeThis->getAsyncListener())
-                    listener->playlistLoaded(juce::File());
-                }
               }
             }));
   }
@@ -605,15 +568,14 @@ private:
     if (auto *asyncListener = getAsyncListener())
       loaded = asyncListener->playlistLoadRequested(file);
 
-    if (loaded) {
-      currentTrackIndex = -1;
+    if (loaded)
       refresh();
-      if (listener)
-        listener->playlistLoaded(file);
-    }
   }
 
   void showContextMenu(int row) {
+    if (!juce::isPositiveAndBelow(row, getNumRows()))
+      return;
+    const auto id = playlistState.tracks[static_cast<size_t>(row)].id;
     juce::PopupMenu m;
     m.addItem(1, L"播放");
     m.addItem(2, L"移除");
@@ -621,18 +583,18 @@ private:
     m.addItem(3, L"打开文件位置");
     m.showMenuAsync(
         {}, [safeThis = juce::Component::SafePointer<PlaylistPanel>(this),
-             row](int r) {
+             id](int r) {
           if (safeThis == nullptr)
             return;
 
           if (r == 1) {
             if (auto *listener = safeThis->getAsyncListener())
-              listener->playlistTrackDoubleClicked(row);
+              listener->playlistTrackDoubleClicked(id);
           } else if (r == 2) {
-            safeThis->beginRemoveTrack(row);
+            safeThis->beginRemoveTrack(id);
           } else if (r == 3) {
             if (auto *listener = safeThis->getAsyncListener())
-              listener->playlistTrackRevealRequested(row);
+              listener->playlistTrackRevealRequested(id);
           }
         });
   }
@@ -683,8 +645,7 @@ private:
   }
 
   void updateVisibleRowTransforms() {
-    for (int row = 0; row < static_cast<int>(playlistState.trackNames.size());
-         ++row) {
+    for (int row = 0; row < getNumRows(); ++row) {
       auto *component = listBox.getComponentForRowNumber(row);
       if (component == nullptr)
         continue;
@@ -700,50 +661,29 @@ private:
     }
   }
 
-  void beginRemoveTrack(int row) {
-    if (pendingRemovalRow >= 0 ||
-        !juce::isPositiveAndBelow(
-            row, static_cast<int>(playlistState.trackNames.size())))
+  int rowForTrack(midi::TrackId id) {
+    for (int row = 0; row < getNumRows(); ++row)
+      if (playlistState.tracks[static_cast<size_t>(row)].id == id)
+        return row;
+    return -1;
+  }
+
+  void beginRemoveTrack(midi::TrackId id) {
+    const int row = rowForTrack(id);
+    auto *target = getAsyncListener();
+    if (animationState.getRemovingRow() >= 0 || row < 0 || target == nullptr ||
+        !target->playlistTrackRemoveRequested(id))
       return;
 
-    pendingRemovalRow = row;
+    // 列表已提交，保留旧画面完成退场动画。
     animationState.startRemove(row);
     ensureAnimationTimer();
   }
 
   void finishPendingRemoval() {
-    const int row = pendingRemovalRow;
-    if (!juce::isPositiveAndBelow(
-            row, static_cast<int>(playlistState.trackNames.size()))) {
-      pendingRemovalRow = -1;
-      animationState.clearRemoval();
-      return;
-    }
-
-    const int newCurrentIndex =
-        getCurrentTrackIndexAfterRemoval(currentTrackIndex, row);
-
-    bool removed = false;
-    if (auto *asyncListener = getAsyncListener())
-      removed =
-          asyncListener->playlistTrackRemoveRequested(row, newCurrentIndex);
-
-    if (!removed) {
-      pendingRemovalRow = -1;
-      animationState.clearRemoval();
-      refresh();
-      return;
-    }
-
-    currentTrackIndex = newCurrentIndex;
-    animationState.clearRemoval();
-    animationState.startCurrentTrackTransition(-1, currentTrackIndex);
+    const int row = animationState.getRemovingRow();
     refresh();
     animationState.startShiftAfterRemoval(row, (float)listBox.getRowHeight());
-    pendingRemovalRow = -1;
-
-    if (auto *asyncListener = getAsyncListener())
-      asyncListener->playlistTrackReordered(currentTrackIndex);
   }
 
   const midi::Core &core;
@@ -757,7 +697,6 @@ private:
   std::unique_ptr<juce::FileChooser> fileChooser;
   int currentTrackIndex = -1;
   int dropInsertIndex = -1;
-  int pendingRemovalRow = -1;
   bool isFileDragOver = false;
   PlaylistAnimationState animationState;
 

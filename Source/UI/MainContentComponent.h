@@ -3,7 +3,6 @@
 #include "../AudioEngine/ExportFileSupport.h"
 #include "../AudioEngine/ExportSettings.h"
 #include "../Core/Core.h"
-#include "../Core/PluginLoadNotification.h"
 #include "../Utils/UserSettings.h"
 #include "../Utils/Win11Helpers.h"
 #include "../Utils/WindowsFileAssociation.h"
@@ -15,7 +14,6 @@
 #include "TransportWidgets.h"
 #include "NavigationSidebar.h"
 #include "PlaylistPanel.h"
-#include "PluginWindowLifecycle.h"
 
 #include <cmath>
 #include <functional>
@@ -83,26 +81,19 @@ public:
 
   void comboBoxChanged(juce::ComboBox *c) override;
 
-  void playlistTrackSelected(int index) override;
-
-  void playlistLoaded(const juce::File &playlistFile) override;
-
   bool playlistSaveRequested() override;
 
   bool playlistClearRequested() override;
 
   bool playlistLoadRequested(const juce::File &playlistFile) override;
 
-  bool playlistTrackMoveRequested(int fromIndex, int toIndex,
-                                  int newCurrentIndex) override;
+  bool playlistTrackMoveRequested(midi::TrackId id, int toIndex) override;
 
-  bool playlistTrackRemoveRequested(int index, int newCurrentIndex) override;
+  bool playlistTrackRemoveRequested(midi::TrackId id) override;
 
-  void playlistTrackRevealRequested(int index) override;
+  void playlistTrackRevealRequested(midi::TrackId id) override;
 
-  void playlistTrackReordered(int newCurrentIndex) override;
-
-  void playlistTrackDoubleClicked(int index);
+  void playlistTrackDoubleClicked(midi::TrackId id) override;
 
   void playlistFilesDropped(const juce::StringArray &files) override;
 
@@ -110,7 +101,7 @@ public:
 
   void filesDropped(const juce::StringArray &files, int, int) override;
 
-  void backgroundSettingsChanged(bool reapplyEffects) override;
+  void backgroundSettingsChanged() override;
 
   void dialogMaterialChanged(bool backdropChanged) override;
 
@@ -144,10 +135,10 @@ private:
 
   void showExportDialog();
 
-  void chooseExportTarget(int selectedTrackIndex,
+  void chooseExportTarget(std::wstring sourcePath,
                           const ExportSettings &settings);
 
-  void performExport(int selectedTrackIndex, const ExportSettings &settings,
+  void performExport(const std::wstring &sourcePath, const ExportSettings &settings,
                      const juce::File &targetFile);
 
   void runLater(int delayMs, std::function<void(MainContentComponent &)> fn);
@@ -194,7 +185,6 @@ private:
 
   void unloadPlugin();
 
-  int beginPluginSwitch();
 
   void finishPluginLoadUi(const midi::PluginInfo &plugin);
 
@@ -243,8 +233,6 @@ private:
 
   void updatePluginList();
 
-  void tryLoadLastPlugin();
-
   juce::String formatTime(int seconds);
 
   void loadSettings();
@@ -253,7 +241,7 @@ private:
   juce::String lastMidiErrorShown;
   FluentLookAndFeel &fluentLookAndFeel;
 
-  BackgroundComponent background;
+  BackgroundComponent background{getAppSettings()};
   NavigationSidebar navigation;
 
   juce::Label pageTitle;
@@ -298,9 +286,7 @@ private:
   bool pluginWorkerCrashAlertShown = false;
   bool pluginWorkerRecoveryHandled = false;
   bool pendingShellOpen = false;
-  PluginWindowLifecycle pluginLifecycle;
-
-  juce::File currentPlaylistFile;
+  int pluginGeneration = 0;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainContentComponent)
 };

@@ -55,11 +55,12 @@ inline void applyTpdfDither(juce::AudioBuffer<float> &buffer, int bitDepth,
   }
 }
 
-inline float measureExportTailLevel(const juce::AudioBuffer<float> &buffer) {
+inline float measureExportTailLevel(const juce::AudioBuffer<float> &buffer,
+                                    int tailStart = 0) {
   float maxLevel = 0.0f;
   for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
     maxLevel = juce::jmax(
         maxLevel,
-        buffer.getMagnitude(channel, 0, buffer.getNumSamples()));
+        buffer.getMagnitude(channel, tailStart, buffer.getNumSamples() - tailStart));
   return maxLevel;
 }

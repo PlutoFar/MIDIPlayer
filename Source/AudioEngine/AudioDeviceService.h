@@ -10,7 +10,7 @@ class AudioDeviceService final : private juce::ChangeListener,
                                  public juce::ChangeBroadcaster {
 public:
   // Side effect: 恢复设备或尝试默认设备并连接处理器；无设备时仍构造成功，诊断保存在 `lastError`。
-  explicit AudioDeviceService(juce::AudioProcessor &processor);
+  AudioDeviceService(juce::AudioProcessor &processor, juce::File settingsFile);
   ~AudioDeviceService() override;
   // Postconditions: 返回设备属性副本；`rescan=true` 同步重新枚举设备，不转移设备对象所有权。
   AudioDeviceState state(bool rescan);
@@ -37,6 +37,7 @@ private:
   // Concurrency: 仅消息线程读取实际设备，再发布原子可用性与加锁错误；两者不组成原子快照。
   void publishStatus(const juce::String &diagnostic);
   void changeListenerCallback(juce::ChangeBroadcaster *) override;
+  juce::File file;
   juce::AudioDeviceManager manager;
   juce::AudioProcessorPlayer player;
   std::atomic<bool> deviceAvailable{false};

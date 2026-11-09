@@ -25,14 +25,22 @@ int runPersistenceTests() {
   expect(failures, source.addFile(missing),
          "playlist should accept a second available MIDI file");
   const auto playlistFile = tempDir.getChildFile("library.json");
-  expect(failures, source.saveDetailed(playlistFile).wasOk(),
+  const auto savedRevision = source.getRevision();
+  expect(failures, PlaylistManager::write(playlistFile, source.getTracks()).wasOk(),
          "playlist JSON should save atomically");
+  expect(failures, source.addFile(first, true),
+         "existing playlist data can contain repeated paths");
+  source.markSaved(savedRevision);
+  expect(failures, source.hasChanges(),
+         "completion of an older save should preserve later playlist edits");
   expect(failures, missing.deleteFile(),
          "test should make one persisted track unavailable");
 
   PlaylistManager restored;
-  expect(failures, restored.loadDetailed(playlistFile).wasOk(),
+  PlaylistManager::Tracks tracks;
+  expect(failures, PlaylistManager::read(playlistFile, tracks).wasOk(),
          "playlist JSON should load when a track is unavailable");
+  restored.replace(tracks);
   expect(failures, restored.size() == 2,
          "playlist load should preserve unavailable track entries");
   const auto *offlineTrack = restored.getTrack(1);
@@ -52,10 +60,20 @@ int runPersistenceTests() {
 
   const auto malformed = tempDir.getChildFile("malformed.json");
   malformed.replaceWithText("{\"version\":1,\"tracks\":[42]}");
-  expect(failures, restored.loadDetailed(malformed).failed(),
+  expect(failures, PlaylistManager::read(malformed, tracks).failed(),
          "playlist should reject non-string track entries");
-  expect(failures, restored.size() == 2,
-         "failed playlist load should preserve the existing list");
+  expect(failures, tracks.size() == 2,
+         "failed playlist parsing should preserve the previous result");
+
+  const auto duplicates = tempDir.getChildFile("duplicate-rows.json");
+  expect(failures, PlaylistManager::write(duplicates, source.getTracks()).wasOk() &&
+                       PlaylistManager::read(duplicates, tracks).wasOk(),
+         "duplicate paths in saved playlists should round-trip");
+  restored.replace(std::move(tracks));
+  expect(failures, restored.size() == 3 &&
+                       restored.getTrack(0)->file == restored.getTrack(2)->file &&
+                       restored.getTrack(0)->id != restored.getTrack(2)->id,
+         "duplicate paths should receive distinct session identities");
 
   const auto settingsFile = tempDir.getChildFile("Settings.xml");
   settingsFile.replaceWithText("<broken");

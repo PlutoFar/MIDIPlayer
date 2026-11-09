@@ -1,5 +1,5 @@
 #include "AudioEngine.h"
-#include "AudioThreadPriority.h"
+#include "../Utils/AudioThreadPriority.h"
 #include "../Utils/DebugLogger.h"
 #include "ExportAudioProcessing.h"
 
@@ -50,32 +50,56 @@ bool AudioEngine::preparePlugin(std::function<void(double)> prepareMidi) {
   return started;
 }
 
-bool AudioEngine::prepareForOfflineExport(const ExportSettings &settings) {
-  lastExportError.clear();
-  if (!bridge.isPluginLoaded()) {
-    lastExportError = L"音频引擎或插件未准备好。";
-    return false;
+AudioEngine::OfflineExportSession::OfflineExportSession(
+    AudioEngine &owner, std::unique_ptr<juce::MidiMessageSequence> sequence,
+    double sampleRate)
+    : engine(owner), rate(sampleRate) {
+  player.setSequence(std::move(sequence), rate);
+  if (!std::isfinite(durationSamples()) || durationSamples() <= 0.0) {
+    preparation = juce::Result::fail(L"待导出的 MIDI 没有有效时长。");
+    return;
   }
-
-  offlineExportActive.store(true, std::memory_order_release);
-  suspendProcessing(true);
-  stopRealtimeRenderer();
-  const double exportSampleRate = settings.sampleRate;
-  midiPlayer.resetForOfflineRender(exportSampleRate);
-  if (!bridge.prepare(exportSampleRate, exportOfflineBlockSize, true,
-                      PluginBridge::Command::beginExport)) {
-    lastExportError = bridge.getLastError();
-    const auto initialError = lastExportError;
-    if (!restoreFromOfflineExport())
-      lastExportError = initialError + L"\n" + lastExportError;
-    else
-      lastExportError = initialError;
-    return false;
-  }
-  return true;
+  player.resetForOfflineRender(rate);
+  player.setPlaying(true);
+  preparation = engine.prepareForOfflineExport(rate);
+  active = preparation.wasOk();
 }
 
-bool AudioEngine::restoreFromOfflineExport() {
+AudioEngine::OfflineExportSession::~OfflineExportSession() { finish(); }
+
+juce::Result AudioEngine::OfflineExportSession::finish() {
+  if (!std::exchange(active, false))
+    return juce::Result::ok();
+  return engine.restoreFromOfflineExport();
+}
+
+juce::Result AudioEngine::OfflineExportSession::render(
+    juce::AudioBuffer<float> &audio, juce::MidiBuffer &midi) {
+  if (engine.renderPluginBlock(player, MidiPlayer::ProcessMode::offline,
+                               audio, midi, rate))
+    return juce::Result::ok();
+  const auto error = engine.bridge.getLastError();
+  return juce::Result::fail(error.isEmpty() ? L"插件进程渲染失败。" : error);
+}
+
+juce::Result AudioEngine::prepareForOfflineExport(double sampleRate) {
+  if (!bridge.isPluginLoaded())
+    return juce::Result::fail(L"音频引擎或插件未准备好。");
+
+  suspendProcessing(true);
+  stopRealtimeRenderer();
+  if (bridge.prepare(sampleRate, exportOfflineBlockSize, true,
+                     PluginBridge::Command::beginExport))
+    return juce::Result::ok();
+
+  auto error = juce::String(L"无法初始化离线导出: ") + bridge.getLastError();
+  const auto restored = restoreFromOfflineExport();
+  if (restored.failed())
+    error += L"\n" + restored.getErrorMessage();
+  return juce::Result::fail(error);
+}
+
+juce::Result AudioEngine::restoreFromOfflineExport() {
   double liveSampleRate;
   int blockSize;
   unsigned revision;
@@ -88,19 +112,24 @@ bool AudioEngine::restoreFromOfflineExport() {
   const bool restored = bridge.isPluginLoaded() &&
       bridge.prepare(liveSampleRate, blockSize, false,
                      PluginBridge::Command::endExport);
-  if (!restored)
-    lastExportError = L"无法恢复实时音频: " + bridge.getLastError();
-  midiPlayer.setSampleRate(liveSampleRate);
-  midiPlayer.setPlaying(false);
-  midiPlayer.seekTo(0.0);
-  offlineExportActive.store(false, std::memory_order_release);
-  if (restored)
+  if (restored) {
+    midiPlayer.setSampleRate(liveSampleRate);
+    // 插件已重新初始化。续播前恢复当前定位的控制器和踏板状态。
+    if (midiPlayer.getPlaying())
+      midiPlayer.seekTo(midiPlayer.getPositionInSamples(), true);
     preparedRevision.store(revision);
-  const bool started = restored && startRealtimeRenderer(liveSampleRate, blockSize);
+  }
+  const bool started =
+      restored && startRealtimeRenderer(liveSampleRate, blockSize);
+  if (!started)
+    midiPlayer.setPlaying(false);
   suspendProcessing(false);
-  if (restored && !started)
-    lastExportError = getLastPluginError();
-  return started;
+  if (started)
+    return juce::Result::ok();
+  const auto diagnostic = restored ? getLastPluginError() : bridge.getLastError();
+  if (!restored && bridge.isPluginLoaded())
+    bridge.failRenderSession(diagnostic);
+  return juce::Result::fail(L"无法恢复实时音频: " + diagnostic);
 }
 
 void AudioEngine::unloadPlugin() {
@@ -133,7 +162,7 @@ bool AudioEngine::openPluginEditor() {
 void AudioEngine::processBlock(juce::AudioBuffer<float> &buffer,
                                juce::MidiBuffer &midiMessages) {
   midiMessages.clear();
-  if (isOfflineExportActive() || requiresPrepare() || !bridge.isPluginLoaded()) {
+  if (requiresPrepare() || !bridge.isPluginLoaded()) {
     buffer.clear();
     return;
   }
@@ -215,14 +244,15 @@ void AudioEngine::renderRealtimeBlock(juce::AudioBuffer<float> &buffer,
                                       juce::MidiBuffer &midiMessages) {
   juce::ScopedNoDenormals noDenormals;
 
-  if (isOfflineExportActive() || requiresPrepare()) {
+  if (requiresPrepare()) {
     buffer.clear();
     midiMessages.clear();
     return;
   }
 
   const double renderSampleRate = preparedRenderSampleRate;
-  if (!renderPluginBlock(buffer, midiMessages, renderSampleRate)) {
+  if (!renderPluginBlock(midiPlayer, MidiPlayer::ProcessMode::realtime,
+                         buffer, midiMessages, renderSampleRate)) {
     buffer.clear();
     return;
   }
@@ -344,15 +374,16 @@ bool AudioEngine::loadPlugin(const juce::PluginDescription &description,
   return true;
 }
 
-bool AudioEngine::renderPluginBlock(juce::AudioBuffer<float> &buffer,
+bool AudioEngine::renderPluginBlock(MidiPlayer &player, MidiPlayer::ProcessMode mode,
+                                    juce::AudioBuffer<float> &buffer,
                                     juce::MidiBuffer &midiMessages,
                                     double sampleRate) {
   midiMessages.clear();
   buffer.clear();
 
   if (!bridge.isPluginLoaded()) {
-    if (midiPlayer.getPlaying()) {
-      midiPlayer.setPlaying(false);
+    if (player.getPlaying()) {
+      player.setPlaying(false);
       setLastPluginError(L"插件未加载。");
     }
     return false;
@@ -362,10 +393,8 @@ bool AudioEngine::renderPluginBlock(juce::AudioBuffer<float> &buffer,
   if (totalSamples <= 0)
     return true;
 
-  midiPlayer.processBlock(midiMessages, totalSamples,
-                          isOfflineExportActive() ? MidiPlayer::ProcessMode::offline
-                                                  : MidiPlayer::ProcessMode::realtime,
-                          PluginBridge::SharedBlockLayout::maxMidiBytes);
+  player.processBlock(midiMessages, totalSamples, mode,
+                      PluginBridge::SharedBlockLayout::maxMidiBytes);
   for (int offset = 0; offset < totalSamples;
        offset += PluginBridge::SharedBlockLayout::maxSamples) {
     const int chunkSamples =
@@ -374,14 +403,14 @@ bool AudioEngine::renderPluginBlock(juce::AudioBuffer<float> &buffer,
                                    buffer.getNumChannels(), offset,
                                    chunkSamples);
     if (!bridge.processBlock(midiMessages, chunk, sampleRate, offset,
-                             midiPlayer.getMusicalPosition(offset)))
+                             player.getMusicalPosition(offset)))
       break;
     if (offset + chunkSamples >= totalSamples)
       return true;
   }
 
   if (bridge.getStatus() == PluginBridge::BridgeStatus::crashed) {
-    midiPlayer.setPlaying(false);
+    player.setPlaying(false);
     setLastPluginError(bridge.getLastError());
   }
 

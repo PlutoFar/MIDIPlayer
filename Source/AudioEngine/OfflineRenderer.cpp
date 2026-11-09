@@ -1,24 +1,28 @@
 #include "OfflineRenderer.h"
-#include "AudioEngine.h"
 #include "ExportAudioProcessing.h"
 #include "ExportFormatSupport.h"
 #include "ExportOutputStream.h"
 
-bool OfflineRenderer::runOfflineExport(
+ExportOutcome renderOfflineExport(
+    AudioEngine::OfflineExportSession &session,
     const juce::File &outputFile, const ExportSettings &settings,
     std::function<void(float)> progressCallback,
     std::function<bool()> shouldCancel) {
-  engine.lastExportError.clear();
-  engine.lastExportCancelled = false;
-  auto fail = [this](const juce::String &message) {
-    engine.lastExportError = message;
-    return false;
+  auto fail = [](const juce::String &message) -> ExportOutcome {
+    return {ExportStatus::failed, false, message};
   };
 
-  if (!engine.isOfflineExportActive() || !engine.bridge.isPluginLoaded())
-    return fail(L"音频引擎或插件未准备好。");
-
   const double exportSampleRate = settings.sampleRate;
+  const int latencySamples = session.latencySamples();
+  const auto maxFixedTail =
+      static_cast<int64_t>(std::llround(exportSampleRate * settings.fixedTailSeconds));
+  const auto maxAutoTail = static_cast<int64_t>(exportSampleRate * 60.0);
+  const auto tailLimit = settings.autoTail ? maxAutoTail : maxFixedTail;
+  const auto duration = std::ceil(session.durationSamples());
+  if (duration >= static_cast<double>(std::numeric_limits<int64_t>::max() -
+                                       latencySamples - tailLimit))
+    return fail(L"MIDI 时长超出可导出的范围。");
+  const auto totalSamples = static_cast<int64_t>(duration);
 
   juce::AudioFormatManager localFormatManager;
   localFormatManager.registerBasicFormats();
@@ -50,28 +54,17 @@ bool OfflineRenderer::runOfflineExport(
     return fail(L"无法创建 " + settings.formatName + L" 编码器。");
   }
 
-  // 离线渲染期间由 MIDI 播放器生成事件，worker 进程渲染插件音频。
-  engine.midiPlayer.setPlaying(true);
-
   juce::AudioBuffer<float> buffer(2, exportOfflineBlockSize);
   juce::MidiBuffer midi;
   midi.ensureSize(PluginBridge::SharedBlockLayout::maxMidiBytes);
 
-  const int64_t totalSamples = static_cast<int64_t>(
-      std::ceil(engine.midiPlayer.getDurationInSamples()));
-  const int latencySamples = engine.bridge.getLatencySamples();
-
   // 进度前 90% 对应 MIDI 主体，后 10% 留给尾音；自动尾音最多渲染 60 秒，
   // 并要求连续 0.5 秒低于 0.00001 线性电平后结束，避免混响和释放音被截断。
-  const auto maxFixedTail =
-      static_cast<int64_t>(std::llround(exportSampleRate * settings.fixedTailSeconds));
-  const auto maxAutoTail = static_cast<int64_t>(exportSampleRate * 60.0);
   int64_t silentSamples = 0;
   int64_t renderedSamples = 0;
   int64_t writtenSamples = 0;
-  const int64_t renderLimit = totalSamples + latencySamples +
-      (settings.autoTail ? maxAutoTail : maxFixedTail);
-  bool result = true;
+  const int64_t renderLimit = totalSamples + latencySamples + tailLimit;
+  ExportOutcome result{ExportStatus::succeeded, false, {}};
   const bool preserveHeadroom = shouldPreserveExportHeadroom(
       settings.formatName, settings.bitDepth, settings.useFloatingPoint);
   const bool applyDither = shouldDitherExport(
@@ -86,9 +79,7 @@ bool OfflineRenderer::runOfflineExport(
 
   while (true) {
     if (shouldCancel && shouldCancel()) {
-      result = false;
-      engine.lastExportCancelled = true;
-      engine.lastExportError = L"导出已取消。";
+      result.status = ExportStatus::cancelled;
       break;
     }
 
@@ -101,26 +92,19 @@ bool OfflineRenderer::runOfflineExport(
     buffer.clear();
     midi.clear();
 
-    if (!engine.renderPluginBlock(buffer, midi, exportSampleRate)) {
-      result = false;
-      const auto pluginError = engine.getLastPluginError();
-      engine.lastExportError =
-          pluginError.isNotEmpty() ? pluginError : L"插件进程渲染失败。";
+    if (const auto rendered = session.render(buffer, midi); rendered.failed()) {
+      result = fail(rendered.getErrorMessage());
       break;
     }
-    if (engine.bridge.getLatencySamples() != latencySamples) {
-      result = false;
-      engine.lastExportError = L"导出期间插件延迟发生变化，请固定插件配置后重新导出。";
+    if (session.latencySamples() != latencySamples) {
+      result = fail(L"导出期间插件延迟发生变化，请固定插件配置后重新导出。");
       break;
     }
     const int tailStart = static_cast<int>(juce::jlimit<int64_t>(
         0, blockSamples, totalSamples + latencySamples - renderedSamples));
-    float tailLevel = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-      if (tailStart < blockSamples)
-        tailLevel = juce::jmax(tailLevel,
-                              buffer.getMagnitude(ch, tailStart, blockSamples - tailStart));
-    applyMasterOutputStage(buffer, engine.masterVolume.load(), preserveHeadroom);
+    const float tailLevel = tailStart < blockSamples
+                                ? measureExportTailLevel(buffer, tailStart) : 0.0f;
+    applyMasterOutputStage(buffer, session.masterGain(), preserveHeadroom);
     if (applyDither)
       applyTpdfDither(buffer, settings.bitDepth, ditherRandom);
 
@@ -129,9 +113,7 @@ bool OfflineRenderer::runOfflineExport(
         0, blockSamples, latencySamples - renderedSamples));
     const int count = blockSamples - skip;
     if (count > 0 && !writer->writeFromAudioSampleBuffer(buffer, skip, count)) {
-      result = false;
-      engine.lastExportError =
-          L"写入音频数据失败，可能是磁盘空间不足或文件不可写。";
+      result = fail(L"写入音频数据失败，可能是磁盘空间不足或文件不可写。");
       break;
     }
     renderedSamples += blockSamples;
@@ -147,7 +129,7 @@ bool OfflineRenderer::runOfflineExport(
       reportProgress(writtenSamples <= totalSamples
                          ? static_cast<float>(writtenSamples) / totalSamples * 0.9f
                          : 0.9f + 0.1f * static_cast<float>(writtenSamples - totalSamples) /
-                                      juce::jmax<int64_t>(1, settings.autoTail ? maxAutoTail : maxFixedTail));
+                                      juce::jmax<int64_t>(1, tailLimit));
       lastCallbackTime = now;
     }
   }
@@ -159,17 +141,21 @@ bool OfflineRenderer::runOfflineExport(
     outputStatus = fileStream->getStatus();
   fileStream.reset();
   if (outputStatus.failed()) {
-    if (engine.lastExportError.isNotEmpty())
-      engine.lastExportError += L"\n";
-    engine.lastExportError += L"音频文件未完成: " + outputStatus.getErrorMessage();
-    result = false;
+    if (result.error.isNotEmpty())
+      result.error += L"\n";
+    result.error += L"音频文件未完成: " + outputStatus.getErrorMessage();
+    result.status = ExportStatus::failed;
   }
 
-  if (result) {
+  // 文件替换是提交点，随后取消只影响进度窗口，不改变已提交结果。
+  if (result.status == ExportStatus::succeeded && shouldCancel && shouldCancel())
+    result.status = ExportStatus::cancelled;
+  if (result.status == ExportStatus::succeeded) {
     if (!tempFile.overwriteTargetFileWithTemporary()) {
       tempFile.deleteTemporaryFile();
       return fail(L"无法替换目标文件，请检查权限或文件是否被占用。");
     }
+    result.targetWritten = true;
     reportProgress(1.0f);
   } else {
     tempFile.deleteTemporaryFile();

@@ -8,78 +8,62 @@
 namespace midi {
 
 bool Core::Impl::canStartPlayback() {
-  StateLock lock(stateMutex);
   return engine.getMidiPlayer().hasSequence() && engine.hasPluginLoaded() &&
          !engine.hasPluginWorkerCrashed() && !commandChangesAudio.load() &&
          !exportActiveFlag.load();
 }
 
-bool Core::Impl::loadMidi(const juce::File &file) {
-  std::unique_ptr<juce::MidiMessageSequence> seq;
-  const auto result = readMidiSequence(file, seq);
-  if (result.failed()) {
-    StateLock lock(stateMutex);
-    midiErrorText = result.getErrorMessage();
-    return false;
-  }
-  StateLock lock(stateMutex);
-  const double sr = sampleRate();
-  engine.getMidiPlayer().setSequence(std::move(seq), sr);
-  currentMidiFile = file;
-  currentMidiName = file.getFileNameWithoutExtension();
-  midiErrorText.clear();
-  return true;
-}
-
-bool Core::Impl::beginMidiLoad(const juce::File &file, bool addToList, bool autoPlay,
+bool Core::Impl::beginMidiLoad(const juce::File &file, TrackId trackId,
                               std::function<void(bool)> completion,
                               std::function<void()> onPluginMissing) {
-  StateLock lock(stateMutex);
-  if (exportActiveFlag.load() || commandTaskActive.load() || pluginScanActive.load()) {
-    midiErrorText = L"当前操作尚未结束，无法加载 MIDI 文件。";
-    return false;
-  }
-  const int generation = ++trackSwitchGeneration;
+  const int generation = trackSwitchGeneration + 1;
   midiErrorText.clear();
-  const bool accepted = startCommandTask(
-      [this, file, addToList] {
-        if (!loadMidi(file)) {
-          StateLock resultLock(stateMutex);
-          commandTaskError = midiErrorText;
-          return false;
-        }
+  const auto accepted = startCommandTask(
+      [this, file, trackId] {
+        std::unique_ptr<juce::MidiMessageSequence> sequence;
+        const auto parsed = readMidiSequence(file, sequence);
+        if (parsed.failed())
+          return parsed;
+
         StateLock resultLock(stateMutex);
-        if (addToList)
+        engine.getMidiPlayer().setSequence(std::move(sequence), engine.liveSampleRate());
+        currentMidiFile = file;
+        currentMidiName = file.getFileNameWithoutExtension();
+        if (trackId == 0) {
           playlist.addFile(file);
-        currentTrackIndex = playlist.findTrackIndex(file);
-        return true;
+          currentTrackIndex = playlist.findTrackIndex(file);
+        } else {
+          currentTrackIndex = playlist.findTrackIndex(trackId);
+        }
+        return juce::Result::ok();
       },
-      [this, file, generation, autoPlay, completion = std::move(completion),
-       onPluginMissing = std::move(onPluginMissing)](bool succeeded) {
-        if (succeeded) {
-          getAppSettings().setLastMidiDirectory(file.getParentDirectory().getFullPathName());
+      [this, file, generation, completion = std::move(completion),
+       onPluginMissing = std::move(onPluginMissing)](juce::Result result) {
+        if (result.wasOk()) {
+          settings.setLastMidiDirectory(file.getParentDirectory().getFullPathName());
           StateLock resultLock(stateMutex);
-          if (autoPlay && generation == trackSwitchGeneration && canStartPlayback()) {
+          if (generation == trackSwitchGeneration && canStartPlayback()) {
             // Ordering: 新曲目从 0 开始，禁止使用旧渲染块尚未完成交接的位置缓存。
             engine.getMidiPlayer().seekTo(0.0, true);
             engine.getMidiPlayer().setPlaying(true);
           }
         } else {
           StateLock resultLock(stateMutex);
-          midiErrorText = pluginErrorText;
+          midiErrorText = result.getErrorMessage();
         }
+        const bool pluginMissing = result.wasOk() && !engine.hasPluginLoaded();
         if (completion)
-          completion(succeeded);
-        if (succeeded && !engine.hasPluginLoaded() && onPluginMissing)
+          completion(result.wasOk());
+        if (pluginMissing && onPluginMissing)
           onPluginMissing();
       });
-  if (accepted) {
-    isHandlingTrackEnd = false;
+  if (accepted.wasOk()) {
+    trackSwitchGeneration = generation;
     engine.getMidiPlayer().setPlaying(false);
   } else {
-    midiErrorText = pluginErrorText;
+    midiErrorText = accepted.getErrorMessage();
   }
-  return accepted;
+  return accepted.wasOk();
 }
 
 void Core::Impl::play() {
@@ -87,7 +71,6 @@ void Core::Impl::play() {
   if (!canStartPlayback() || engine.getMidiPlayer().getPlaying())
     return;
   ++trackSwitchGeneration;
-  isHandlingTrackEnd = false;
   auto &mp = engine.getMidiPlayer();
   mp.seekTo(mp.getPositionInSamples(), true);
   mp.setPlaying(true);
@@ -98,7 +81,6 @@ void Core::Impl::pause() {
   if (exportActiveFlag.load())
     return;
   ++trackSwitchGeneration;
-  isHandlingTrackEnd = false;
   engine.getMidiPlayer().setPlaying(false);
 }
 
@@ -107,7 +89,6 @@ void Core::Impl::togglePlay() {
   if (!canStartPlayback())
     return;
   ++trackSwitchGeneration;
-  isHandlingTrackEnd = false;
   auto &mp = engine.getMidiPlayer();
   if (mp.getPlaying()) {
     mp.setPlaying(false);
@@ -123,8 +104,11 @@ void Core::Impl::stop() {
   StateLock lock(stateMutex);
   if (exportActiveFlag.load())
     return;
+  resetPlayback();
+}
+
+void Core::Impl::resetPlayback() {
   ++trackSwitchGeneration;
-  isHandlingTrackEnd = false;
   engine.getMidiPlayer().setPlaying(false);
   engine.getMidiPlayer().seekTo(0);
 }
@@ -153,18 +137,14 @@ void Core::Impl::next() {
   if (playlist.isEmpty() || !engine.hasPluginLoaded())
     return;
 
-  isHandlingTrackEnd = false;
-  ++trackSwitchGeneration;
-  engine.getMidiPlayer().setPlaying(false);
-
   const int nextIndex = playlist.getNextIndex(currentTrackIndex);
   if (nextIndex == -1) {
-    stop();
+    resetPlayback();
     return;
   }
 
   if (const auto *track = playlist.getTrack(nextIndex)) {
-    beginMidiLoad(track->file, false, true);
+    beginMidiLoad(track->file, track->id);
   }
 }
 
@@ -176,49 +156,47 @@ void Core::Impl::prev() {
   if (playlist.isEmpty() || !engine.hasPluginLoaded())
     return;
 
-  isHandlingTrackEnd = false;
-  ++trackSwitchGeneration;
-  engine.getMidiPlayer().setPlaying(false);
-
   const int previousIndex = playlist.getPreviousIndex(currentTrackIndex);
   if (previousIndex == -1) {
-    stop();
+    resetPlayback();
     return;
   }
   if (const auto *track = playlist.getTrack(previousIndex)) {
-    beginMidiLoad(track->file, false, true);
+    beginMidiLoad(track->file, track->id);
   }
 }
 
 void Core::Impl::handleTrackEnd() {
-  StateLock lock(stateMutex);
-  if (isHandlingTrackEnd)
-    return;
-
-  isHandlingTrackEnd = true;
-  ++trackSwitchGeneration;
-  engine.getMidiPlayer().setPlaying(false);
-  engine.getMidiPlayer().seekTo(0);
+  resetPlayback();
   const int nextIndex = playlist.getNextIndex(currentTrackIndex);
   if (const auto *track = playlist.getTrack(nextIndex))
-    beginMidiLoad(track->file, false, true);
-  isHandlingTrackEnd = false;
+    beginMidiLoad(track->file, track->id);
 }
 
-void Core::Impl::tick(bool uiSuppressTrackAdvance) {
+void Core::Impl::timerCallback() {
   StateLock lock(stateMutex);
   auto &player = engine.getMidiPlayer();
-  const bool isExporting = exportActiveFlag.load();
-
-  // 曲目自然结束后推进到下一曲（用户拖动进度条期间抑制）。
-  if (!isExporting && !commandTaskActive.load() && !pluginScanActive.load() &&
-      !audioConfigurationActive.load() && !uiSuppressTrackAdvance &&
-      player.hasFinished())
-    handleTrackEnd();
-
-  // worker 崩溃后停止播放；崩溃提示由 UI 层依据 state() 呈现。
   if (engine.hasPluginWorkerCrashed())
     player.setPlaying(false);
+  if (exportActiveFlag.load() || commandTaskActive.load() ||
+      pluginScanActive.load() || audioConfigurationActive.load())
+    return;
+
+  if (!scrubbing && player.hasFinished())
+    handleTrackEnd();
+  if (!commandTaskActive.load() && engine.requiresPrepare())
+    startCommandTask(
+        [this] {
+          const bool prepared = engine.preparePlugin([this](double rate) {
+            StateLock lock(stateMutex);
+            auto &player = engine.getMidiPlayer();
+            player.setSampleRate(rate);
+            player.seekTo(player.getPositionInSamples(), player.getPlaying());
+          });
+          return prepared ? juce::Result::ok()
+                          : juce::Result::fail(engine.getLastPluginError());
+        },
+        {});
 }
 
 } // namespace midi

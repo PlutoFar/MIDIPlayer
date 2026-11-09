@@ -4,7 +4,7 @@
 // Concurrency: 捕获组件图像与绘制在消息线程，材质处理使用自有快照；异步结果回到消息线程。
 // Ownership: 线程池持有提交的任务；完成回调须使用安全组件引用并拒绝已过期结果。
 
-#include "../Core/BackgroundEffects.h"
+#include "DialogBackdropEffects.h"
 #include "../Utils/WindowMaterial.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>

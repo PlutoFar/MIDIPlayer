@@ -6,15 +6,6 @@
 #include <algorithm>
 #include <cmath>
 
-inline int getCurrentTrackIndexAfterRemoval(int currentTrackIndex,
-                                            int removedRow) {
-  if (removedRow == currentTrackIndex)
-    return -1;
-  if (removedRow >= 0 && removedRow < currentTrackIndex)
-    return currentTrackIndex - 1;
-  return currentTrackIndex;
-}
-
 class PlaylistAnimationState {
 public:
   void startInsert(int firstRow, int rowCount) {

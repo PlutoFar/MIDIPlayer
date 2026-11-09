@@ -11,47 +11,25 @@
 
 class OfflineExportThread final : public juce::ThreadWithProgressWindow {
 public:
-  OfflineExportThread(midi::Core &coreRef, int trackIndexValue,
+  OfflineExportThread(midi::Core &coreRef, std::wstring sourcePath,
                       const juce::File &targetFile,
                       const ExportSettings &exportSettings,
                       juce::Component *ownerComponent)
       : ThreadWithProgressWindow(L"正在导出高保真音频...", true, true, -1,
                                  L"安全取消", ownerComponent),
-        core(coreRef), trackIndex(trackIndexValue), file(targetFile),
-        settings(exportSettings) {}
+        core(coreRef),
+        request{std::move(sourcePath),
+                targetFile.getFullPathName().toWideCharPointer(), exportSettings} {}
 
   void run() override {
-    midi::Core::ExportRequest request;
-    request.trackIndex = trackIndex;
-    request.targetPath =
-        std::wstring(file.getFullPathName().toWideCharPointer());
-    request.formatName = std::wstring(settings.formatName.toWideCharPointer());
-    request.sampleRate = settings.sampleRate;
-    request.bitDepth = settings.bitDepth;
-    request.useFloatingPoint = settings.useFloatingPoint;
-    request.autoTail = settings.autoTail;
-    request.fixedTailSeconds = settings.fixedTailSeconds;
-    request.title = std::wstring(settings.title.toWideCharPointer());
-    request.qualityIndex = settings.qualityIndex;
-
-    const auto result = core.runExport(
+    outcome = core.runExport(
         request, [this](float progressValue) { setProgress(progressValue); },
         [this] { return threadShouldExit(); });
-
-    exportSucceeded = result == midi::Core::ExportResult::Succeeded;
-    exportCancelled = result == midi::Core::ExportResult::Cancelled;
-    exportFailed = result == midi::Core::ExportResult::Failed;
-    errorMessage = juce::String(core.lastExportError().c_str());
   }
 
-  bool exportSucceeded = false;
-  bool exportCancelled = false;
-  bool exportFailed = false;
-  juce::String errorMessage;
+  ExportOutcome outcome{ExportStatus::failed, false, L"无法启动导出任务。"};
 
 private:
   midi::Core &core;
-  int trackIndex = -1;
-  juce::File file;
-  ExportSettings settings;
+  midi::Core::ExportRequest request;
 };

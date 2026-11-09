@@ -1,5 +1,19 @@
 #pragma once
 
+#include <juce_graphics/juce_graphics.h>
+
+inline juce::Image prepareBackgroundImage(const juce::Image &image) {
+  constexpr int maxWidth = 2560;
+  constexpr int maxHeight = 1440;
+  if (image.getWidth() <= maxWidth && image.getHeight() <= maxHeight)
+    return image;
+  const double scale = std::min(static_cast<double>(maxWidth) / image.getWidth(),
+                                static_cast<double>(maxHeight) / image.getHeight());
+  return image.rescaled(std::max(1, static_cast<int>(image.getWidth() * scale)),
+                        std::max(1, static_cast<int>(image.getHeight() * scale)),
+                        juce::Graphics::highResamplingQuality);
+}
+
 // Contract: 布尔值描述同一时刻的背景图像状态；本模块只选择绘制来源和控件可用性。
 // Invariant: 需要处理图的效果在结果未就绪时不展示原图；效果 ID 必须使用持久化编号。
 

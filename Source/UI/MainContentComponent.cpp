@@ -93,9 +93,7 @@ MainContentComponent::MainContentComponent(
   progressSlider.setScrollWheelEnabled(false);
   progressSlider.textFromValueFunction = [this](double v) {
     const auto state = core.state();
-    const double dur = state.transport.durationSamples;
-    const double sr = core.sampleRate();
-    return formatTime((int)(v * dur / sr));
+    return formatTime(static_cast<int>(v * state.transport.durationSeconds));
   };
 
   addAndMakeVisible(progressTimeTooltip);
@@ -201,7 +199,6 @@ MainContentComponent::~MainContentComponent() {
   core.cancelPendingPluginOperation();
   pluginLoadingWindow.deleteAndZero();
   pluginMessageWindow.deleteAndZero();
-  pluginLifecycle.closeWindow();
   setLookAndFeel(nullptr);
 }
 
@@ -226,10 +223,8 @@ void MainContentComponent::timerCallback() {
 
   SCOPED_TIMER_SLOW("MainContentComponent::timerCallback", 20);
 
-  core.tick(isUserDraggingProgress);
   const auto state = core.state();
   const auto &transport = state.transport;
-  const double currentSampleRate = core.sampleRate();
 
   auto currentTime = juce::Time::getMillisecondCounter();
   const bool isPlaying = transport.playing;
@@ -241,12 +236,12 @@ void MainContentComponent::timerCallback() {
   // 拖动或刚完成 seek 时暂缓刷新，避免进度条被计时器回拉。
   if (!isUserDraggingProgress &&
       (currentTime - lastSeekRequestTime.load() > 250)) {
-    const double pos = transport.positionSamples;
-    const double dur = transport.durationSamples;
+    const double pos = transport.positionSeconds;
+    const double dur = transport.durationSeconds;
     if (dur > 0) {
       progressSlider.setValue(pos / dur, juce::dontSendNotification);
-      timeLabel.setText(formatTime((int)(pos / currentSampleRate)) + " / " +
-                            formatTime((int)(dur / currentSampleRate)),
+      timeLabel.setText(formatTime(static_cast<int>(pos)) + " / " +
+                            formatTime(static_cast<int>(dur)),
                         juce::dontSendNotification);
     } else {
       progressSlider.setValue(0.0, juce::dontSendNotification);
@@ -655,12 +650,11 @@ void MainContentComponent::sliderValueChanged(juce::Slider *s) {
 
     // 拖动中只更新显示时间，真正的 seek 在拖动结束后异步执行。
     const auto state = core.state();
-    const double dur = state.transport.durationSamples;
+    const double dur = state.transport.durationSeconds;
     if (dur > 0) {
       double currentVal = s->getValue();
-      const double sr = core.sampleRate();
-      int seconds = (int)(currentVal * dur / sr);
-      int totalSeconds = (int)(dur / sr);
+      const auto seconds = static_cast<int>(currentVal * dur);
+      const auto totalSeconds = static_cast<int>(dur);
       timeLabel.setText(formatTime(seconds) + " / " + formatTime(totalSeconds),
                         juce::dontSendNotification);
     }
@@ -668,8 +662,10 @@ void MainContentComponent::sliderValueChanged(juce::Slider *s) {
 }
 
 void MainContentComponent::sliderDragStarted(juce::Slider *s) {
-  if (s == &progressSlider)
+  if (s == &progressSlider) {
     isUserDraggingProgress = true;
+    core.setScrubbing(true);
+  }
 }
 
 void MainContentComponent::sliderDragEnded(juce::Slider *s) {
@@ -685,8 +681,10 @@ void MainContentComponent::sliderDragEnded(juce::Slider *s) {
 void MainContentComponent::triggerSeekUpdate(double normalizedPos) {
   auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
   juce::MessageManager::callAsync([safeThis, normalizedPos]() {
-    if (safeThis != nullptr)
+    if (safeThis != nullptr) {
       safeThis->core.seek(normalizedPos);
+      safeThis->core.setScrubbing(false);
+    }
   });
 }
 
@@ -695,61 +693,37 @@ void MainContentComponent::comboBoxChanged(juce::ComboBox *c) {
     loadSelectedPlugin();
 }
 
-void MainContentComponent::playlistTrackSelected(int index) {}
-
-void MainContentComponent::playlistLoaded(const juce::File &playlistFile) {
-  currentPlaylistFile =
-      playlistFile.existsAsFile() ? playlistFile : juce::File();
-}
-
 bool MainContentComponent::playlistSaveRequested() { return savePlaylist(); }
 
 bool MainContentComponent::playlistClearRequested() {
-  if (!core.clearPlaylist())
-    return false;
-  currentPlaylistFile = {};
-  return true;
+  return core.clearPlaylist();
 }
 
 bool MainContentComponent::playlistLoadRequested(
     const juce::File &playlistFile) {
   const bool loaded = core.loadList(
       std::wstring(playlistFile.getFullPathName().toWideCharPointer()));
-  if (loaded) {
-    currentPlaylistFile = playlistFile;
-  } else {
+  if (!loaded)
     showOperationError(L"加载播放列表失败", core.lastPlaylistError());
-  }
   return loaded;
 }
 
-bool MainContentComponent::playlistTrackMoveRequested(int fromIndex,
-                                                      int toIndex,
-                                                      int newCurrentIndex) {
-  juce::ignoreUnused(newCurrentIndex);
-  return core.moveTrack(fromIndex, toIndex);
+bool MainContentComponent::playlistTrackMoveRequested(midi::TrackId id, int toIndex) {
+  return core.moveTrack(id, toIndex);
 }
 
-bool MainContentComponent::playlistTrackRemoveRequested(int index,
-                                                        int newCurrentIndex) {
-  juce::ignoreUnused(newCurrentIndex);
-  return core.removeTrack(index);
+bool MainContentComponent::playlistTrackRemoveRequested(midi::TrackId id) {
+  return core.removeTrack(id);
 }
 
-void MainContentComponent::playlistTrackReordered(int newCurrentIndex) {
-  juce::ignoreUnused(newCurrentIndex);
-}
-
-void MainContentComponent::playlistTrackDoubleClicked(int index) {
-  LOG_DEBUG("Playlist double-clicked index: " + juce::String(index));
+void MainContentComponent::playlistTrackDoubleClicked(midi::TrackId id) {
   if (!core.hasPluginLoaded()) {
     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                            L"无法播放",
                                            L"请先加载一个乐器插件以开始播放。");
     return;
   }
-  core.playTrackAt(index);
-  playlistPanel.setCurrentTrackIndex(core.currentTrackIndex());
+  core.playTrack(id);
 }
 
 bool MainContentComponent::isInterestedInFileDrag(
@@ -767,10 +741,7 @@ void MainContentComponent::filesDropped(const juce::StringArray &files, int,
   repaint();
 }
 
-void MainContentComponent::backgroundSettingsChanged(bool reapplyEffects) {
-  if (reapplyEffects)
-    background.loadAsync();
-
+void MainContentComponent::backgroundSettingsChanged() {
   auto accentColor =
       juce::Colour::fromString(getAppSettings().getThemeAccentColor());
   fluentLookAndFeel.updateAccentColor(accentColor);
@@ -881,11 +852,9 @@ bool MainContentComponent::getProgressHoverInfo(const juce::MouseEvent &e,
                                                 juce::String &text,
                                                 int &anchorX) {
   const auto state = core.state();
-  const double durationSamples = state.transport.durationSamples;
-  const double sampleRate = core.sampleRate();
+  const double duration = state.transport.durationSeconds;
 
-  if (!progressSlider.isEnabled() || durationSamples <= 0.0 ||
-      sampleRate <= 0.0 || progressSlider.getWidth() <= 0)
+  if (!progressSlider.isEnabled() || duration <= 0.0 || progressSlider.getWidth() <= 0)
     return false;
 
   const double minPos = progressSlider.getPositionOfValue(0.0);
@@ -897,8 +866,7 @@ bool MainContentComponent::getProgressHoverInfo(const juce::MouseEvent &e,
   const double sliderX = (double)e.getPosition().x;
   const double ratio = juce::jlimit(0.0, 1.0, (sliderX - minPos) / span);
   const double clampedSliderX = minPos + ratio * span;
-  const double seconds = juce::jlimit(0.0, durationSamples / sampleRate,
-                                      ratio * durationSamples / sampleRate);
+  const double seconds = ratio * duration;
 
   anchorX = progressSlider.getX() + (int)std::round(clampedSliderX);
   text = formatTime((int)std::round(seconds));
@@ -1122,8 +1090,6 @@ void MainContentComponent::showOpenFileDialog() {
 
         auto result = fc.getResult();
         if (result.existsAsFile()) {
-          getAppSettings().setLastMidiDirectory(
-              result.getParentDirectory().getFullPathName());
           safeThis->core.openMidi(
               std::wstring(result.getFullPathName().toWideCharPointer()),
               [safeThis](bool succeeded) {

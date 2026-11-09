@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../Core/WorkerPath.h"
 #include "PluginBridgeProtocol.h"
 #include "PluginBridgeSharedBlock.h"
+#include "WorkerPath.h"
 
 #include <atomic>
 #include <cstdint>
@@ -56,7 +56,7 @@ public:
     beginOperation(Command::none, {});
     responseEvent.reset();
     clearPendingReplies();
-    const auto exe = midi::WorkerPath::resolve();
+    const auto exe = WorkerPath::resolve();
     const bool launched = launchWorkerProcess(exe, workerCommandLineUid,
                                               workerConnectionTimeoutMs, 0);
 

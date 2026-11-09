@@ -2,45 +2,36 @@
 #include "../PluginBridge/PluginScanProcess.h"
 #include "../Utils/UserSettings.h"
 
-PluginLibrary::PluginLibrary() { loadKnownPluginList(); }
+PluginLibrary::PluginLibrary(juce::File cacheFile) : file(std::move(cacheFile)) {
+  loadKnownPluginList();
+}
 
 void PluginLibrary::copyPluginListTo(juce::KnownPluginList &destination) const {
   if (auto xml = pluginList.createXml())
     destination.recreateFromXml(*xml);
 }
 
-bool PluginLibrary::scanPlugins(juce::KnownPluginList &destination,
-                                const std::function<bool()> &shouldCancel) {
+juce::Result PluginLibrary::scanPlugins(
+    juce::KnownPluginList &destination, const std::function<bool()> &shouldCancel) {
   juce::String diagnostic;
   const bool succeeded = PluginBridge::scanPluginListInChildProcess(
       destination, destination, shouldCancel, diagnostic);
-  setError(diagnostic);
-  return succeeded;
+  return succeeded ? juce::Result::ok() : juce::Result::fail(diagnostic);
 }
 
-bool PluginLibrary::replacePluginList(const juce::KnownPluginList &source) {
-  const auto xml = source.createXml();
-  if (xml == nullptr) {
-    setError(L"无法生成插件目录缓存");
-    return false;
-  }
-  const auto file =
-      UserSettings::getSettingsDirectory().getChildFile("Plugins.xml");
+juce::Result PluginLibrary::savePluginList(const juce::XmlElement &xml) const {
   juce::TemporaryFile temporary(file);
-  if (!xml->writeTo(temporary.getFile()) ||
-      !temporary.overwriteTargetFileWithTemporary()) {
-    setError(L"无法保存插件目录缓存: " + file.getFullPathName());
-    return false;
-  }
-  // Ordering: 缓存替换成功后再发布内存目录；文件失败不会提前改变界面可见列表。
-  pluginList.recreateFromXml(*xml);
-  setError({});
-  return true;
+  if (!xml.writeTo(temporary.getFile()) ||
+      !temporary.overwriteTargetFileWithTemporary())
+    return juce::Result::fail(L"无法保存插件目录缓存: " + file.getFullPathName());
+  return juce::Result::ok();
+}
+
+void PluginLibrary::publishPluginList(const juce::XmlElement &xml) {
+  pluginList.recreateFromXml(xml);
 }
 
 void PluginLibrary::loadKnownPluginList() {
-  const auto file =
-      UserSettings::getSettingsDirectory().getChildFile("Plugins.xml");
   if (!file.existsAsFile())
     return;
   const auto tree = juce::XmlDocument::parse(file);
@@ -48,7 +39,7 @@ void PluginLibrary::loadKnownPluginList() {
     pluginList.recreateFromXml(*tree);
     return;
   }
-  setError(L"插件目录缓存格式无效: " + file.getFullPathName());
+  juce::Logger::writeToLog(L"插件目录缓存格式无效: " + file.getFullPathName());
   quarantineCorruptPluginCache(file);
 }
 

@@ -31,6 +31,7 @@ public:
   // Ordering: 应用已处理最后一次保存结果后关闭析构保存，避免退出时重复写入或重试失败操作。
   void finishPersistence() { automaticSaveEnabled = false; }
   bool isAutomaticSaveEnabled() const { return automaticSaveEnabled; }
+  juce::File directory() const { return settingsFile.getParentDirectory(); }
 
   // Contract: 便携标记决定程序目录或用户目录；调用会尝试创建目录，返回路径不证明创建成功。
   static juce::File getSettingsDirectory() {

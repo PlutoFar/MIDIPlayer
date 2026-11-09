@@ -1,5 +1,5 @@
 #include "AudioThreadPriority.h"
-#include "../Utils/DebugLogger.h"
+#include "DebugLogger.h"
 
 #if JUCE_WINDOWS
 #include <windows.h>

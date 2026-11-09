@@ -3,8 +3,8 @@
 #include "MainContentComponent.h"
 #include "SettingsPersistence.h"
 
-void MainContentComponent::playlistTrackRevealRequested(int index) {
-  const auto path = core.trackFileAt(index);
+void MainContentComponent::playlistTrackRevealRequested(midi::TrackId id) {
+  const auto path = core.trackFile(id);
   juce::File file(juce::String(path.c_str()));
   if (file.existsAsFile())
     file.revealToUser();
@@ -47,7 +47,7 @@ void MainContentComponent::playlistFilesDropped(
 
   bool anythingChanged = false;
   const int firstInsertedRow =
-      static_cast<int>(core.playlistState().trackNames.size());
+      static_cast<int>(core.playlistState().tracks.size());
   int insertedRowCount = 0;
   for (const auto &f : newFiles) {
     const juce::File file(f);
@@ -86,17 +86,18 @@ void MainContentComponent::playlistFilesDropped(
 
 void MainContentComponent::showExportDialog() {
   juce::StringArray trackNames;
-  for (const auto &name : core.playlistState().trackNames)
-    trackNames.add(juce::String(name.c_str()));
-
-  const int initialIndex = core.currentTrackIndex();
+  auto playlist = core.playlistState();
+  for (const auto &track : playlist.tracks)
+    trackNames.add(juce::String(track.name.c_str()));
 
   auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
   auto *dlg = new ExportDialog(
-      fluentLookAndFeel, trackNames, initialIndex,
-      [safeThis](int selectedTrackIdx, const ExportSettings &settings) {
-        if (safeThis != nullptr)
-          safeThis->chooseExportTarget(selectedTrackIdx, settings);
+      fluentLookAndFeel, trackNames, playlist.currentTrackIndex,
+      [safeThis, tracks = std::move(playlist.tracks)](
+          int selectedTrackIdx, const ExportSettings &settings) {
+        if (safeThis != nullptr && juce::isPositiveAndBelow(selectedTrackIdx, tracks.size()))
+          safeThis->chooseExportTarget(tracks[static_cast<size_t>(selectedTrackIdx)].path,
+                                       settings);
       });
 
   juce::DialogWindow::LaunchOptions options;
@@ -110,7 +111,7 @@ void MainContentComponent::showExportDialog() {
   FluentSettingsStyle::launchDialogAsync(options);
 }
 
-void MainContentComponent::chooseExportTarget(int selectedTrackIndex,
+void MainContentComponent::chooseExportTarget(std::wstring sourcePath,
                                               const ExportSettings &settings) {
   auto exportDir =
       UserSettings::getSettingsDirectory().getChildFile("ExportedAudio");
@@ -126,7 +127,7 @@ void MainContentComponent::chooseExportTarget(int selectedTrackIndex,
   auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
   fileChooser->launchAsync(
       juce::FileBrowserComponent::saveMode,
-      [safeThis, selectedTrackIndex,
+      [safeThis, sourcePath = std::move(sourcePath),
        settings](const juce::FileChooser &chooser) {
         if (safeThis == nullptr)
           return;
@@ -138,7 +139,7 @@ void MainContentComponent::chooseExportTarget(int selectedTrackIndex,
         const auto targetFile =
             normaliseExportTargetFile(chosenFile, settings.formatName);
         if (!exportTargetNeedsOverwriteConfirmation(targetFile)) {
-          safeThis->performExport(selectedTrackIndex, settings, targetFile);
+          safeThis->performExport(sourcePath, settings, targetFile);
           return;
         }
 
@@ -146,35 +147,35 @@ void MainContentComponent::chooseExportTarget(int selectedTrackIndex,
             juce::AlertWindow::WarningIcon, L"替换现有文件？",
             L"目标文件已经存在：\n" + targetFile.getFullPathName(), L"替换",
             L"取消", safeThis.getComponent(),
-            juce::ModalCallbackFunction::create([safeThis, selectedTrackIndex,
+            juce::ModalCallbackFunction::create([safeThis, sourcePath,
                                                  settings,
                                                  targetFile](int result) {
               if (result == 1 && safeThis != nullptr)
-                safeThis->performExport(selectedTrackIndex, settings,
+                safeThis->performExport(sourcePath, settings,
                                         targetFile);
             }));
       });
 }
 
-void MainContentComponent::performExport(int selectedTrackIndex,
+void MainContentComponent::performExport(const std::wstring &sourcePath,
                                          const ExportSettings &settings,
                                          const juce::File &targetFile) {
   auto thread = std::make_unique<OfflineExportThread>(
-      core, selectedTrackIndex, targetFile, settings, this);
-  const bool completed = thread->runThread();
-  if (!completed && !thread->exportFailed)
-    thread->exportCancelled = true;
+      core, sourcePath, targetFile, settings, this);
+  thread->runThread();
 
-  if (thread->exportFailed) {
-    auto error = thread->errorMessage;
-    if (error.isEmpty())
-      error = L"无法创建文件或渲染引擎出现错误。";
+  const auto &outcome = thread->outcome;
+  if (outcome.status == ExportStatus::failed) {
+    const auto message = outcome.targetWritten
+                             ? L"音频已保存到 " + targetFile.getFullPathName() +
+                                   L"\n\n" + outcome.error
+                             : outcome.error;
     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                           L"导出失败", error);
-  } else if (thread->exportCancelled) {
+        outcome.targetWritten ? L"实时音频恢复失败" : L"导出失败", message);
+  } else if (outcome.status == ExportStatus::cancelled) {
     juce::AlertWindow::showMessageBoxAsync(
         juce::AlertWindow::InfoIcon, L"导出已取消", L"未写入目标音频文件。");
-  } else if (thread->exportSucceeded) {
+  } else {
     juce::AlertWindow::showMessageBoxAsync(
         juce::AlertWindow::InfoIcon, L"导出完成",
         L"音频文件已保存到:\n" + targetFile.getFullPathName());
@@ -190,9 +191,9 @@ juce::String MainContentComponent::getPlaylistChangeSummary() const {
 }
 
 bool MainContentComponent::savePlaylist() {
-  if (currentPlaylistFile.existsAsFile()) {
-    const bool saved = core.saveList(std::wstring(
-        currentPlaylistFile.getFullPathName().toWideCharPointer()));
+  const auto path = core.state().playlist.currentListPath;
+  if (!path.empty() && juce::File(juce::String(path.c_str())).existsAsFile()) {
+    const bool saved = core.saveList(path);
     if (!saved)
       showOperationError(L"保存播放列表失败", core.lastPlaylistError());
     return saved;
@@ -213,11 +214,8 @@ bool MainContentComponent::savePlaylistAs() {
     auto targetFile = fileChooser->getResult().withFileExtension(".json");
     const bool saved = core.saveList(
         std::wstring(targetFile.getFullPathName().toWideCharPointer()));
-    if (saved) {
-      currentPlaylistFile = targetFile;
-    } else {
+    if (!saved)
       showOperationError(L"保存播放列表失败", core.lastPlaylistError());
-    }
     return saved;
   }
   return false;

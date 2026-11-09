@@ -1,9 +1,9 @@
 #pragma once
 
 #include "PlaybackMode.h"
+#include "TrackId.h"
 
 #include <juce_data_structures/juce_data_structures.h>
-#include <juce_gui_basics/juce_gui_basics.h>
 
 // Responsibilities: 曲目顺序、可用性、未保存变更及 JSON 持久化；不控制音频播放。
 // Ownership: 持有曲目记录；返回的指针/引用只在下一次列表修改前有效。
@@ -13,9 +13,10 @@ public:
   struct Track {
     juce::File file;
     juce::String name;
-    double durationSeconds = 0.0;
     bool available = false;
+    midi::TrackId id = 0;
   };
+  using Tracks = juce::Array<Track>;
 
   struct ChangeLog {
     // Contract: 只表示尚未保存的增删/排序摘要，成功保存或加载后归零。
@@ -54,8 +55,9 @@ public:
       return false;
     }
 
-    tracks.add({file, file.getFileNameWithoutExtension(), 0.0, true});
+    tracks.add({file, file.getFileNameWithoutExtension(), true, ++nextTrackId});
     changeLog.added++;
+    ++revision;
     return true;
   }
 
@@ -67,6 +69,7 @@ public:
 
     tracks.remove(index);
     changeLog.removed++;
+    ++revision;
     return true;
   }
 
@@ -80,6 +83,7 @@ public:
 
     tracks.move(fromIndex, toIndex);
     changeLog.reordered = true;
+    ++revision;
     return true;
   }
 
@@ -87,11 +91,12 @@ public:
     if (!tracks.isEmpty()) {
       changeLog.removed += tracks.size();
       tracks.clear();
+      ++revision;
     }
   }
 
   // Ownership: 查询返回借用列表或元素指针，禁止跨列表修改保存它们；无效元素索引返回 nullptr。
-  const juce::Array<Track> &getTracks() const { return tracks; }
+  const Tracks &getTracks() const { return tracks; }
 
   int size() const { return tracks.size(); }
   bool isEmpty() const { return tracks.isEmpty(); }
@@ -109,6 +114,13 @@ public:
     return -1;
   }
 
+  int findTrackIndex(midi::TrackId id) const {
+    for (int index = 0; index < tracks.size(); ++index)
+      if (tracks[index].id == id)
+        return index;
+    return -1;
+  }
+
   // Side effect: 重新检查文件存在性并更新记录；返回 `false` 仍可能已将条目标记为不可用。
   bool refreshTrack(int index) {
     if (index < 0 || index >= tracks.size())
@@ -118,19 +130,16 @@ public:
     if (!t.available)
       return false;
     t.name = t.file.getFileNameWithoutExtension();
-    t.durationSeconds = 0.0;
     return true;
   }
 
-  // Preconditions: 调用方独占列表，目标目录可创建/写入；路径中的中文使用 JUCE 文件接口处理。
-  // Ordering: JSON 完整写入并关闭临时文件后替换目标；成功后才清除变更摘要。
-  // Failures: `saveDetailed` 返回具体诊断，`save` 只返回布尔结果。
-  juce::Result saveDetailed(const juce::File &file) const {
+  // Ordering: JSON 完整写入并关闭临时文件后替换目标。
+  static juce::Result write(const juce::File &file, const Tracks &snapshot) {
     try {
       juce::DynamicObject::Ptr root = new juce::DynamicObject();
       juce::Array<juce::var> trackList;
 
-      for (const auto &t : tracks)
+      for (const auto &t : snapshot)
         trackList.add(t.file.getFullPathName());
 
       root->setProperty("version", 1);
@@ -172,7 +181,6 @@ public:
                                   file.getFullPathName());
       }
 
-      changeLog.reset();
       return juce::Result::ok();
     } catch (...) {
       return juce::Result::fail("Unexpected exception while saving playlist: " +
@@ -180,11 +188,8 @@ public:
     }
   }
 
-  bool save(const juce::File &file) const { return saveDetailed(file).wasOk(); }
-
-  // Trust Boundary: 验证 JSON 根结构、曲目数组及全部条目类型后才替换内存列表；当前未校验版本字段。
-  // Postconditions: 缺失文件保留原始路径/顺序并标记不可用；加载失败保留原列表。
-  juce::Result loadDetailed(const juce::File &file) {
+  // Postconditions: 保留缺失文件和重复路径，解析完成后才交付曲目。
+  static juce::Result read(const juce::File &file, Tracks &result) {
     if (!file.existsAsFile())
       return juce::Result::fail("Playlist file does not exist: " +
                                 file.getFullPathName());
@@ -206,7 +211,7 @@ public:
         return juce::Result::fail("Playlist JSON has no tracks array: " +
                                   file.getFullPathName());
 
-      juce::Array<Track> loadedTracks;
+      Tracks loadedTracks;
 
       for (const auto &t : *trackArray) {
         if (!t.isString())
@@ -221,11 +226,10 @@ public:
               trackFile.getFullPathName());
 
         loadedTracks.add({trackFile, trackFile.getFileNameWithoutExtension(),
-                          0.0, trackFile.existsAsFile()});
+                          trackFile.existsAsFile()});
       }
 
-      tracks.swapWith(loadedTracks);
-      changeLog.reset();
+      result.swapWith(loadedTracks);
       return juce::Result::ok();
     } catch (...) {
       return juce::Result::fail(
@@ -234,7 +238,19 @@ public:
     }
   }
 
-  bool load(const juce::File &file) { return loadDetailed(file).wasOk(); }
+  void replace(Tracks loadedTracks) {
+    for (auto &track : loadedTracks)
+      track.id = ++nextTrackId;
+    tracks.swapWith(loadedTracks);
+    ++revision;
+    changeLog.reset();
+  }
+
+  uint64_t getRevision() const { return revision; }
+  void markSaved(uint64_t savedRevision) {
+    if (revision == savedRevision)
+      changeLog.reset();
+  }
 
   // Preconditions: `mode` 已由核心入口约束为有效持久化枚举；本模型不负责归一化或保存设置。
   void setPlaybackMode(midi::PlaybackMode mode) { currentMode = mode; }
@@ -292,9 +308,11 @@ public:
   }
 
 private:
-  juce::Array<Track> tracks;
+  Tracks tracks;
   midi::PlaybackMode currentMode = midi::PlaybackMode::Sequential;
-  mutable ChangeLog changeLog; // Side effect: const 保存操作成功后也会清零变更摘要。
+  ChangeLog changeLog;
+  midi::TrackId nextTrackId = 0;
+  uint64_t revision = 0;
 
 public:
   const ChangeLog &getChangeLog() const { return changeLog; }

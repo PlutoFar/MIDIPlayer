@@ -2,7 +2,6 @@
 
 #include "../Midi/MidiPlayer.h"
 #include "../PluginBridge/PluginBridgeClient.h"
-#include "ExportSettings.h"
 #include "RealtimeAudioBuffer.h"
 #include <atomic>
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -67,43 +66,29 @@ public:
     const juce::ScopedLock lock(errorLock);
     return lastPluginError;
   }
-  // Concurrency: 导出诊断由独占导出线程访问；其他线程通过 `Core` 的同步快照读取结果。
-  juce::String getLastExportError() const { return lastExportError; }
-  bool wasLastExportCancelled() const { return lastExportCancelled; }
-  // Preconditions: 核心已取得导出所有权，插件已加载，设置已通过核心入口的数值和编码校验。
-  // Ordering: 先阻止实时消费，再切换插件采样率和离线模式；恢复阶段重新配置实时设备参数。
-  // Failures: 返回 `false` 时读取导出错误；调用方仍负责恢复曲目和播放位置。
-  bool prepareForOfflineExport(const ExportSettings &settings);
-  bool restoreFromOfflineExport();
-  bool isOfflineExportActive() const {
-    return offlineExportActive.load(std::memory_order_acquire);
-  }
-  // Ownership: 借用引擎，不能复制；`finish` 只执行一次恢复，析构处理尚未结束的会话。
-  // Preconditions: 调用方保证引擎存活并独占导出；须检查 `isActive` 后才渲染。
-  // Failures: 显式检查 `finish` 的结果；仅依赖析构无法取得恢复失败信息。
+  // Ownership: 独占借用插件，持有独立 MIDI 游标；实时曲目始终由引擎持有。
+  // Ordering: stop 实时渲染后进入离线模式，finish 恢复插件及实时渲染。
   class OfflineExportSession {
   public:
-    OfflineExportSession(AudioEngine &owner, const ExportSettings &settings)
-        : engine(owner) {
-      active = engine.prepareForOfflineExport(settings);
-    }
-
-    ~OfflineExportSession() { finish(); }
-
-    bool finish() {
-      if (!active)
-        return true;
-      active = false;
-      return engine.restoreFromOfflineExport();
-    }
-
+    OfflineExportSession(AudioEngine &owner,
+                         std::unique_ptr<juce::MidiMessageSequence> sequence,
+                         double sampleRate);
+    ~OfflineExportSession();
     OfflineExportSession(const OfflineExportSession &) = delete;
     OfflineExportSession &operator=(const OfflineExportSession &) = delete;
 
-    bool isActive() const { return active; }
+    juce::Result preparationResult() const { return preparation; }
+    juce::Result finish();
+    juce::Result render(juce::AudioBuffer<float> &audio, juce::MidiBuffer &midi);
+    double durationSamples() const { return player.getDurationInSamples(); }
+    int latencySamples() const { return engine.bridge.getLatencySamples(); }
+    float masterGain() const { return engine.getMasterVolume(); }
 
   private:
     AudioEngine &engine;
+    MidiPlayer player;
+    double rate;
+    juce::Result preparation{juce::Result::ok()};
     bool active = false;
   };
   // Contract: 以下 JUCE 元数据接口描述固定的 MIDI 输入、立体声音频输出处理器。
@@ -141,15 +126,17 @@ private:
   double preparedRenderSampleRate = 44100.0;
   std::atomic<uint64_t> underrunCount{0};
   std::atomic<int> renderLatencySamples{0};
-  friend class OfflineRenderer;
   void setLastPluginError(const juce::String &message) {
     const juce::ScopedLock lock(errorLock);
     lastPluginError = message;
   }
   // Preconditions: 专用渲染线程或独占导出中的唯一调用；不得与桥接资源释放并发。
   // Ordering: MIDI 按宿主块生成，再按共享块容量切分；任一分块失败即返回 `false`。
-  bool renderPluginBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &,
+  bool renderPluginBlock(MidiPlayer &, MidiPlayer::ProcessMode,
+                         juce::AudioBuffer<float> &, juce::MidiBuffer &,
                          double sampleRate);
+  juce::Result prepareForOfflineExport(double sampleRate);
+  juce::Result restoreFromOfflineExport();
   void flushPluginStateBeforeUnload();
   PluginBridge::PluginBridgeClient bridge;
   std::atomic<unsigned> deviceRevision{0};
@@ -159,7 +146,6 @@ private:
   MidiPlayer midiPlayer;
 
   std::atomic<float> masterVolume{0.8f};
-  std::atomic<bool> offlineExportActive{false};
   // Reason: 停止先淡出再释放音符；计数单位为采样，不随设备采样率重算。
   int fadeOutDuration = 2048;
   int fadeOutSamples = 2048;
@@ -174,8 +160,6 @@ private:
 
   mutable juce::CriticalSection errorLock;
   juce::String lastPluginError;
-  juce::String lastExportError;
-  bool lastExportCancelled = false;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };

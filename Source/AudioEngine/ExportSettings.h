@@ -16,3 +16,12 @@ struct ExportSettings {
   juce::String title;   // 可选文件元数据标题
   int qualityIndex = 0; // FLAC/Ogg Vorbis 的质量或压缩等级索引
 };
+
+enum class ExportStatus { succeeded, cancelled, failed };
+
+// 文件一旦提交，后续实时音频恢复失败仍保留 targetWritten。
+struct ExportOutcome {
+  ExportStatus status;
+  bool targetWritten = false;
+  juce::String error;
+};

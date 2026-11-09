@@ -96,9 +96,6 @@ void MainContentComponent::loadSettings() {
   volumeSlider.setValue(settings.getMasterVolume(), juce::dontSendNotification);
   core.volume(volumeLevelToGain((float)volumeSlider.getValue()));
 
-  int savedMode = settings.getPlayMode();
-  core.setPlayMode(savedMode);
-
   fluentLookAndFeel.setUIFont(settings.getUIFontName());
   fluentLookAndFeel.setUIFontSize(settings.getUIFontSize());
   fluentLookAndFeel.setPlaylistFont(settings.getPlaylistFontName());
@@ -108,6 +105,5 @@ void MainContentComponent::loadSettings() {
 
 juce::Result MainContentComponent::saveSettings() {
   getAppSettings().setMasterVolume((float)volumeSlider.getValue());
-  getAppSettings().setPlayMode(core.state().playlist.playMode);
   return getAppSettings().saveDetailed();
 }

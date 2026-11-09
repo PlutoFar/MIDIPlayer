@@ -23,30 +23,11 @@ endif()
 option(MIDIPLAYER_ENABLE_ASIO
     "Enable ASIO support using the SDK bundled with JUCE" OFF)
 
-# ============================================================================
-# MidiCore - application state, commands, audio, playlist and export services.
-# Shared by the JUCE desktop application, plugin worker and native tests.
-# ============================================================================
-add_library(MidiCore STATIC
-    Source/Utils/WindowsFileAssociation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/AudioDevices.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Library.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Player.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Playlist.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/ExportTask.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioEngine.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioThreadPriority.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioDeviceService.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/PluginLibrary.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/OfflineRenderer.cpp
-)
-
-target_include_directories(MidiCore PUBLIC
+add_library(MidiBuildConfig INTERFACE)
+target_include_directories(MidiBuildConfig INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/Source
 )
-
-target_compile_definitions(MidiCore PUBLIC
+target_compile_definitions(MidiBuildConfig INTERFACE
     MIDI_PLAYER_VERSION="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -57,8 +38,46 @@ target_compile_definitions(MidiCore PUBLIC
     UNICODE=1
     _UNICODE=1
 )
+target_link_libraries(MidiBuildConfig INTERFACE
+    juce::juce_recommended_config_flags
+)
+if(MSVC)
+    target_compile_options(MidiBuildConfig INTERFACE /utf-8)
+endif()
+
+# Shared process dispatch and platform audio-thread scheduling.
+add_library(MidiPluginProcess STATIC
+    Source/PluginBridge/PluginProcessEntry.cpp
+    Source/Utils/AudioThreadPriority.cpp
+)
+target_link_libraries(MidiPluginProcess PUBLIC
+    MidiBuildConfig
+    juce::juce_audio_processors
+    juce::juce_gui_extra
+)
+if(WIN32)
+    target_link_libraries(MidiPluginProcess PRIVATE avrt)
+endif()
+
+# ============================================================================
+# MidiCore - application state, commands, audio, playlist and export services.
+# Shared by the desktop application and native tests.
+# ============================================================================
+add_library(MidiCore STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/AudioDevices.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Library.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Player.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/Playlist.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Core/ExportTask.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/AudioDeviceService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/PluginLibrary.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/AudioEngine/OfflineRenderer.cpp
+)
 
 target_link_libraries(MidiCore PUBLIC
+    MidiBuildConfig
     juce::juce_audio_basics
     juce::juce_audio_devices
     juce::juce_audio_formats
@@ -66,11 +85,10 @@ target_link_libraries(MidiCore PUBLIC
     juce::juce_audio_utils
     juce::juce_data_structures
     juce::juce_events
-    juce::juce_recommended_config_flags
 )
+target_link_libraries(MidiCore PRIVATE MidiPluginProcess)
 
 if(MSVC)
-    target_compile_options(MidiCore PRIVATE /utf-8)
     target_compile_options(MidiCore PRIVATE /wd4100 /wd4244 /wd4267)
 endif()
 
@@ -94,11 +112,14 @@ target_sources(MidiPlayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentFiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/MainContentSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/AudioSettingsContent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/BackgroundHistory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Source/UI/FontSettingsContent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Source/Utils/WindowsFileAssociation.cpp
 )
 
 target_link_libraries(MidiPlayer PRIVATE
     MidiCore
+    MidiPluginProcess
     juce::juce_gui_basics
     juce::juce_gui_extra
     juce::juce_recommended_lto_flags
@@ -106,7 +127,6 @@ target_link_libraries(MidiPlayer PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(MidiPlayer PRIVATE /utf-8)
     target_compile_options(MidiPlayer PRIVATE /wd4100 /wd4244 /wd4267)
 endif()
 
@@ -127,7 +147,7 @@ target_sources(MidiWorker PRIVATE
 )
 
 target_link_libraries(MidiWorker PRIVATE
-    MidiCore
+    MidiPluginProcess
     juce::juce_gui_basics
     juce::juce_gui_extra
     juce::juce_recommended_lto_flags
@@ -135,7 +155,6 @@ target_link_libraries(MidiWorker PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(MidiWorker PRIVATE /utf-8)
     target_compile_options(MidiWorker PRIVATE /wd4100 /wd4244 /wd4267)
 endif()
 
@@ -160,11 +179,16 @@ set_target_properties(MidiTests MidiTests_rc_lib PROPERTIES
 )
 
 target_sources(MidiTests PRIVATE
-    Tests/ExportAndHintTests.cpp
-    Tests/WorkerPathTests.cpp
+    Tests/TestMain.cpp
+    Tests/MidiPlaybackTests.cpp
+    Tests/PluginBridgeTests.cpp
+    Tests/ExportEncodingTests.cpp
     Tests/CoreTests.cpp
     Tests/ExportTaskTests.cpp
     Tests/PersistenceTests.cpp
+    Tests/ShellTests.cpp
+    Tests/BackgroundTests.cpp
+    Source/UI/BackgroundHistory.cpp
 )
 
 target_link_libraries(MidiTests PRIVATE
@@ -174,12 +198,14 @@ target_link_libraries(MidiTests PRIVATE
     juce::juce_recommended_warning_flags
 )
 
-if(MSVC)
-    target_compile_options(MidiTests PRIVATE /utf-8)
-endif()
+enable_testing()
+foreach(suite IN ITEMS midi-playback plugin-bridge export-encoding export-task
+                       playlist persistence shell background)
+    add_test(NAME ${suite} COMMAND MidiTests --suite ${suite})
+endforeach()
+set_tests_properties(plugin-bridge export-task PROPERTIES TIMEOUT 60)
 
 if(WIN32)
-    target_link_libraries(MidiCore PUBLIC avrt advapi32 shell32 shlwapi)
 
     # Ordering: JUCE's resource rule must rerun when version metadata changes.
     foreach(app IN ITEMS MidiPlayer MidiWorker)
@@ -189,7 +215,7 @@ if(WIN32)
             APPEND DEPENDS "${resource_info}")
     endforeach()
 
-    target_link_libraries(MidiPlayer PRIVATE dwmapi advapi32 shell32 kernel32)
+    target_link_libraries(MidiPlayer PRIVATE dwmapi advapi32 shell32 shlwapi kernel32)
 
     set_target_properties(MidiPlayer PROPERTIES
         WIN32_EXECUTABLE TRUE

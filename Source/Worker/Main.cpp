@@ -1,5 +1,4 @@
-#include "../PluginBridge/PluginScanProcess.h"
-#include "../PluginBridge/PluginWorkerProcess.h"
+#include "../PluginBridge/PluginProcessEntry.h"
 
 #include <juce_gui_extra/juce_gui_extra.h>
 
@@ -20,16 +19,13 @@ public:
   bool moreThanOneInstanceAllowed() override { return true; }
 
   void initialise(const juce::String &commandLine) override {
-    if (PluginBridge::runPluginScanIfRequested(commandLine))
-      return;
-
-    if (PluginBridge::runWorkerIfRequested(commandLine))
+    if (PluginBridge::runPluginProcess(commandLine))
       return;
 
     juce::MessageManager::callAsync([] { juce::JUCEApplicationBase::quit(); });
   }
 
-  void shutdown() override { PluginBridge::workerInstance() = nullptr; }
+  void shutdown() override { PluginBridge::shutDownPluginProcess(); }
 
   void systemRequestedQuit() override { quit(); }
 };

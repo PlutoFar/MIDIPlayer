@@ -3,8 +3,8 @@
 #include "../Utils/DebugLogger.h"
 #include "../Utils/UserSettings.h"
 #include "BackgroundEffectSupport.h"
+#include "BackgroundHistory.h"
 #include "BackgroundHistorySupport.h"
-#include "BackgroundLoadSupport.h"
 #include "../Utils/PaletteSelectionSupport.h"
 #include "BackgroundScrollMotion.h"
 #include "BackgroundThumbnailSupport.h"
@@ -19,13 +19,13 @@
 #include <juce_events/juce_events.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_gui_extra/juce_gui_extra.h>
-#include <mutex>
+#include <optional>
 #include <random>
 
 /**
     Responsibilities: 背景图像、材质和强调色过渡；文件解码及图像计算交给后台任务。
     Ownership: 持有图像与工作线程；析构请求工作线程停止，异步界面回调使用 `SafePointer`。
-    Concurrency: 公开组件接口及监听器回调在消息线程执行；`imageLock` 保护共享图像状态。
+    Concurrency: 图像发布、绘制和过渡均在消息线程执行。
     Failures: 图像加载或处理可返回空图；组件根据可用图像状态决定绘制，不承诺所有请求都完成。
 */
 class BackgroundComponent : public juce::Component,
@@ -34,7 +34,7 @@ class BackgroundComponent : public juce::Component,
 public:
   enum class MaterialType { None = 1, GaussianBlur = 2, Aero = 3, Acrylic = 4 };
 
-  BackgroundComponent() {
+  explicit BackgroundComponent(UserSettings &preferences) : settings(preferences) {
     setInterceptsMouseClicks(false, false);
 
     addAndMakeVisible(loadingLabel);
@@ -47,7 +47,13 @@ public:
     loadingLabel.setVisible(false);
 
     loadSettings();
-    loadAsync();
+    lastLoadedPath = settings.getBackgroundImagePath();
+    if (lastLoadedPath.isNotEmpty()) {
+      ++imageRevision;
+      if (materialType == MaterialType::None ||
+          !loadStartupBackgroundSynchronously(lastLoadedPath))
+        submitRender(L"加载图片中...");
+    }
   }
 
   ~BackgroundComponent() override {
@@ -55,46 +61,22 @@ public:
   }
 
   void loadAsync(bool forceExtraction = false) {
-    auto path = getAppSettings().getBackgroundImagePath();
+    auto path = settings.getBackgroundImagePath();
 
     if (!forceExtraction && path == lastLoadedPath) {
       return;
     }
 
     lastLoadedPath = path;
-    LOG_DEBUG("BackgroundComponent::loadAsync - Path: " + path);
-
-    if (shouldPrepareStartupBackgroundSynchronously(
-            isFirstLoad, path.isNotEmpty(), static_cast<int>(materialType)) &&
-        loadStartupBackgroundSynchronously(path)) {
-      return;
-    }
-
-    if (shouldUseAsyncBackgroundLoad(isFirstLoad, path.isNotEmpty())) {
-      startImageLoadJob(path, forceExtraction);
-    } else {
-      isFirstLoad = false;
-    }
-  }
-
-  void startImageLoadJob(const juce::String &path,
-                         bool forceExtraction = false) {
-    if (path.isNotEmpty()) {
-      loadingLabel.setVisible(true);
-      loadingLabel.setText(L"加载图片中...", juce::dontSendNotification);
-    }
-    ensureWorkerThread();
-    BackgroundWorkerThread::LoadSettingsSnapshot settingsSnapshot;
-    settingsSnapshot.monetEnabled = getAppSettings().getMonetEnabled();
-    workerThread->setLoadTask(path, settingsSnapshot, forceExtraction);
-    workerThread->notify();
+    ++imageRevision;
+    submitRender(L"加载图片中...");
   }
 
   void setMaterialType(MaterialType type) {
     if (materialType != type) {
       materialType = type;
-      getAppSettings().setBackgroundBlurMode(static_cast<int>(type));
-      applyEffects();
+      settings.setBackgroundBlurMode(static_cast<int>(type));
+      submitRender(L"应用图片效果中...");
     }
   }
 
@@ -104,8 +86,8 @@ public:
     radius = juce::jlimit(1, 50, radius);
     if (blurRadius != radius) {
       blurRadius = radius;
-      getAppSettings().setBackgroundBlurRadius(radius);
-      applyEffects();
+      settings.setBackgroundBlurRadius(radius);
+      submitRender(L"应用图片效果中...");
     }
   }
 
@@ -113,7 +95,7 @@ public:
 
   void setOverlayOpacity(float opacity) {
     overlayOpacity = juce::jlimit(0.0f, 1.0f, opacity);
-    getAppSettings().setBackgroundOverlay(overlayOpacity);
+    settings.setBackgroundOverlay(overlayOpacity);
     repaint();
   }
 
@@ -128,29 +110,13 @@ public:
     SCOPED_TIMER_SLOW("BackgroundComponent::paint", 15);
     auto bounds = getLocalBounds();
 
-    // paint 路径使用非阻塞锁，避免 UI 线程等待后台图像处理。
-    juce::Image currentImage;
-    juce::Image previousImageCopy;
-    juce::Image originalImageCopy;
-    float imageTransitionAlpha = 1.0f;
-    bool transitioningImage = false;
-
-    if (imageLock.tryEnter()) {
-      currentImage = processedImage;
-      previousImageCopy = previousImage;
-      originalImageCopy = originalImage;
-      imageTransitionAlpha = transitionAlpha;
-      transitioningImage = isTransitioningImage;
-      imageLock.exit();
-    }
-
     // 无图片时使用稳定的纯色基底，避免低对比渐变在大窗口中产生色带。
     g.fillAll(juce::Colour(0xFF0D0D0F));
 
-    const BackgroundImageState imageState{!currentImage.isNull(),
-                                          !previousImageCopy.isNull(),
-                                          !originalImageCopy.isNull(),
-                                          transitioningImage};
+    const BackgroundImageState imageState{processedImage.isValid(),
+                                          previousImage.isValid(),
+                                          originalImage.isValid(),
+                                          isTransitioningImage};
     const bool effectRequiresProcessedImage =
         materialType != MaterialType::None;
     const bool hasDrawableImage = shouldDrawVisibleBackgroundImage(
@@ -166,15 +132,15 @@ public:
       }
     };
 
-    if (transitioningImage) {
-      drawImageWithAlpha(previousImageCopy, 1.0f - imageTransitionAlpha);
-      drawImageWithAlpha(currentImage, imageTransitionAlpha);
+    if (isTransitioningImage) {
+      drawImageWithAlpha(previousImage, 1.0f - transitionAlpha);
+      drawImageWithAlpha(processedImage, transitionAlpha);
     } else {
-      if (!currentImage.isNull()) {
-        drawImageWithAlpha(currentImage, 1.0f);
+      if (processedImage.isValid()) {
+        drawImageWithAlpha(processedImage, 1.0f);
       } else if (shouldDrawOriginalBackgroundImage(
                      imageState, effectRequiresProcessedImage)) {
-        drawImageWithAlpha(originalImageCopy, 1.0f);
+        drawImageWithAlpha(originalImage, 1.0f);
       }
     }
 
@@ -192,6 +158,8 @@ public:
       transitionAlpha += 0.08f; // Units: 每次定时回调增加的透明度。
       if (transitionAlpha >= 1.0f) {
         transitionAlpha = 1.0f;
+        isTransitioningImage = false;
+        previousImage = {};
         checkTimerState();
         repaint();
       } else {
@@ -253,7 +221,7 @@ public:
 
     currentPalette = palette;
     const auto savedColor =
-        juce::Colour::fromString(getAppSettings().getThemeAccentColor());
+        juce::Colour::fromString(settings.getThemeAccentColor());
     const auto bestColor = midi::selectPaletteAccent(palette, savedColor);
 
     targetAccentColor = bestColor;
@@ -273,26 +241,10 @@ public:
   const std::vector<juce::Colour> &getPalette() const { return currentPalette; }
 
   bool hasBackgroundImage() const {
-    const juce::ScopedLock sl(imageLock);
-    return !originalImage.isNull();
+    return originalImage.isValid();
   }
 
 private:
-  static juce::Image prepareLoadedBackgroundImage(juce::Image img) {
-    int maxW = 2560;
-    int maxH = 1440;
-    if ((img.getWidth() > maxW || img.getHeight() > maxH) &&
-        img.getWidth() > 0 && img.getHeight() > 0) {
-      float scale = std::min((float)maxW / img.getWidth(),
-                             (float)maxH / img.getHeight());
-      int newW = std::max(1, (int)(img.getWidth() * scale));
-      int newH = std::max(1, (int)(img.getHeight() * scale));
-      img = img.rescaled(newW, newH, juce::Graphics::highResamplingQuality);
-    }
-
-    return img;
-  }
-
   void checkTimerState() {
     if (!isTransitioningImage && !isTransitioningColor) {
       stopTimer();
@@ -300,203 +252,95 @@ private:
   }
 
 private:
-  /**
-      Responsibilities: 文件解码、背景材质和取色，提交结果前检查任务取消状态。
-      Concurrency: 队列字段在 `taskLock` 内交换，耗时计算在锁外执行。
-      Ordering: 新任务替换待处理任务并设置 `abortCurrentTask`；消息线程负责应用返回图像。
-      Invariant: 像素访问使用明确的图像格式和步长；降采样发生在大半径卷积及取色之前。
-  */
+  struct RenderRequest {
+    uint64_t revision;
+    uint64_t imageRevision;
+    juce::String path;
+    juce::Image loadedImage;
+    MaterialType material;
+    int radius;
+    bool extractPalette;
+  };
+
+  // 工作线程独占解码缓存，界面只接收完整渲染结果。
   class BackgroundWorkerThread : public juce::Thread {
   public:
-    struct LoadSettingsSnapshot {
-      bool monetEnabled = false;
-    };
-
     BackgroundWorkerThread(BackgroundComponent &owner)
-        : juce::Thread("BackgroundWorker"), component(owner) {}
+        : juce::Thread("BackgroundWorker"), component(&owner) {}
 
-    void setLoadTask(const juce::String &path,
-                     const LoadSettingsSnapshot &settingsSnapshot,
-                     bool forceExtraction = false) {
-      const juce::ScopedLock sl(taskLock);
-      pendingLoadPath = path;
-      pendingLoadSettings = settingsSnapshot;
-      hasLoadTask = true;
-      hasEffectTask = false;
-      abortCurrentTask = true;
-      if (forceExtraction)
-        lastExtractedPath = "";
-    }
-
-    void setEffectTask(const juce::Image &img, MaterialType type, int radius) {
-      const juce::ScopedLock sl(taskLock);
-      pendingImage = img;
-      pendingType = type;
-      pendingRadius = radius;
-      hasEffectTask = true;
-      hasLoadTask = false;
-      abortCurrentTask = true;
+    void submit(RenderRequest request) {
+      {
+        const juce::ScopedLock lock(taskLock);
+        latestRevision.store(request.revision);
+        pending = std::move(request);
+      }
+      notify();
     }
 
     void run() override {
       while (!threadShouldExit()) {
-        juce::String loadPath;
-        LoadSettingsSnapshot loadSettings;
-        juce::Image imgToProcess;
-        MaterialType type = MaterialType::None;
-        int radius = 20;
-        bool doLoad = false;
-        bool doEffect = false;
-
+        std::optional<RenderRequest> request;
         {
-          const juce::ScopedLock sl(taskLock);
-          if (hasLoadTask) {
-            loadPath = pendingLoadPath;
-            loadSettings = pendingLoadSettings;
-            doLoad = true;
-            hasLoadTask = false;
-            abortCurrentTask = false;
-          } else if (hasEffectTask) {
-            imgToProcess = pendingImage;
-            type = pendingType;
-            radius = pendingRadius;
-            doEffect = true;
-            hasEffectTask = false;
-            abortCurrentTask = false;
-          }
+          const juce::ScopedLock lock(taskLock);
+          request = std::exchange(pending, std::nullopt);
         }
-
-        if (doLoad) {
-          LOG_DEBUG("BackgroundWorkerThread: Starting load task: " + loadPath);
-          processLoadTask(loadPath, loadSettings);
-          LOG_DEBUG("BackgroundWorkerThread: Finished load task");
-        } else if (doEffect) {
-          LOG_DEBUG("BackgroundWorkerThread: Starting effect task, type: " +
-                    juce::String((int)type));
-          processEffectTask(imgToProcess, type, radius);
-          LOG_DEBUG("BackgroundWorkerThread: Finished effect task");
-        } else {
-          wait(100);
-        }
+        if (request)
+          process(*request);
+        else
+          wait(-1);
       }
     }
 
   private:
-    juce::String
-        lastExtractedPath; // Contract: 同一路径的重新取色须显式使用 `forceExtraction`。
-
-    void processLoadTask(const juce::String &path,
-                         const LoadSettingsSnapshot &settingsSnapshot) {
-      auto file = juce::File(path);
-      auto safeComponent =
-          juce::Component::SafePointer<BackgroundComponent>(&component);
-
-      if (path.isEmpty()) {
-        lastExtractedPath = "";
-        juce::MessageManager::callAsync([safeComponent]() {
-          if (safeComponent == nullptr)
-            return;
-
-          safeComponent->onImageLoaded(juce::Image());
-          safeComponent->onColorExtracted(
-              {juce::Colour(0xFF0078D4)});
-        });
-        return;
-      }
-
-      const bool shouldExtractColor = path != lastExtractedPath;
-      if (shouldExtractColor)
-        lastExtractedPath = path;
-
-      if (file.existsAsFile() && !threadShouldExit()) {
-        auto img = juce::ImageFileFormat::loadFrom(file);
-        if (!threadShouldExit() && !img.isNull()) {
-          if (settingsSnapshot.monetEnabled && shouldExtractColor) {
-            juce::MessageManager::callAsync([safeComponent]() {
-              if (safeComponent != nullptr)
-                safeComponent->loadingLabel.setText(L"分析主题色...",
-                                               juce::dontSendNotification);
-            });
-
-            // Contract: 最多使用 8 个聚类中心，向界面请求交付 6 个代表色。
-            auto palette = extractPaletteKMeans(img, 6, [this]() {
-              return threadShouldExit() || abortCurrentTask;
-            });
-
-            if (!abortCurrentTask && !threadShouldExit() && !palette.empty()) {
-              juce::MessageManager::callAsync([safeComponent, palette]() {
-                if (safeComponent == nullptr)
-                  return;
-
-                safeComponent->onColorExtracted(palette);
-              });
-            }
-          }
-
-          img = prepareLoadedBackgroundImage(img);
-
-          if (threadShouldExit() || abortCurrentTask)
-            return;
-
-          juce::MessageManager::callAsync([safeComponent, img]() {
-            if (safeComponent == nullptr)
-              return;
-
-            safeComponent->onImageLoaded(img);
-          });
-        }
-      } else {
-        juce::MessageManager::callAsync([safeComponent]() {
-          if (safeComponent == nullptr)
-            return;
-
-          safeComponent->onImageLoaded(juce::Image());
-          safeComponent->onColorExtracted(
-              {juce::Colour(0xFF0078D4)});
-        });
-      }
-    }
-
-    void processEffectTask(const juce::Image &source, MaterialType type,
-                           int radius) {
-      if (threadShouldExit() || source.isNull())
-        return;
-
-      auto safeComponent =
-          juce::Component::SafePointer<BackgroundComponent>(&component);
-      juce::Image result;
-
-      auto cancelCheck = [this]() {
-        return threadShouldExit() || abortCurrentTask;
+    void process(const RenderRequest &request) {
+      const auto cancelled = [this, revision = request.revision] {
+        return threadShouldExit() || latestRevision.load() != revision;
       };
-
-      switch (type) {
-      case MaterialType::GaussianBlur:
-        result = applyGaussianBlurStatic(source, radius, cancelCheck);
-        break;
-      case MaterialType::Aero:
-        result = applyAeroEffectStatic(source, radius, cancelCheck);
-        break;
-      case MaterialType::Acrylic:
-        result = applyAcrylicEffectStatic(source, radius, cancelCheck);
-        break;
-      case MaterialType::None:
-      default:
-        result = source.createCopy();
-        break;
+      if (cachedImageRevision != request.imageRevision) {
+        cachedImage = request.loadedImage;
+        if (cachedImage.isNull() && request.path.isNotEmpty())
+          cachedImage = prepareBackgroundImage(
+              juce::ImageFileFormat::loadFrom(juce::File(request.path)));
+        cachedImageRevision = request.imageRevision;
+        cachedPalette.clear();
       }
+      if (cancelled())
+        return;
 
-      if (!threadShouldExit() && !result.isNull()) {
-        juce::MessageManager::callAsync([safeComponent, result]() {
-          if (safeComponent == nullptr)
-            return;
-
-          safeComponent->onEffectApplied(result);
-        });
+      if (request.extractPalette && cachedImage.isValid() && cachedPalette.empty()) {
+        auto palette = extractPaletteKMeans(cachedImage, 6, cancelled);
+        if (cancelled())
+          return;
+        cachedPalette = std::move(palette);
       }
+      auto result = applyMaterial(cachedImage, request.material, request.radius, cancelled);
+      if (cancelled())
+        return;
+
+      juce::MessageManager::callAsync(
+          [owner = component, revision = request.revision,
+           original = cachedImage, result = std::move(result),
+           palette = request.extractPalette ? cachedPalette : std::vector<juce::Colour>{}] {
+            if (owner != nullptr && owner->renderRevision == revision)
+              owner->applyRender(original, result, palette);
+          });
     }
 
   public:
+    static juce::Image applyMaterial(const juce::Image &source, MaterialType type,
+                                     int radius, const std::function<bool()> &cancelled) {
+      switch (type) {
+      case MaterialType::GaussianBlur:
+        return applyGaussianBlurStatic(source, radius, cancelled);
+      case MaterialType::Aero:
+        return applyAeroEffectStatic(source, radius, cancelled);
+      case MaterialType::Acrylic:
+        return applyAcrylicEffectStatic(source, radius, cancelled);
+      case MaterialType::None:
+        return source;
+      }
+      return {};
+    }
     static juce::Image
     applyGaussianBlurStatic(const juce::Image &source, int radius,
                             std::function<bool()> shouldCancel) {
@@ -762,15 +606,9 @@ private:
       for (int y = 0; y < h; ++y) {
         if (shouldCancel())
           return {};
-        auto *p = data.getLinePointer(y);
-        for (int x = 0; x < w; ++x) {
-          int pixelStride = data.pixelStride;
-          juce::Colour c(p[pixelStride == 4 ? 2 : 0],  // R
-                         p[pixelStride == 4 ? 1 : 1],  // G
-                         p[pixelStride == 4 ? 0 : 2]); // B
-          pixels.push_back(c);
-          p += pixelStride;
-        }
+        // JUCE 的 RGB 像素在 Windows 上按 BGR 排列，由 BitmapData 统一解码。
+        for (int x = 0; x < w; ++x)
+          pixels.push_back(data.getPixelColour(x, y));
       }
 
       if (pixels.empty())
@@ -897,38 +735,14 @@ private:
       return result;
     }
 
-    BackgroundComponent &component;
+    juce::Component::SafePointer<BackgroundComponent> component;
     juce::CriticalSection taskLock;
-    juce::String pendingLoadPath;
-    LoadSettingsSnapshot pendingLoadSettings;
-    juce::Image pendingImage;
-    MaterialType pendingType = MaterialType::None;
-    int pendingRadius = 20;
-    bool hasLoadTask = false;
-    bool hasEffectTask = false;
-    std::atomic<bool> abortCurrentTask{false};
+    std::optional<RenderRequest> pending;
+    std::atomic<uint64_t> latestRevision{0};
+    uint64_t cachedImageRevision = 0;
+    juce::Image cachedImage;
+    std::vector<juce::Colour> cachedPalette;
   };
-
-  static juce::Image
-  applyMaterialEffectSynchronously(const juce::Image &source, MaterialType type,
-                                   int radius) {
-    auto neverCancel = []() { return false; };
-
-    switch (type) {
-    case MaterialType::GaussianBlur:
-      return BackgroundWorkerThread::applyGaussianBlurStatic(source, radius,
-                                                             neverCancel);
-    case MaterialType::Aero:
-      return BackgroundWorkerThread::applyAeroEffectStatic(source, radius,
-                                                           neverCancel);
-    case MaterialType::Acrylic:
-      return BackgroundWorkerThread::applyAcrylicEffectStatic(source, radius,
-                                                              neverCancel);
-    case MaterialType::None:
-    default:
-      return source.createCopy();
-    }
-  }
 
   bool loadStartupBackgroundSynchronously(const juce::String &path) {
     auto file = juce::File(path);
@@ -939,35 +753,31 @@ private:
     if (img.isNull())
       return false;
 
-    img = prepareLoadedBackgroundImage(img);
+    img = prepareBackgroundImage(img);
 
     auto processed =
-        applyMaterialEffectSynchronously(img, materialType, blurRadius);
+        BackgroundWorkerThread::applyMaterial(img, materialType, blurRadius,
+                                              [] { return false; });
     if (processed.isNull())
       return false;
 
-    if (getAppSettings().getMonetEnabled()) {
+    if (settings.getMonetEnabled()) {
       auto palette = BackgroundWorkerThread::extractPaletteKMeans(
           img, 6, []() { return false; });
       if (!palette.empty()) {
         currentPalette = palette;
         const auto saved = juce::Colour::fromString(
-            getAppSettings().getThemeAccentColor());
+            settings.getThemeAccentColor());
         const auto selected = midi::selectPaletteAccent(palette, saved);
         lastExtractedColor = selected;
         targetAccentColor = selected;
       }
     }
 
-    {
-      const juce::ScopedLock sl(imageLock);
-      originalImage = img;
-      processedImage = processed;
-      previousImage = juce::Image();
-      transitionAlpha = 1.0f;
-      isTransitioningImage = false;
-      isFirstLoad = false;
-    }
+    originalImage = img;
+    processedImage = processed;
+    appliedImageRevision = imageRevision;
+    isFirstLoad = false;
 
     loadingLabel.setVisible(false);
     repaint();
@@ -975,122 +785,68 @@ private:
   }
 
   void loadSettings() {
-    int mode = getAppSettings().getBackgroundBlurMode();
+    int mode = settings.getBackgroundBlurMode();
     // Trust Boundary: 配置编号映射为 `MaterialType`；范围外值归一为 None=1 并回写设置。
     if (mode < 1 || mode > 4) {
       mode = static_cast<int>(MaterialType::None);
-      getAppSettings().setBackgroundBlurMode(mode);
+      settings.setBackgroundBlurMode(mode);
     }
     materialType = static_cast<MaterialType>(mode);
-    blurRadius = getAppSettings().getBackgroundBlurRadius();
-    overlayOpacity = getAppSettings().getBackgroundOverlay();
+    blurRadius = settings.getBackgroundBlurRadius();
+    overlayOpacity = settings.getBackgroundOverlay();
 
     auto savedColor =
-        juce::Colour::fromString(getAppSettings().getThemeAccentColor());
+        juce::Colour::fromString(settings.getThemeAccentColor());
     lastExtractedColor = savedColor;
     targetAccentColor = savedColor;
   }
 
-  void applyEffects() {
-    if (materialType == MaterialType::None) {
-      loadingLabel.setVisible(false);
-      juce::Image img;
-      {
-        const juce::ScopedLock sl(imageLock);
-        if (originalImage.isNull()) {
-          processedImage = juce::Image();
-          repaint();
-          return;
-        }
-        img = originalImage.createCopy();
-      }
-      onEffectApplied(img);
-      return;
-    }
-
-    loadingLabel.setVisible(true);
-    loadingLabel.setText(L"应用图片效果中...", juce::dontSendNotification);
-
-    juce::Image imgCopy;
-    {
-      const juce::ScopedLock sl(imageLock);
-      if (originalImage.isNull()) {
-        processedImage = juce::Image();
-        loadingLabel.setVisible(false);
-        repaint();
-        return;
-      }
-      imgCopy = originalImage.createCopy();
-    }
-
-    ensureWorkerThread();
-    workerThread->setEffectTask(imgCopy, materialType, blurRadius);
-    workerThread->notify();
-  }
-
-  void ensureWorkerThread() {
+  void submitRender(const juce::String &status) {
+    loadingLabel.setVisible(lastLoadedPath.isNotEmpty());
+    loadingLabel.setText(status, juce::dontSendNotification);
     if (workerThread == nullptr) {
       workerThread = std::make_unique<BackgroundWorkerThread>(*this);
-      workerThread->startThread();
+      if (!workerThread->startThread()) {
+        workerThread.reset();
+        loadingLabel.setText(L"无法启动背景处理", juce::dontSendNotification);
+        return;
+      }
     }
+    workerThread->submit(
+        {++renderRevision, imageRevision, lastLoadedPath,
+         appliedImageRevision == imageRevision ? originalImage : juce::Image{},
+         materialType, blurRadius, settings.getMonetEnabled()});
   }
 
   void cancelPendingWork() {
-    if (workerThread != nullptr) {
-      LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - signaling thread to exit");
-      if (!workerThread->stopThread(getBackgroundWorkerStopTimeoutMs())) {
-        LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - worker did not stop before timeout");
-      }
-
-      workerThread.reset();
-      LOG_DEBUG("[FREEZE_DIAG] cancelPendingWork - done");
-    }
+    if (workerThread != nullptr)
+      workerThread->stopThread(-1);
   }
 
-  // Concurrency: 图像发布入口只在消息线程调用；后台结果通过消息队列交付。
-  void onImageLoaded(const juce::Image &img) {
-    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - start");
-    {
-      const juce::ScopedLock sl(imageLock);
-      LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - lock acquired");
-      originalImage = img;
+  void applyRender(const juce::Image &original, const juce::Image &rendered,
+                   const std::vector<juce::Colour> &palette) {
+    previousImage = processedImage;
+    originalImage = original;
+    processedImage = rendered;
+    isTransitioningImage = !isFirstLoad &&
+                           (previousImage.isValid() || processedImage.isValid());
+    transitionAlpha = isTransitioningImage ? 0.0f : 1.0f;
+    isFirstLoad = false;
+    if (appliedImageRevision != imageRevision) {
+      appliedImageRevision = imageRevision;
+      if (original.isNull())
+        onColorExtracted({juce::Colour(0xFF0078D4)});
+      else if (!palette.empty())
+        onColorExtracted(palette);
     }
-    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - lock released");
-    if (materialType == MaterialType::None)
-      loadingLabel.setVisible(false);
-    applyEffects();
-    repaint();
-    LOG_DEBUG("[FREEZE_DIAG] onImageLoaded - end");
-  }
-
-  void onEffectApplied(const juce::Image &img) {
-    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - start");
-    {
-      const juce::ScopedLock sl(imageLock);
-      LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - lock acquired");
-      previousImage = processedImage.isNull() ? originalImage : processedImage;
-      processedImage = img;
-
-      if (isFirstLoad) {
-        transitionAlpha = 1.0f;
-        isTransitioningImage = false;
-        isFirstLoad = false;
-      } else {
-        transitionAlpha = 0.0f;
-        isTransitioningImage = true;
-      }
-    }
-    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - lock released");
-
     loadingLabel.setVisible(false);
     if (isTransitioningImage || isTransitioningColor)
       startTimerHz(60);
     repaint();
-    LOG_DEBUG("[FREEZE_DIAG] onEffectApplied - end");
   }
 
 private:
-  juce::CriticalSection imageLock;
+  UserSettings &settings;
   juce::Image originalImage;
   juce::Image processedImage;
   juce::Image previousImage;
@@ -1106,6 +862,9 @@ private:
   juce::Colour targetAccentColor = juce::Colour(0xFF0078D4);
   std::vector<juce::Colour> currentPalette;
   juce::String lastLoadedPath;
+  uint64_t renderRevision = 0;
+  uint64_t imageRevision = 0;
+  uint64_t appliedImageRevision = 0;
   juce::Label loadingLabel;
 
   bool isTransitioningImage = false;
@@ -1680,7 +1439,7 @@ public:
   class Listener {
   public:
     virtual ~Listener() = default;
-    virtual void backgroundSettingsChanged(bool reapplyEffects) = 0;
+    virtual void backgroundSettingsChanged() = 0;
     virtual void dialogMaterialChanged(bool backdropChanged) = 0;
     virtual void backgroundSettingsClosed() = 0;
   };
@@ -1862,7 +1621,7 @@ public:
       background.setMaterialType(type);
       updateBlurRadiusVisibility();
       if (listener)
-        listener->backgroundSettingsChanged(false);
+        listener->backgroundSettingsChanged();
     };
 
     addAndMakeVisible(blurRadiusLabel);
@@ -1880,7 +1639,7 @@ public:
     blurRadiusSlider.onDragEnd = [this]() {
       background.setBlurRadius((int)blurRadiusSlider.getValue());
       if (listener)
-        listener->backgroundSettingsChanged(false);
+        listener->backgroundSettingsChanged();
     };
 
     addAndMakeVisible(overlayLabel);
@@ -1896,7 +1655,7 @@ public:
     overlaySlider.onValueChange = [this]() {
       background.setOverlayOpacity((float)overlaySlider.getValue());
       if (listener)
-        listener->backgroundSettingsChanged(false);
+        listener->backgroundSettingsChanged();
     };
     overlaySlider.onDragEnd = nullptr;
 
@@ -1916,14 +1675,13 @@ public:
       saveAppSettingsWithFeedback();
       paletteSelector.setVisible(enabled);
 
-      if (enabled) {
-        background.loadAsync(true);
-      } else {
+      background.loadAsync(true);
+      if (!enabled) {
         background.setCurrentAccentColor(juce::Colour(0xFF0078D4));
       }
 
       if (listener)
-        listener->backgroundSettingsChanged(false);
+        listener->backgroundSettingsChanged();
     };
 
     addAndMakeVisible(paletteSelector);
@@ -1945,7 +1703,7 @@ public:
       getAppSettings().setSequentialIconListStyle(
           sequentialIconToggle.getToggleState());
       if (listener)
-        listener->backgroundSettingsChanged(false);
+        listener->backgroundSettingsChanged();
     };
 
     addAndMakeVisible(rememberWindowToggle);
@@ -2259,97 +2017,24 @@ private:
   }
 
   void applyCroppedImage(const juce::Image &croppedImage) {
-    auto settingsDir =
-        UserSettings::getSettingsDirectory().getChildFile("Backgrounds");
-    settingsDir.createDirectory();
-    auto uniqueName =
-        "bg_" + juce::String(juce::Time::currentTimeMillis()) + ".png";
-    auto uniqueFile = settingsDir.getChildFile(uniqueName);
-
-    // 保存前缩放超大图片，避免 PNG 过大和加载变慢
-    juce::Image imageToSave = croppedImage;
-    int maxW = 2560;
-    int maxH = 1440;
-    if (imageToSave.isValid() &&
-        (imageToSave.getWidth() > maxW || imageToSave.getHeight() > maxH)) {
-      if (imageToSave.getWidth() > 0 && imageToSave.getHeight() > 0) {
-        float scale = std::min((float)maxW / imageToSave.getWidth(),
-                               (float)maxH / imageToSave.getHeight());
-        imageToSave =
-            imageToSave.rescaled((int)(imageToSave.getWidth() * scale),
-                                 (int)(imageToSave.getHeight() * scale),
-                                 juce::Graphics::highResamplingQuality);
-      }
+    juce::File stored;
+    if (const auto result = history.store(croppedImage, stored); result.failed()) {
+      juce::AlertWindow::showMessageBoxAsync(
+          juce::AlertWindow::WarningIcon, L"无法保存背景",
+          result.getErrorMessage(), L"确定", this);
+      return;
     }
 
-    juce::PNGImageFormat pngFormat;
-    {
-      juce::FileOutputStream stream(uniqueFile);
-      if (stream.openedOk()) {
-        pngFormat.writeImageToStream(imageToSave, stream);
-        stream.flush();
-      } else
-        return;
-    }
-    uniqueFile = reuseExistingBackgroundIfDuplicate(uniqueFile);
-    cleanupOldBackgrounds();
-
-    getAppSettings().setBackgroundImagePath(uniqueFile.getFullPathName());
+    getAppSettings().setBackgroundImagePath(stored.getFullPathName());
     saveAppSettingsWithFeedback();
     updateImageDependentControls();
 
-    background.startImageLoadJob(uniqueFile.getFullPathName(), true);
+    background.loadAsync(true);
 
     updateCurrentPath();
     refreshRecentImages();
     if (listener)
-      listener->backgroundSettingsChanged(true);
-  }
-
-  void cleanupOldBackgrounds() {
-    auto settingsDir =
-        UserSettings::getSettingsDirectory().getChildFile("Backgrounds");
-    auto files =
-        settingsDir.findChildFiles(juce::File::findFiles, false, "bg_*.png");
-    std::sort(files.begin(), files.end(),
-              [](const juce::File &a, const juce::File &b) {
-                return a.getLastModificationTime() >
-                       b.getLastModificationTime();
-              });
-
-    juce::Array<juce::File> retainedFiles;
-    for (const auto &file : files) {
-      bool isDuplicate = false;
-      for (const auto &retained : retainedFiles) {
-        if (file.getSize() == retained.getSize() &&
-            file.hasIdenticalContentTo(retained)) {
-          isDuplicate = true;
-          break;
-        }
-      }
-
-      if (isDuplicate || retainedFiles.size() >= 5)
-        file.deleteFile();
-      else
-        retainedFiles.add(file);
-    }
-  }
-
-  juce::File reuseExistingBackgroundIfDuplicate(
-      const juce::File &candidate) {
-    auto files = candidate.getParentDirectory().findChildFiles(
-        juce::File::findFiles, false, "bg_*.png");
-    for (const auto &existing : files) {
-      if (existing == candidate)
-        continue;
-      if (candidate.getSize() == existing.getSize() &&
-          candidate.hasIdenticalContentTo(existing)) {
-        candidate.deleteFile();
-        existing.setLastModificationTime(juce::Time::getCurrentTime());
-        return existing;
-      }
-    }
-    return candidate;
+      listener->backgroundSettingsChanged();
   }
 
   bool isCurrentBackgroundFile(const juce::File &file) const {
@@ -2383,17 +2068,12 @@ private:
   }
 
   void removeRecentImageCache(const juce::File &file) {
-    const auto cacheDirectory =
-        UserSettings::getSettingsDirectory().getChildFile("Backgrounds");
     const auto currentFile =
         juce::File(getAppSettings().getBackgroundImagePath());
-    if (!canRemoveRecentBackgroundCache(cacheDirectory, currentFile, file))
-      return;
-
-    if (file.existsAsFile() && !file.deleteFile()) {
+    if (const auto result = history.remove(file, currentFile); result.failed()) {
       juce::AlertWindow::showMessageBoxAsync(
           juce::AlertWindow::WarningIcon, L"无法移除背景",
-          L"背景缓存文件正在使用或没有删除权限。", L"确定", this);
+          result.getErrorMessage(), L"确定", this);
       return;
     }
 
@@ -2404,21 +2084,7 @@ private:
     recentImagesContainer.removeAllChildren();
     recentButtons.clear();
 
-    auto settingsDir =
-        UserSettings::getSettingsDirectory().getChildFile("Backgrounds");
-    if (!settingsDir.exists())
-      settingsDir.createDirectory();
-
-    auto files =
-        settingsDir.findChildFiles(juce::File::findFiles, false, "bg_*.png");
-
-    std::sort(files.begin(), files.end(),
-              [](const juce::File &a, const juce::File &b) {
-                return a.getLastModificationTime() >
-                       b.getLastModificationTime();
-              });
-
-    files = getUniqueRecentBackgroundFiles(files, 10);
+    const auto files = history.recentImages();
     int limit = files.size();
 
     for (int i = 0; i < limit; ++i) {
@@ -2429,11 +2095,10 @@ private:
         getAppSettings().setBackgroundImagePath(f.getFullPathName());
         saveAppSettingsWithFeedback();
         updateImageDependentControls();
-        background.startImageLoadJob(f.getFullPathName(),
-                                     true);
+        background.loadAsync(true);
         updateCurrentPath();
         if (listener)
-          listener->backgroundSettingsChanged(true);
+          listener->backgroundSettingsChanged();
       };
       btn->onRemoveRequested = [this, f, safeButton =
                                     juce::Component::SafePointer<
@@ -2507,8 +2172,7 @@ private:
     updateImageDependentControls();
 
     if (listener)
-      listener->backgroundSettingsChanged(
-          false);
+      listener->backgroundSettingsChanged();
   }
 
   void updateCurrentPath() {
@@ -2580,6 +2244,8 @@ private:
       behaviorCardBounds;
   BackgroundHistoryLayout historyLayout;
   EmbeddedTooltip tooltipOverlay;
+
+  BackgroundHistory history{UserSettings::getSettingsDirectory().getChildFile("Backgrounds")};
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BackgroundSettingsDialog)
 };

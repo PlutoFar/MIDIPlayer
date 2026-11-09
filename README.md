@@ -113,7 +113,7 @@ git clone https://github.com/PlutoFar/MIDIPlayer.git
 cd MIDIPlayer
 git clone https://github.com/juce-framework/JUCE.git JUCE
 git -C JUCE checkout 91ad83ae34a81e0833b1a2b0866f54846370ae53
-git -C JUCE apply ../patches/juce-child-process-kill.patch
+git -C JUCE apply --ignore-space-change ../patches/juce-child-process-kill.patch
 ```
 
 ### 配置
@@ -147,6 +147,15 @@ build/
 ```
 
 `MidiPlayer` 目标自动构建并复制配套的 `MidiWorker.exe`。
+
+### 测试
+
+```powershell
+cmake --build build --config Release --target MidiTests --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+使用 `ctest -N --test-dir build -C Release` 列出测试组，使用 `-R <测试组>` 按改动范围运行。导出和插件进程用例使用测试子进程，无需安装第三方 VST3 乐器。
 
 ## 问题反馈
 

@@ -1,9 +1,15 @@
 diff --git a/modules/juce_events/interprocess/juce_ConnectedChildProcess.cpp b/modules/juce_events/interprocess/juce_ConnectedChildProcess.cpp
-index 533a75e308..6ae305749f 100644
+index 533a75e308..1fcf73ff9b 100644
 --- a/modules/juce_events/interprocess/juce_ConnectedChildProcess.cpp
 +++ b/modules/juce_events/interprocess/juce_ConnectedChildProcess.cpp
-@@ -216,1 +216,4 @@
+@@ -208,5 +208,9 @@ void ChildProcessCoordinator::killWorkerProcess()
+ {
++    // The host has already attempted a graceful shutdown. Writing to a broken
++    // server pipe can wait for a replacement client, so terminate before disconnecting.
 +    if (childProcess != nullptr && childProcess->isRunning())
 +        childProcess->kill();
 +
-     childProcess.reset();
+     if (connection != nullptr)
+     {
+-        sendMessageToWorker ({ killMessage, specialMessageSize });
+         connection->disconnect();

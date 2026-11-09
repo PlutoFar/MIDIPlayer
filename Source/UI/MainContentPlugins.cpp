@@ -1,6 +1,16 @@
 #include "MainContentComponent.h"
 #include "SettingsPersistence.h"
 
+namespace {
+
+constexpr int pluginEditorOpenDelayMs = 300;
+
+bool shouldAutoOpenPluginEditor(const juce::String &name) {
+  return !name.containsIgnoreCase("Ivory");
+}
+
+} // namespace
+
 void MainContentComponent::startPluginScan() {
   if (isScanningPlugins)
     return;
@@ -15,11 +25,11 @@ void MainContentComponent::startPluginScan() {
 
     void run() override {
       setProgress(-1.0);
-      scanSucceeded = core.scan([this] { return threadShouldExit(); });
+      result = core.scan([this] { return threadShouldExit(); });
     }
 
     midi::Core &core;
-    bool scanSucceeded = false;
+    juce::Result result = juce::Result::fail(L"无法启动扫描任务。");
   };
 
   isScanningPlugins = true;
@@ -27,10 +37,10 @@ void MainContentComponent::startPluginScan() {
 
   auto scanner = std::make_unique<ScanThread>(core, this);
   const bool completed = scanner->runThread();
-  if (completed && scanner->scanSucceeded) {
+  if (scanner->result.wasOk()) {
     updatePluginList();
   } else if (completed) {
-    showOperationError(L"插件扫描失败", core.lastPluginError());
+    showOperationError(L"插件扫描失败", std::wstring(scanner->result.getErrorMessage().toWideCharPointer()));
   }
 
   isScanningPlugins = false;
@@ -55,7 +65,7 @@ void MainContentComponent::confirmUnloadPlugin() {
 void MainContentComponent::unloadPlugin() {
   const auto safeThis =
       juce::Component::SafePointer<MainContentComponent>(this);
-  if (!core.unloadAsync([safeThis](bool succeeded) {
+  const auto accepted = core.unloadAsync([safeThis](juce::Result result) {
         if (safeThis == nullptr)
           return;
         safeThis->pluginSelector.setEnabled(true);
@@ -64,28 +74,24 @@ void MainContentComponent::unloadPlugin() {
         safeThis->unloadBtn.setEnabled(false);
         safeThis->contentLabel.setText(L"选择一个 VST3 乐器插件开始演奏",
                                        juce::dontSendNotification);
-        if (!succeeded)
-          safeThis->handlePluginWorkerCrash();
+        if (result.failed()) {
+          if (safeThis->core.workerCrashed())
+            safeThis->handlePluginWorkerCrash();
+          else
+            safeThis->showOperationError(L"无法卸载插件", result.getErrorMessage().toWideCharPointer());
+        }
         getAppSettings().setLastPluginId({});
         saveAppSettingsWithFeedback();
-      })) {
-    showOperationError(L"无法卸载插件", L"当前操作尚未结束");
+      });
+  if (accepted.failed()) {
+    showOperationError(L"无法卸载插件", accepted.getErrorMessage().toWideCharPointer());
     return;
   }
-  beginPluginSwitch();
+  ++pluginGeneration;
   pluginSelector.setEnabled(false);
   playbackPausedByPluginSwitch = false;
   pluginWorkerCrashAlertShown = false;
   pluginWorkerRecoveryHandled = false;
-}
-
-int MainContentComponent::beginPluginSwitch() {
-  const bool wasPlayingBeforeSwitch = core.state().transport.playing;
-  playbackPausedByPluginSwitch =
-      shouldShowPluginSwitchPausedNotice(wasPlayingBeforeSwitch, false);
-  core.pause();
-
-  return pluginLifecycle.beginSwitch();
 }
 
 void MainContentComponent::finishPluginLoadUi(const midi::PluginInfo &plugin) {
@@ -94,9 +100,10 @@ void MainContentComponent::finishPluginLoadUi(const midi::PluginInfo &plugin) {
   pluginWorkerRecoveryHandled = false;
   openPluginBtn.setEnabled(true);
   unloadBtn.setEnabled(true);
-  contentLabel.setText(
-      makeLoadedPluginLabel(pluginName, playbackPausedByPluginSwitch),
-      juce::dontSendNotification);
+  auto label = L"已加载: " + pluginName;
+  if (playbackPausedByPluginSwitch)
+    label += L"（播放已暂停，请手动恢复）";
+  contentLabel.setText(label, juce::dontSendNotification);
   playbackPausedByPluginSwitch = false;
   getAppSettings().setLastPluginId(juce::String(plugin.id.c_str()));
   saveAppSettingsWithFeedback();
@@ -104,10 +111,9 @@ void MainContentComponent::finishPluginLoadUi(const midi::PluginInfo &plugin) {
 
 void MainContentComponent::showPluginLoadSuccessToast(
     const juce::String &pluginName) {
-  const auto title = midi::makePluginLoadSuccessToastTitle(
-      std::wstring(pluginName.toWideCharPointer()));
-  modeToast.showTopCenter(juce::String(title.c_str()), getLocalBounds(),
-                          midi::pluginLoadSuccessToastDurationMs);
+  const auto title = pluginName.isEmpty() ? juce::String(L"插件加载成功")
+                                         : L"插件加载成功: " + pluginName;
+  modeToast.showTopCenter(title, getLocalBounds(), 3000);
 }
 
 void MainContentComponent::loadPluginInfo(const midi::PluginInfo &plugin,
@@ -116,22 +122,23 @@ void MainContentComponent::loadPluginInfo(const midi::PluginInfo &plugin,
     return;
   pluginLoadInProgress = true;
   pluginSelector.setEnabled(false);
-  const int generation = beginPluginSwitch();
+  const int generation = pluginGeneration + 1;
+  const bool wasPlaying = core.state().transport.playing;
   pluginLoadingWindow = FluentSettingsStyle::showMessageDialogAsync(
       L"正在加载乐器", L"正在加载插件: " + juce::String(plugin.name.c_str()),
       this, fluentLookAndFeel, {}, false);
   auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
-  const bool accepted = core.loadAsync(plugin.id, [safeThis, plugin,
+  const auto accepted = core.loadAsync(plugin.id, [safeThis, plugin,
                                                    openEditorAfterLoad,
-                                                   generation](bool succeeded) {
+                                                   generation](juce::Result result) {
     if (safeThis == nullptr)
       return;
     safeThis->pluginLoadingWindow.deleteAndZero();
     safeThis->pluginLoadInProgress = false;
     safeThis->pluginSelector.setEnabled(!safeThis->isScanningPlugins);
-    if (!safeThis->pluginLifecycle.isGenerationCurrent(generation))
+    if (safeThis->pluginGeneration != generation)
       return;
-    if (succeeded) {
+    if (result.wasOk()) {
       safeThis->finishPluginLoadUi(plugin);
       safeThis->showPluginLoadSuccessToast(juce::String(plugin.name.c_str()));
       if (openEditorAfterLoad)
@@ -147,14 +154,17 @@ void MainContentComponent::loadPluginInfo(const midi::PluginInfo &plugin,
         safeThis->handlePluginWorkerCrash();
       else
         safeThis->showOperationError(L"插件加载失败",
-                                     safeThis->core.lastPluginError());
+                                     result.getErrorMessage().toWideCharPointer());
     }
   });
-  if (!accepted) {
+  if (accepted.failed()) {
     pluginLoadingWindow.deleteAndZero();
     pluginLoadInProgress = false;
     pluginSelector.setEnabled(!isScanningPlugins);
-    showOperationError(L"无法加载插件", core.lastPluginError());
+    showOperationError(L"无法加载插件", accepted.getErrorMessage().toWideCharPointer());
+  } else {
+    pluginGeneration = generation;
+    playbackPausedByPluginSwitch = wasPlaying;
   }
 }
 
@@ -166,7 +176,7 @@ void MainContentComponent::loadSelectedPlugin() {
   const auto plugins = core.plugins();
   if (idx >= 0 && idx < static_cast<int>(plugins.size())) {
     const auto &plugin = plugins[static_cast<size_t>(idx)];
-    loadPluginInfo(plugin, shouldAutoOpenPluginEditorAfterLoad(
+    loadPluginInfo(plugin, shouldAutoOpenPluginEditor(
                                juce::String(plugin.name.c_str())));
   }
 }
@@ -175,37 +185,36 @@ void MainContentComponent::openPluginWindow() {
   if (!core.hasPluginLoaded())
     return;
 
-  const int requestGeneration = pluginLifecycle.getGeneration();
+  const int requestGeneration = pluginGeneration;
   auto safeThis = juce::Component::SafePointer<MainContentComponent>(this);
   const auto pluginName = juce::String(core.loadedPluginName().c_str());
-  const int editorDelayMs = getPluginEditorOpenDelayMs(pluginName);
   LOG_DEBUG("Scheduling plugin editor for " + pluginName + " in " +
-            juce::String(editorDelayMs) + " ms");
+            juce::String(pluginEditorOpenDelayMs) + " ms");
 
-  juce::Timer::callAfterDelay(editorDelayMs, [safeThis, requestGeneration]() {
+  juce::Timer::callAfterDelay(pluginEditorOpenDelayMs, [safeThis, requestGeneration]() {
     if (safeThis == nullptr)
       return;
 
-    if (!safeThis->pluginLifecycle.isGenerationCurrent(requestGeneration) ||
+    if (safeThis->pluginGeneration != requestGeneration ||
         !safeThis->core.hasPluginLoaded())
       return;
 
-    if (!safeThis->core.editorAsync([safeThis](bool succeeded) {
-          if (safeThis == nullptr || succeeded)
+    const auto accepted = safeThis->core.editorAsync([safeThis](juce::Result result) {
+          if (safeThis == nullptr || result.wasOk())
             return;
           if (safeThis->core.workerCrashed())
             safeThis->handlePluginWorkerCrash();
           else
             safeThis->showOperationError(L"插件窗口打开失败",
-                                         safeThis->core.lastPluginError());
-        }))
-      safeThis->showOperationError(L"插件窗口打开失败", L"当前操作尚未结束");
+                                         result.getErrorMessage().toWideCharPointer());
+        });
+    if (accepted.failed())
+      safeThis->showOperationError(L"插件窗口打开失败", accepted.getErrorMessage().toWideCharPointer());
   });
 }
 
 void MainContentComponent::closePluginWindow() {
   core.closeEditor();
-  pluginLifecycle.closeWindow();
 }
 
 void MainContentComponent::handlePluginWorkerCrash() {
@@ -213,7 +222,7 @@ void MainContentComponent::handlePluginWorkerCrash() {
   core.pause();
   if (!pluginWorkerRecoveryHandled) {
     pluginWorkerRecoveryHandled = true;
-    pluginLifecycle.beginSwitch();
+    ++pluginGeneration;
     pluginLoadInProgress = false;
     pluginSelector.setEnabled(!isScanningPlugins);
     pluginSelector.setSelectedId(0, juce::dontSendNotification);
@@ -276,7 +285,7 @@ void MainContentComponent::tryLoadLastPluginWithDialog() {
 
   const auto &plugin = plugins[static_cast<size_t>(pluginIndex)];
   pluginSelector.setSelectedId(pluginIndex + 1, juce::dontSendNotification);
-  loadPluginInfo(plugin, shouldAutoOpenPluginEditorAfterLoad(
+  loadPluginInfo(plugin, shouldAutoOpenPluginEditor(
                              juce::String(plugin.name.c_str())));
 }
 
@@ -302,21 +311,5 @@ void MainContentComponent::updatePluginList() {
 
   if (idToSelect > 0) {
     pluginSelector.setSelectedId(idToSelect, juce::dontSendNotification);
-  }
-}
-
-void MainContentComponent::tryLoadLastPlugin() {
-  auto lastPluginId = getAppSettings().getLastPluginId();
-  if (lastPluginId.isEmpty())
-    return;
-
-  const auto plugins = core.plugins();
-  for (int i = 0; i < static_cast<int>(plugins.size()); ++i) {
-    const auto &plugin = plugins[static_cast<size_t>(i)];
-    if (plugin.id == std::wstring(lastPluginId.toWideCharPointer())) {
-      pluginSelector.setSelectedId(i + 1, juce::dontSendNotification);
-      loadPluginInfo(plugin, false);
-      return;
-    }
   }
 }

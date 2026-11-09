@@ -4,8 +4,8 @@
 // Ownership: 父进程持有子进程与临时文件；成功校验结果后才替换调用方目录。
 // Concurrency: 扫描同步阻塞调用线程；取消回调在父进程等待期间轮询。
 
-#include "../AudioEngine/PluginListSupport.h"
-#include "../Core/WorkerPath.h"
+#include "PluginListSupport.h"
+#include "WorkerPath.h"
 
 #include <functional>
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -132,7 +132,7 @@ inline bool scanPluginListInChildProcess(
   }
 
   const auto executable = executableOverride == juce::File{}
-                              ? midi::WorkerPath::resolve()
+                              ? WorkerPath::resolve()
                               : executableOverride;
   if (!executable.existsAsFile()) {
     error = L"未找到插件扫描子进程。";

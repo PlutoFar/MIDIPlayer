@@ -1,6 +1,5 @@
 #include "Core/Core.h"
-#include "PluginBridge/PluginScanProcess.h"
-#include "PluginBridge/PluginWorkerProcess.h"
+#include "PluginBridge/PluginProcessEntry.h"
 #include "UI/MainContentComponent.h"
 #include "Utils/CommandLineMidiFileSupport.h"
 #include "Utils/DebugLogger.h"
@@ -23,15 +22,11 @@ public:
   bool moreThanOneInstanceAllowed() override {
     const auto commandLine =
         juce::JUCEApplicationBase::getCommandLineParameters();
-    return PluginBridge::isPluginWorkerCommandLine(commandLine) ||
-           PluginBridge::isPluginScanCommandLine(commandLine);
+    return PluginBridge::isPluginProcessCommandLine(commandLine);
   }
 
   void initialise(const juce::String &commandLine) override {
-    if (PluginBridge::runPluginScanIfRequested(commandLine))
-      return;
-
-    if (PluginBridge::runWorkerIfRequested(commandLine))
+    if (PluginBridge::runPluginProcess(commandLine))
       return;
 
     DebugLogger::init();
@@ -40,7 +35,7 @@ public:
     applicationLookAndFeel = std::make_unique<FluentLookAndFeel>(true);
     juce::LookAndFeel::setDefaultLookAndFeel(applicationLookAndFeel.get());
 
-    core = std::make_unique<midi::Core>();
+    core = std::make_unique<midi::Core>(getAppSettings());
     mainWindow = std::make_unique<MainWindow>(getApplicationName(), *core,
                                               *applicationLookAndFeel);
 
@@ -65,6 +60,7 @@ public:
   }
 
   void shutdown() override {
+    PluginBridge::shutDownPluginProcess();
     LOG_DEBUG("Application Shutting Down...");
     mainWindow = nullptr;
     core = nullptr;
@@ -84,9 +80,7 @@ public:
     auto midiFile = parseMidiFileFromCommandLine(commandLine);
 
     if (mainWindow != nullptr) {
-      mainWindow->setMinimised(false);
-      mainWindow->setVisible(true);
-      mainWindow->toFront(true);
+      mainWindow->restoreAndActivate();
 
       if (midiFile.existsAsFile()) {
         auto *content = dynamic_cast<MainContentComponent *>(
@@ -159,6 +153,12 @@ public:
       juce::Desktop::getInstance().removeDarkModeSettingListener(this);
     }
 
+    void restoreAndActivate() {
+      setMinimised(false);
+      setVisible(true);
+      toFront(true);
+    }
+
     // Ordering: 窗口仍存活时完成设置保存；用户取消退出后保留窗口及内存配置。
     bool saveSettingsBeforeQuit() {
       auto &settings = getAppSettings();
@@ -173,6 +173,7 @@ public:
                                              : settings.saveDetailed();
       if (result.wasOk())
         return true;
+      restoreAndActivate();
       const bool exitWithoutSaving = juce::AlertWindow::showOkCancelBox(
           juce::AlertWindow::WarningIcon, L"设置未保存",
           L"无法保存设置。\n\n" + result.getErrorMessage() +
@@ -192,6 +193,8 @@ public:
       if (content && content->hasUnsavedChanges()) {
         isClosing = true;
 
+        // Windows 会隐藏最小化窗口拥有的对话框，必须先恢复主窗口再定位提示。
+        restoreAndActivate();
         const auto summary = content->getPlaylistChangeSummary();
 
         int result = juce::AlertWindow::showYesNoCancelBox(

@@ -1,7 +1,8 @@
 #include "AudioDeviceService.h"
-#include "../Utils/UserSettings.h"
 
-AudioDeviceService::AudioDeviceService(juce::AudioProcessor &processor) {
+AudioDeviceService::AudioDeviceService(juce::AudioProcessor &processor,
+                                       juce::File settingsFile)
+    : file(std::move(settingsFile)) {
   restore();
   manager.addChangeListener(this);
   player.setProcessor(&processor);
@@ -69,8 +70,6 @@ juce::String AudioDeviceService::save() {
       xml->setAttribute("audioDeviceOutChans",
                         setup.outputChannels.toString(2));
   }
-  const auto file =
-      UserSettings::getSettingsDirectory().getChildFile("AudioDevice.xml");
   juce::TemporaryFile temporary(file);
   if (!xml->writeTo(temporary.getFile()) ||
       !temporary.overwriteTargetFileWithTemporary())
@@ -79,8 +78,6 @@ juce::String AudioDeviceService::save() {
 }
 
 void AudioDeviceService::restore() {
-  const auto file =
-      UserSettings::getSettingsDirectory().getChildFile("AudioDevice.xml");
   firstRun = !file.existsAsFile();
   if (!firstRun) {
     if (auto xml = juce::XmlDocument::parse(file)) {
@@ -143,9 +140,7 @@ void AudioDeviceService::changeListenerCallback(juce::ChangeBroadcaster *) {
   juce::String diagnostic;
   if (manager.getCurrentAudioDevice() != nullptr) {
     diagnostic = save();
-  } else if (UserSettings::getSettingsDirectory()
-                 .getChildFile("AudioDevice.xml")
-                 .existsAsFile()) {
+  } else if (file.existsAsFile()) {
     juce::ScopedValueSetter<bool> recovery(recovering, true);
     diagnostic = manager.initialiseWithDefaultDevices(0, 2);
     if (diagnostic.isEmpty() && manager.getCurrentAudioDevice() != nullptr)
