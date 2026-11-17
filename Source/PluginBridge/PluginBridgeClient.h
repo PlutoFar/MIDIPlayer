@@ -12,6 +12,7 @@
 namespace PluginBridge {
 
 enum class BridgeStatus { stopped, starting, ready, crashed };
+enum class BlockResult { rendered, midiEventTooLarge, workerFailed };
 
 struct BridgeState {
   BridgeStatus status = BridgeStatus::stopped;
@@ -208,83 +209,47 @@ public:
 
   // Preconditions: 块大小不超过 `SharedBlockLayout::maxSamples`，MIDI 时间戳为宿主块采样偏移。
   // Concurrency: 仅专用渲染线程或离线导出调用，设备回调禁止调用此阻塞接口。
-  // Ordering: 每次调用完成一项渲染请求；失败结束会话，禁止推进后续 MIDI 后继续静音运行。
-  bool processBlock(const juce::MidiBuffer &midi,
-                    juce::AudioBuffer<float> &buffer, double sampleRate,
-                    int midiStartSample = 0,
-                    const MusicalPosition &position = {}) {
+  // Ordering: 先验证单条事件容量，再分包发送完整 MIDI；工作进程收到末包后渲染一次。
+  BlockResult processBlock(const juce::MidiBuffer &midi,
+                           juce::AudioBuffer<float> &buffer, double sampleRate,
+                           int midiStartSample = 0,
+                           const MusicalPosition &position = {}) {
+    buffer.clear();
     if (!isPluginLoaded() || sharedBlock == nullptr || !sharedBlock->isOpen())
-      return false;
+      return BlockResult::workerFailed;
 
-    const bool nonRealtime = nonRealtimeMode.load(std::memory_order_acquire);
     const int numSamples = buffer.getNumSamples();
     if (numSamples > SharedBlockLayout::maxSamples) {
       markCrashed(
           "audio block is larger than the plugin bridge buffer");
-      buffer.clear();
-      return false;
+      return BlockResult::workerFailed;
     }
+
+    const int endSample = midiStartSample + numSamples;
+    auto next = midi.findNextSamplePosition(midiStartSample);
+    auto end = next;
+    for (; end != midi.cend() && (*end).samplePosition < endSample; ++end)
+      if ((*end).numBytes > MidiPacketLimits::maxEventBytes)
+        return BlockResult::midiEventTooLarge;
 
     auto &shared = sharedBlock->block();
-    const auto requestSequence = nextRenderSequence++;
     shared.header.sampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
-    shared.header.requestSequence = requestSequence;
-    shared.header.responseSequence = 0;
     shared.header.blockSize = numSamples;
-    shared.header.resultCode = static_cast<int>(StatusCode::renderFailed);
     shared.header.position = position;
 
-    for (int ch = 0; ch < SharedBlockLayout::maxChannels; ++ch)
-      juce::FloatVectorOperations::clear(shared.audio[ch], numSamples);
+    do {
+      shared.header.midiBytes = writeMidiPacket(next, end, shared.midi, midiStartSample);
+      shared.header.hasMoreMidi = next != end;
+      if (!sendRenderPacket(shared.header))
+        return BlockResult::workerFailed;
+    } while (next != end);
 
-    const int midiBytes =
-        writeMidiBufferRange(midi, shared.midi, SharedBlockLayout::maxMidiBytes,
-                             midiStartSample, numSamples);
-    if (midiBytes < 0) {
-      markCrashed(
-          "MIDI block is larger than the plugin bridge buffer");
-      buffer.clear();
-      return false;
-    }
-    shared.header.midiBytes = midiBytes;
-
-    if (!sharedBlock->signalRequest()) {
-      buffer.clear();
-      markCrashed(sharedBlock->getLastErrorMessage());
-      return false;
-    }
-
-    renderRequestOutstanding = true;
-    outstandingRenderSequence = requestSequence;
-
-    const int timeoutMs =
-        nonRealtime ? workerCommandTimeoutMs
-                    : workerRenderHangTimeoutMs;
-    const auto waitResult = sharedBlock->waitForResponse(timeoutMs);
-    if (waitResult != WaitResult::signalled) {
-      buffer.clear();
-      if (waitResult == WaitResult::failed) {
-        resetRenderState();
-        markCrashed(sharedBlock->getLastErrorMessage());
-      } else {
-        resetRenderState();
-        markCrashed("plugin worker render timeout");
-      }
-      return false;
-    }
-
-    if (!completeOutstandingRender()) {
-      buffer.clear();
-      return false;
-    }
-
-    buffer.clear();
     const int channelsToCopy =
         juce::jmin(buffer.getNumChannels(), SharedBlockLayout::maxChannels);
     for (int ch = 0; ch < channelsToCopy; ++ch)
       buffer.copyFrom(ch, 0, shared.audio[ch], numSamples);
 
-    return true;
+    return BlockResult::rendered;
   }
 
   // Preconditions: 已加载插件；阻塞等待工作进程在消息线程创建窗口，调用方不得为主界面线程。
@@ -393,6 +358,33 @@ public:
 
 private:
   std::atomic<int> latencySamples{0};
+
+  bool sendRenderPacket(SharedBlockHeader &header) {
+    const auto requestSequence = nextRenderSequence++;
+    header.requestSequence = requestSequence;
+    header.responseSequence = 0;
+    header.resultCode = static_cast<int>(StatusCode::renderFailed);
+    if (!sharedBlock->signalRequest()) {
+      markCrashed(sharedBlock->getLastErrorMessage());
+      return false;
+    }
+    renderRequestOutstanding = true;
+    outstandingRenderSequence = requestSequence;
+
+    const int timeoutMs = nonRealtimeMode.load(std::memory_order_acquire)
+                             ? workerCommandTimeoutMs
+                             : workerRenderHangTimeoutMs;
+    const auto waitResult = sharedBlock->waitForResponse(timeoutMs);
+    if (waitResult != WaitResult::signalled) {
+      resetRenderState();
+      markCrashed(waitResult == WaitResult::failed
+                      ? sharedBlock->getLastErrorMessage()
+                      : juce::String("plugin worker render timeout"));
+      return false;
+    }
+    return completeOutstandingRender();
+  }
+
   bool completeOutstandingRender() {
     if (!renderRequestOutstanding || sharedBlock == nullptr)
       return false;

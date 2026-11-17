@@ -5,6 +5,8 @@
 #include "../Utils/UserSettings.h"
 #include "BackgroundEffectSupport.h"
 #include "BackgroundRenderer.h"
+#include <algorithm>
+#include <cstdlib>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 /**
@@ -141,59 +143,39 @@ public:
         transitionAlpha = 1.0f;
         isTransitioningImage = false;
         previousImage = {};
-        checkTimerState();
-        repaint();
-      } else {
-        repaint();
       }
+      repaint();
     }
 
-    if (isTransitioningColor) {
-      auto c1 = lastExtractedColor;
-      auto c2 = targetAccentColor;
-
-      if (c1 == c2) {
-        isTransitioningColor = false;
-        checkTimerState();
-        return;
-      }
-
-      auto stepParams = [](uint8_t current, uint8_t target) -> uint8_t {
-        int diff = (int)target - (int)current;
-        if (std::abs(diff) <= 2)
+    if (lastExtractedColor != targetAccentColor) {
+      const auto step = [](uint8_t current, uint8_t target) -> uint8_t {
+        const int distance = std::abs(static_cast<int>(target) - current);
+        if (distance <= 2)
           return target;
-        return (uint8_t)(current + diff * 0.15f);
+        // 每个变化通道至少移动一个色阶，避免整数舍入使过渡停滞。
+        const int increment = std::max(1, distance * 15 / 100);
+        return static_cast<uint8_t>(current + (target > current ? increment : -increment));
       };
 
-      juce::Colour next(stepParams(c1.getRed(), c2.getRed()),
-                        stepParams(c1.getGreen(), c2.getGreen()),
-                        stepParams(c1.getBlue(), c2.getBlue()));
-
+      const auto current = lastExtractedColor;
+      const auto target = targetAccentColor;
+      const juce::Colour next(step(current.getRed(), target.getRed()),
+                              step(current.getGreen(), target.getGreen()),
+                              step(current.getBlue(), target.getBlue()),
+                              step(current.getAlpha(), target.getAlpha()));
       lastExtractedColor = next;
       if (onAccentColorChanged)
         onAccentColorChanged(next);
       sendChangeMessage();
-
-      if (lastExtractedColor == targetAccentColor) {
-        isTransitioningColor = false;
-        checkTimerState();
-        sendChangeMessage();
-      }
-      if (isTimerRunning())
-        repaint();
     }
+    updateTimerState();
   }
 
   void setCurrentAccentColor(juce::Colour color) {
     if (targetAccentColor != color) {
       targetAccentColor = color;
-      startColorTransition();
+      updateTimerState();
     }
-  }
-
-  void startColorTransition() {
-    isTransitioningColor = true;
-    startTimerHz(60);
   }
 
   void onColorExtracted(const std::vector<juce::Colour> &palette) {
@@ -207,12 +189,7 @@ public:
 
     targetAccentColor = bestColor;
 
-    startColorTransition();
-
-    if (onAccentColorChanged)
-      onAccentColorChanged(
-          lastExtractedColor);
-
+    updateTimerState();
     sendChangeMessage();
   }
 
@@ -226,8 +203,11 @@ public:
   }
 
 private:
-  void checkTimerState() {
-    if (!isTransitioningImage && !isTransitioningColor) {
+  void updateTimerState() {
+    if (isTransitioningImage || lastExtractedColor != targetAccentColor) {
+      if (!isTimerRunning())
+        startTimerHz(60);
+    } else {
       stopTimer();
     }
   }
@@ -303,8 +283,7 @@ private:
         onColorExtracted(result.palette);
     }
     loadingLabel.setVisible(false);
-    if (isTransitioningImage || isTransitioningColor)
-      startTimerHz(60);
+    updateTimerState();
     repaint();
   }
 
@@ -328,7 +307,6 @@ private:
   juce::Label loadingLabel;
 
   bool isTransitioningImage = false;
-  bool isTransitioningColor = false;
   bool isFirstLoad = true;
 
   midi::background::Renderer renderer;

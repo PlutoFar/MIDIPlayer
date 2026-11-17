@@ -56,7 +56,7 @@ ExportOutcome renderOfflineExport(
 
   juce::AudioBuffer<float> buffer(2, exportOfflineBlockSize);
   juce::MidiBuffer midi;
-  midi.ensureSize(PluginBridge::SharedBlockLayout::maxMidiBytes);
+  midi.ensureSize(PluginBridge::MidiPacketLimits::maxPacketBytes);
 
   // 进度前 90% 对应 MIDI 主体，后 10% 留给尾音；自动尾音最多渲染 60 秒，
   // 并要求连续 0.5 秒低于 0.00001 线性电平后结束，避免混响和释放音被截断。
@@ -118,7 +118,7 @@ ExportOutcome renderOfflineExport(
     }
     renderedSamples += blockSamples;
     writtenSamples += count;
-    if (settings.autoTail && tailStart < blockSamples) {
+    if (settings.autoTail && session.isWaitingForTail() && tailStart < blockSamples) {
       silentSamples = tailLevel < 0.00001f
                           ? silentSamples + blockSamples - tailStart : 0;
       if (silentSamples >= exportSampleRate * 0.5)

@@ -239,6 +239,7 @@ private:
 
   midi::Core &core;
   juce::String lastMidiErrorShown;
+  uint64_t lastTrackSkipRevision = 0;
   FluentLookAndFeel &fluentLookAndFeel;
 
   BackgroundComponent background{getAppSettings()};

@@ -52,8 +52,7 @@ public:
 
     auto seconds = std::make_unique<juce::MidiMessageSequence>(
         current->sequenceSeconds);
-    const double positionSeconds =
-        oldRate > 0.0 ? currentPositionInSamples.load() / oldRate : 0.0;
+    const double positionSeconds = getPositionInSamples() / oldRate;
     auto snapshot =
         createSnapshot(std::move(seconds), rate, positionSeconds * rate);
     publishSnapshot(std::move(snapshot), true);
@@ -62,8 +61,7 @@ public:
   // Preconditions: 唯一消费方调用；`buffer` 由调用方持有，本方法追加事件且不负责预先清空。
   // Postconditions: 追加本块事件并推进采样位置；先消费快照和 seek，再处理普通序列事件。
   void processBlock(juce::MidiBuffer &buffer, int numSamples,
-                    ProcessMode mode = ProcessMode::realtime,
-                    int recoveryPacketBytes = std::numeric_limits<int>::max()) {
+                    ProcessMode mode = ProcessMode::realtime) {
     if (numSamples <= 0)
       return;
     // Ordering: 先取得定位请求，再消费序列；请求发布前的序列写入对本消费块可见。
@@ -72,7 +70,7 @@ public:
 
     // Ordering: 停止清理由 `AudioEngine` 淡出后触发；seek 清理块由引擎静音并接续淡入。
     // Ordering: 过期的暂停清理不能覆盖已恢复的踏板；切曲清理由消费方交接序列时产生。
-    const bool stopCleanup = pendingStopCleanup.exchange(false) && !isPlaying.load();
+    const bool stopCleanup = pendingStopCleanup.exchange(false) && !getPlaying();
     if (pendingAllNotesOff.exchange(false) || stopCleanup) {
       recoveryMessages.clear();
       recoveryIndex = 0;
@@ -82,63 +80,62 @@ public:
     }
 
     const bool appliedSeek = hasSeekRequest && applyPendingSeekRequest();
-    renderPosition = currentPositionInSamples.load();
-    renderPlaying = isPlaying.load();
-    const bool recovered = writeRecoveryMessages(buffer, numSamples, recoveryPacketBytes, mode);
+    renderPosition = playbackPosition;
+    renderCommand = transportCommand.load(std::memory_order_acquire);
+    renderPlaying = isPlaying(renderCommand) &&
+                    renderCommand.positionRevision == playbackPositionRevision;
+    const bool recovered = writeRecoveryMessages(buffer, numSamples, mode);
     // Ordering: 实时定位留出清理块；离线定位在同块开始正常序列，不写入准备空块。
     if ((appliedSeek || recovered) && mode == ProcessMode::realtime)
       return;
 
     auto *currentSequence = getAudioThreadSnapshot();
-    if (currentSequence == nullptr || !isPlaying.load())
+    if (currentSequence == nullptr || !renderPlaying)
       return;
-    if (sequenceEnded.load(std::memory_order_acquire)) {
-      currentPositionInSamples.store(renderPosition + numSamples);
-      return;
-    }
 
-    const double currentPos = currentPositionInSamples.load();
-    const double endPosition = currentPos + numSamples;
+    const double endPosition = renderPosition + numSamples;
     const auto &events = currentSequence->sequenceSamples;
 
     while (nextMessageIndex < events.getNumEvents()) {
-      auto *event = events.getEventPointer(nextMessageIndex);
-      if (event == nullptr)
-        break;
-
-      const double eventSample = event->message.getTimeStamp();
+      const auto &message = events.getEventPointer(nextMessageIndex)->message;
+      const double eventSample = message.getTimeStamp();
       if (eventSample >= endPosition)
         break;
 
-      if (!event->message.isMetaEvent()) {
-        int offset = juce::jmax(0, (int)(eventSample - currentPos));
-        offset = juce::jmin(offset, numSamples - 1);
-        addTrackedEvent(buffer, event->message, offset);
-      }
+      if (!message.isMetaEvent())
+        addTrackedEvent(buffer, message,
+                        static_cast<int>(juce::jmax(0.0, eventSample - renderPosition)));
 
       ++nextMessageIndex;
     }
 
-    currentPositionInSamples.store(endPosition);
+    if (!sequenceEnded && nextMessageIndex == events.getNumEvents()) {
+      // Ordering: 释放比末个事件晚至少 1 个采样，避免同采样的 Note Off 抢在 Note On 之前生效。
+      const double releaseOffset = juce::jmax(
+          0.0, std::floor(currentSequence->durationSamples - renderPosition) + 1.0);
+      if (releaseOffset < numSamples) {
+        releaseHeldState(buffer, static_cast<int>(releaseOffset));
+        sequenceEnded = true;
+      }
+    }
 
-    if (nextMessageIndex >= events.getNumEvents())
-      sequenceEnded.store(true, std::memory_order_release);
+    playbackPosition = endPosition;
+    renderedPosition.store(endPosition, std::memory_order_release);
   }
 
   // Postconditions: 原子改变播放标记；无序列时拒绝开始，停止不重置采样位置。
   void setPlaying(bool play) {
     if (play && !hasSequence())
       return;
-    // Ordering: 暂停后由引擎淡出并清理声部；核心恢复前调用 `seekTo(currentPos, true)`
-    // 重建控制器、音色选择、弯音和踏板；旧音符不重新触发。
-    if (!play)
-      sequenceEnded.store(false, std::memory_order_release);
-    else
-      finishedFlag.store(false, std::memory_order_release);
-    isPlaying.store(play);
+    auto previous = transportCommand.load();
+    auto next = previous;
+    do {
+      next = previous;
+      next.playback = nextPlayback(previous, play ? Playback::playing : Playback::paused);
+    } while (!transportCommand.compare_exchange_weak(previous, next));
   }
 
-  bool getPlaying() const { return isPlaying.load(); }
+  bool getPlaying() const { return isPlaying(transportCommand.load()); }
 
   // Preconditions: 序列生产方调用，位置单位为当前序列采样；与快照替换串行。
   // Postconditions: 发布限定在序列范围内的位置；新请求替换尚未消费的旧请求，没有容量拒绝。
@@ -154,8 +151,7 @@ public:
     request.generation = currentSequence->generation;
     request.index =
         findEventIndex(currentSequence->sequenceSamples, request.position);
-    request.emitChase =
-        isPlaying.load(std::memory_order_acquire) || forceChaseWhilePaused;
+    request.emitChase = getPlaying() || forceChaseWhilePaused;
 
     if (request.emitChase) {
       appendChasedControllers(currentSequence->sequenceSamples, request.index,
@@ -166,29 +162,40 @@ public:
       request.chaseMessages.addEvents(pedals, 0, -1, 1);
     }
 
+    request.positionRevision = publishPositionIntent(request.position, true);
     pendingSeekRequests[(size_t)producerSeekSlot] = std::move(request);
     producerSeekSlot = publishedSeekSlot.exchange(
                            producerSeekSlot | seekRequestReady,
                            std::memory_order_acq_rel) & seekSlotMask;
   }
 
-  // Postconditions: `hasFinished` 一次性消费尾音结束标记；其他状态/位置查询读取原子缓存。
-  bool hasFinished() { return finishedFlag.exchange(false); }
+  // Postconditions: `hasFinished` 一次性消费当前播放命令的完成标记。
+  bool hasFinished() {
+    auto command = transportCommand.load();
+    return playbackOf(command) == Playback::finished &&
+           transportCommand.compare_exchange_strong(
+               command, {command.positionRevision, nextPlayback(command, Playback::paused)});
+  }
 
+  // Preconditions: 由渲染消费方在处理当前音频块后查询。
   bool isWaitingForTail() const {
-    return sequenceEnded.load(std::memory_order_acquire);
+    return sequenceEnded && renderPlaying && transportCommand.load() == renderCommand;
   }
 
   // Preconditions: 仅消费方在尾音达到结束条件后调用；将结束状态转为待核心消费的完成事件。
-  void finishTail() {
-    if (!sequenceEnded.exchange(false, std::memory_order_acq_rel))
-      return;
-    isPlaying.store(false, std::memory_order_release);
-    finishedFlag.store(true, std::memory_order_release);
+  bool finishTail() {
+    auto command = renderCommand;
+    return sequenceEnded && renderPlaying &&
+           transportCommand.compare_exchange_strong(
+               command, {command.positionRevision, nextPlayback(command, Playback::finished)});
   }
 
+  // Postconditions: 定位命令尚未被渲染消费时返回已请求的位置。
   double getPositionInSamples() const {
-    return currentPositionInSamples.load();
+    const auto revision = transportCommand.load().positionRevision;
+    return renderedPositionRevision.load(std::memory_order_acquire) == revision
+               ? renderedPosition.load(std::memory_order_acquire)
+               : requestedPosition.load(std::memory_order_acquire);
   }
 
   double getDurationInSamples() const {
@@ -216,6 +223,7 @@ public:
     pendingAllNotesOff.store(true);
     pendingStopCleanup.store(false);
     activeNotes = {};
+    activePedals = {};
     recoveryMessages.clear();
     recoveryIndex = 0;
     resetControllersOnCleanup = true;
@@ -254,6 +262,7 @@ private:
     double position = 0.0;
     int index = 0;
     uint32_t generation = 0;
+    uint32_t positionRevision = 0;
     bool emitChase = false;
     juce::MidiBuffer chaseMessages;
   };
@@ -272,6 +281,7 @@ private:
 
   struct SequenceSlot {
     std::unique_ptr<SequenceSnapshot> snapshot;
+    uint32_t positionRevision = 0;
     std::atomic<SlotState> state{SlotState::Free};
   };
 
@@ -283,10 +293,31 @@ private:
   // Ownership: 生产方记录最新序列，避免消费方交接槽位期间读到上一代序列。
   int latestSequenceSlot = -1;
 
-  std::atomic<bool> isPlaying{false};
-  std::atomic<bool> finishedFlag{false};
+  enum class Playback : uint32_t { paused, playing, finished };
+  struct TransportCommand {
+    uint32_t positionRevision = 0;
+    uint32_t playback = 0;
+
+    bool operator==(const TransportCommand &other) const {
+      return positionRevision == other.positionRevision && playback == other.playback;
+    }
+  };
+
+  static constexpr uint32_t playbackMask = 3;
+  static Playback playbackOf(TransportCommand command) {
+    return static_cast<Playback>(command.playback & playbackMask);
+  }
+  static bool isPlaying(TransportCommand command) {
+    return playbackOf(command) == Playback::playing;
+  }
+  static uint32_t nextPlayback(TransportCommand command, Playback playback) {
+    return ((command.playback & ~playbackMask) + playbackMask + 1) |
+           static_cast<uint32_t>(playback);
+  }
+
+  // Invariant: 尾音完成只提交到渲染块对应的播放命令；旧块不能覆盖新定位或播放意图。
+  std::atomic<TransportCommand> transportCommand{};
   std::atomic<bool> sequenceLoaded{false};
-  std::atomic<bool> sequenceEnded{false};
   std::atomic<bool> pendingAllNotesOff{false};
   std::atomic<bool> pendingStopCleanup{false};
   std::atomic<bool> seekOccurred{false};
@@ -300,18 +331,49 @@ private:
   int consumerSeekSlot = 1;
   std::atomic<int> publishedSeekSlot{2};
 
-  std::atomic<double> currentPositionInSamples{0.0};
+  // Ownership: 生产方持有请求位置，消费方持有渲染游标。仅在渲染确认同一代次后读取其位置。
+  std::atomic<double> requestedPosition{0.0};
+  uint32_t nextPositionRevision = 0;
+  std::atomic<double> renderedPosition{0.0};
+  std::atomic<uint32_t> renderedPositionRevision{0};
   std::atomic<double> cachedDurationSamples{0.0};
   std::atomic<double> cachedSampleRate{44100.0};
   std::atomic<uint32_t> nextSequenceGeneration{1};
   int nextMessageIndex = 0;
+  double playbackPosition = 0.0;
+  uint32_t playbackPositionRevision = 0;
   double renderPosition = 0.0;
+  TransportCommand renderCommand;
   bool renderPlaying = false;
+  bool sequenceEnded = false;
   bool resetControllersOnCleanup = false;
   juce::MidiBuffer recoveryMessages;
   int recoveryIndex = 0;
   bool recoveryIsSeek = false;
   std::array<std::array<bool, 128>, 16> activeNotes{};
+  static constexpr std::array<int, 3> pedalControllers{64, 66, 67};
+  std::array<std::array<bool, pedalControllers.size()>, 16> activePedals{};
+
+  uint32_t publishPositionIntent(double position, bool preservePlayback) {
+    requestedPosition.store(position, std::memory_order_release);
+    const auto revision = ++nextPositionRevision;
+    auto previous = transportCommand.load();
+    auto next = previous;
+    do {
+      const auto playback = preservePlayback && isPlaying(previous)
+                                ? Playback::playing : Playback::paused;
+      next = {revision, nextPlayback(previous, playback)};
+    } while (!transportCommand.compare_exchange_weak(previous, next));
+    return revision;
+  }
+
+  void setRenderCursor(double position, uint32_t revision) {
+    playbackPosition = position;
+    playbackPositionRevision = revision;
+    renderedPosition.store(position, std::memory_order_relaxed);
+    renderedPositionRevision.store(revision, std::memory_order_release);
+    sequenceEnded = false;
+  }
 
   static double sanitiseSampleRate(double rate) {
     return rate > 0.0 ? rate : 44100.0;
@@ -379,10 +441,15 @@ private:
       return;
     }
 
-    auto *raw = snapshot.get();
-    sequenceSlots[(size_t)targetSlot].snapshot = std::move(snapshot);
-    sequenceSlots[(size_t)targetSlot].state.store(SlotState::Ready,
-                                                  std::memory_order_release);
+    const auto *raw = snapshot.get();
+    auto &slot = sequenceSlots[(size_t)targetSlot];
+    slot.positionRevision = publishPositionIntent(
+        raw != nullptr ? raw->initialPositionSamples : 0.0, preservePlayingState);
+    slot.snapshot = std::move(snapshot);
+    sequenceLoaded.store(raw != nullptr);
+    cachedDurationSamples.store(raw != nullptr ? raw->durationSamples : 0.0);
+    cachedSampleRate.store(raw != nullptr ? raw->sampleRate : 44100.0);
+    slot.state.store(SlotState::Ready, std::memory_order_release);
 
     const int replacedPending =
         publishedSlot.exchange(targetSlot, std::memory_order_acq_rel);
@@ -396,17 +463,6 @@ private:
         replaced.state.store(SlotState::Free, std::memory_order_release);
       }
     }
-
-    if (!preservePlayingState)
-      isPlaying.store(false);
-
-    finishedFlag.store(false);
-    sequenceEnded.store(false, std::memory_order_release);
-    sequenceLoaded.store(raw != nullptr);
-    cachedDurationSamples.store(raw != nullptr ? raw->durationSamples : 0.0);
-    cachedSampleRate.store(raw != nullptr ? raw->sampleRate : 44100.0);
-    currentPositionInSamples.store(
-        raw != nullptr ? raw->initialPositionSamples : 0.0);
   }
 
   void reclaimRetiredSequences() {
@@ -459,27 +515,57 @@ private:
 
     auto *active = next.snapshot.get();
     nextMessageIndex = active != nullptr ? active->initialMessageIndex : 0;
-    currentPositionInSamples.store(
-        active != nullptr ? active->initialPositionSamples : 0.0);
-    finishedFlag.store(false);
-    sequenceEnded.store(false, std::memory_order_release);
+    setRenderCursor(active != nullptr ? active->initialPositionSamples : 0.0,
+                    next.positionRevision);
   }
 
   void addTrackedEvent(juce::MidiBuffer &buffer,
                        const juce::MidiMessage &message, int sampleOffset) {
     buffer.addEvent(message, sampleOffset);
 
-    if (!message.isNoteOnOrOff())
+    const int channel = message.getChannel() - 1;
+    if (channel < 0)
       return;
 
-    activeNotes[(size_t)(message.getChannel() - 1)]
-               [(size_t)message.getNoteNumber()] = message.isNoteOn();
+    auto &notes = activeNotes[static_cast<size_t>(channel)];
+    if (message.isNoteOnOrOff()) {
+      notes[static_cast<size_t>(message.getNoteNumber())] = message.isNoteOn();
+    } else if (message.isController()) {
+      const int controller = message.getControllerNumber();
+      auto &pedals = activePedals[static_cast<size_t>(channel)];
+      if (controller == 121)
+        pedals.fill(false);
+      else if (controller == 120 || controller >= 123)
+        notes.fill(false);
+      else {
+        for (size_t index = 0; index < pedalControllers.size(); ++index)
+          if (pedalControllers[index] == controller)
+            pedals[index] = message.getControllerValue() != 0;
+      }
+    }
+  }
+
+  void releaseHeldState(juce::MidiBuffer &buffer, int offset) {
+    for (size_t channel = 0; channel < activeNotes.size(); ++channel) {
+      const int midiChannel = static_cast<int>(channel) + 1;
+      const auto &notes = activeNotes[channel];
+      for (size_t note = 0; note < notes.size(); ++note)
+        if (notes[note])
+          addTrackedEvent(buffer, juce::MidiMessage::noteOff(midiChannel, static_cast<int>(note)),
+                          offset);
+
+      const auto &pedals = activePedals[channel];
+      for (size_t index = 0; index < pedals.size(); ++index)
+        if (pedals[index])
+          addTrackedEvent(buffer, juce::MidiMessage::controllerEvent(
+                                      midiChannel, pedalControllers[index], 0), offset);
+    }
   }
 
   void addStateResetMessages(juce::MidiBuffer &buffer,
                              bool resetControllers) {
     for (int channel = 1; channel <= 16; ++channel) {
-      for (int controller : {64, 66, 67})
+      for (int controller : pedalControllers)
         buffer.addEvent(
             juce::MidiMessage::controllerEvent(channel, controller, 0), 0);
 
@@ -515,10 +601,8 @@ private:
     if (active == nullptr || request.generation != active->generation)
       return false;
 
-    currentPositionInSamples.store(request.position);
+    setRenderCursor(request.position, request.positionRevision);
     nextMessageIndex = request.index;
-    finishedFlag.store(false);
-    sequenceEnded.store(false, std::memory_order_release);
 
     if (request.emitChase) {
       recoveryMessages.clear();
@@ -539,21 +623,17 @@ private:
 
   // Ordering: 实时恢复的清理、控制器和踏板分别占用处理块，块内从采样 0 生效。
   // Reason: VST3 将各 CC 转为独立参数队列，同块内的复位与踏板不能依赖 MIDI 排序。
-  bool writeRecoveryMessages(juce::MidiBuffer &buffer, int numSamples, int maxBytes,
-                             ProcessMode mode) {
-    int index = 0, bytes = 0;
+  bool writeRecoveryMessages(juce::MidiBuffer &buffer, int numSamples, ProcessMode mode) {
+    int index = 0;
     int phase = -1;
     bool emitted = false, complete = true;
     for (const auto metadata : recoveryMessages) {
       if (index++ < recoveryIndex)
         continue;
-      if ((mode == ProcessMode::realtime && phase >= 0 &&
-           metadata.samplePosition != phase) ||
-          bytes + metadata.numBytes + 8 > maxBytes) {
+      if (mode == ProcessMode::realtime && phase >= 0 && metadata.samplePosition != phase) {
         complete = false;
         break;
       }
-      bytes += metadata.numBytes + 8;
       phase = metadata.samplePosition;
       addTrackedEvent(buffer, metadata.getMessage(),
                       mode == ProcessMode::realtime ? 0

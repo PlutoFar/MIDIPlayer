@@ -70,6 +70,7 @@ public:
   float getMasterVolume() const { return masterVolume.load(); }
   uint64_t getUnderrunCount() const { return underrunCount.load(); }
   int getRenderLatencySamples() const { return renderLatencySamples.load(); }
+  bool takeRealtimeMidiEventRejection() { return realtimeMidiEventRejected.exchange(false); }
   juce::String getLastPluginError() const {
     const juce::ScopedLock lock(errorLock);
     return lastPluginError;
@@ -89,6 +90,7 @@ public:
     juce::Result finish();
     juce::Result render(juce::AudioBuffer<float> &audio, juce::MidiBuffer &midi);
     double durationSamples() const { return player.getDurationInSamples(); }
+    bool isWaitingForTail() const { return player.isWaitingForTail(); }
     int latencySamples() const { return engine.bridge.getLatencySamples(); }
     float masterGain() const { return engine.getMasterVolume(); }
 
@@ -134,15 +136,16 @@ private:
   double preparedRenderSampleRate = 44100.0;
   std::atomic<uint64_t> underrunCount{0};
   std::atomic<int> renderLatencySamples{0};
+  std::atomic<bool> realtimeMidiEventRejected{false};
   void setLastPluginError(const juce::String &message) {
     const juce::ScopedLock lock(errorLock);
     lastPluginError = message;
   }
   // Preconditions: 专用渲染线程或独占导出中的唯一调用；不得与桥接资源释放并发。
-  // Ordering: MIDI 按宿主块生成，再按共享块容量切分；任一分块失败即返回 `false`。
-  bool renderPluginBlock(MidiPlayer &, MidiPlayer::ProcessMode,
-                         juce::AudioBuffer<float> &, juce::MidiBuffer &,
-                         double sampleRate);
+  // Ordering: 先切分音频帧，再分包传输各帧的 MIDI；输入拒绝与进程故障分别报告。
+  PluginBridge::BlockResult renderPluginBlock(
+      MidiPlayer &, MidiPlayer::ProcessMode, juce::AudioBuffer<float> &,
+      juce::MidiBuffer &, double sampleRate);
   juce::Result prepareForOfflineExport(double sampleRate);
   juce::Result restoreFromOfflineExport();
   void flushPluginStateBeforeUnload();

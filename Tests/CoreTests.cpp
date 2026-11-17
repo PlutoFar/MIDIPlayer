@@ -55,6 +55,9 @@ int runCoreTests() {
     return failures + 1;
   const auto firstId = initial.tracks[0].id;
   const auto secondId = initial.tracks[1].id;
+  expect(failures, core.state().playlist.hasAvailableTracks &&
+                       !core.state().transport.hasSequence,
+         "available export sources must be published before a realtime sequence is loaded");
   expect(failures, openAndWait(core, second) == true,
          "a valid MIDI should publish through the background command");
   expect(failures, core.state().transport.hasSequence &&
@@ -120,6 +123,43 @@ int runCoreTests() {
   expect(failures, core.removeTrack(snapshot.tracks[0].id) &&
                        !core.state().transport.hasSequence,
          "removing the current track should clear its playback sequence");
+
+  const auto movedThird = third.withFileExtension(".moved");
+  if (!third.moveFileTo(movedThird))
+    throw std::runtime_error("Could not move MIDI fixture");
+  expect(failures, core.exportPlaylistState().tracks.empty() &&
+                       !core.state().playlist.hasAvailableTracks,
+         "a file moved after insertion must be excluded from export selection");
+  if (!movedThird.moveFileTo(third))
+    throw std::runtime_error("Could not restore MIDI fixture");
+  expect(failures, core.refreshTrack(0).wasOk() && core.state().playlist.hasAvailableTracks,
+         "refreshing a restored MIDI must make it selectable without loading the sequence");
+
+  PlaylistManager order;
+  PlaylistManager::Tracks entries;
+  entries.add({first, "A", true});
+  entries.add({second, "B", false});
+  entries.add({third, "C", true});
+  order.replace(std::move(entries));
+  using Advance = PlaylistManager::Advance;
+  expect(failures, order.playbackCandidates(0, Advance::next) == std::vector<int>({1, 2}) &&
+                       order.playbackCandidates(0, Advance::natural) == std::vector<int>({1, 2}) &&
+                       order.playbackCandidates(2, Advance::previous) == std::vector<int>({1, 0}) &&
+                       order.playbackCandidates(2, Advance::next).empty(),
+         "sequential navigation must keep looking beyond an unavailable row up to its boundary");
+  order.setPlaybackMode(midi::PlaybackMode::LoopList);
+  expect(failures, order.playbackCandidates(2, Advance::natural) == std::vector<int>({0, 1, 2}),
+         "loop navigation must wrap and visit each candidate exactly once");
+  order.setPlaybackMode(midi::PlaybackMode::LoopSingle);
+  expect(failures, order.playbackCandidates(1, Advance::natural) == std::vector<int>({1}) &&
+                       order.playbackCandidates(1, Advance::next) == std::vector<int>({1, 2, 0}) &&
+                       order.playbackCandidates(2, Advance::previous) == std::vector<int>({1, 0, 2}),
+         "single-track loop must preserve normal repeats and provide manual recovery candidates");
+  order.setPlaybackMode(midi::PlaybackMode::Shuffle);
+  const auto shuffled = order.playbackCandidates(0, Advance::next);
+  expect(failures, shuffled == std::vector<int>({1, 2, 0}) ||
+                       shuffled == std::vector<int>({2, 1, 0}),
+         "shuffle must try all alternatives once before repeating the current track");
   return failures;
 }
 

@@ -1,5 +1,6 @@
 #include "TestHarness.h"
 #include "TestMidiEvents.h"
+#include "AudioEngine/PluginLibrary.h"
 #include "PluginBridge/PluginBridgeClient.h"
 #include "PluginBridge/PluginListSupport.h"
 #include "PluginBridge/PluginScanProcess.h"
@@ -155,6 +156,8 @@ private:
 
   void runRenderLoop() {
     juce::MidiBuffer midi;
+    juce::AudioBuffer<float> audio(1, PluginBridge::SharedBlockLayout::maxSamples);
+    bool awaitingMidiPackets = false;
     while (!renderThread.threadShouldExit() && sharedBlock != nullptr) {
       if (sharedBlock->waitForRequest(-1) != PluginBridge::WaitResult::signalled)
         return;
@@ -167,15 +170,22 @@ private:
         juce::Thread::sleep(firstRenderDelayMs);
       }
 
-      for (auto &channel : block.audio)
-        juce::FloatVectorOperations::clear(channel, block.header.blockSize);
-      const bool decoded = PluginBridge::readMidiBuffer(
+      if (!awaitingMidiPackets)
+        midi.clear();
+      const bool decoded = PluginBridge::appendMidiPacket(
           block.midi, block.header.midiBytes, midi, block.header.blockSize);
-      if (decoded)
-        for (const auto event : midi)
-          if (event.getMessage().isNoteOn())
-            for (auto &channel : block.audio)
-              channel[event.samplePosition] = 0.5f;
+      awaitingMidiPackets = block.header.hasMoreMidi;
+      if (decoded && !awaitingMidiPackets) {
+        audio.setSize(1, block.header.blockSize, false, false, true);
+        audio.clear();
+        for (const auto event : midi) {
+          const auto message = event.getMessage();
+          if (message.isNoteOnOrOff())
+            audio.setSample(0, event.samplePosition,
+                            message.isNoteOn() ? 0.5f : 0.0f);
+        }
+        PluginBridge::copyWorkerOutput(audio, 1, block);
+      }
       block.header.resultCode = static_cast<int>(
           decoded ? PluginBridge::StatusCode::ok : PluginBridge::StatusCode::renderFailed);
       block.header.responseSequence = block.header.requestSequence;
@@ -234,18 +244,50 @@ int runPluginBridgeTests() {
     scannedPlugin.pluginFormatName = "VST3";
     scannedPlugin.fileOrIdentifier = directory.path.getChildFile("Fixture.vst3").getFullPathName();
     scannedPlugin.uniqueId = 1;
+    scannedPlugin.isInstrument = true;
+    scannedPlugin.category = "Instrument|Synth";
     expect(source.addType(scannedPlugin), "the scanner fixture catalog should contain one plugin");
+    auto effect = scannedPlugin;
+    effect.name = "EQ fixture";
+    const auto effectFile = directory.path.getChildFile("EQ.vst3");
+    expect(effectFile.createDirectory(), "the effect bundle fixture should exist");
+    effect.fileOrIdentifier = effectFile.getFullPathName();
+    effect.lastFileModTime = effectFile.getLastModificationTime();
+    effect.uniqueId = 2;
+    effect.category = "Fx|EQ";
+    effect.isInstrument = false;
+    expect(source.addType(effect), "the scanner fixture catalog should include an effect");
+    const auto savedCache = directory.path.getChildFile("Plugins.xml");
+    expect(source.createXml()->writeTo(savedCache), "the mixed plugin cache should be written");
+    PluginLibrary library(savedCache);
+    const auto instruments = library.instruments();
+    expect(instruments.size() == 1 && instruments[0].isInstrument &&
+               library.findInstrument(scannedPlugin.createIdentifierString()).has_value() &&
+               !library.findInstrument(effect.createIdentifierString()).has_value(),
+           "the available instrument list and load lookup should exclude effects");
+    juce::KnownPluginList rescanInput;
+    library.copyPluginListTo(rescanInput);
+    juce::VST3PluginFormat vst3Format;
+    expect(rescanInput.getNumTypes() == 2 &&
+               rescanInput.isListingUpToDate(effect.fileOrIdentifier, vst3Format),
+           "the incremental scan input should retain the effect bundle and its timestamp");
     const auto testExe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
-    expect(PluginBridge::scanPluginListInChildProcess(source, destination, {}, testExe).wasOk() &&
-               destination.getNumTypes() == 1,
-           "scanner output larger than the pipe buffer should allow catalog publication");
+    expect(PluginBridge::scanPluginListInChildProcess(rescanInput, destination, {}, testExe).wasOk() &&
+               destination.getNumTypes() == 2 &&
+               destination.isListingUpToDate(effect.fileOrIdentifier, vst3Format),
+           "scanner publication should retain complete scan records");
+    if (const auto result = destination.createXml())
+      library.publishPluginList(*result);
+    expect(library.instruments().size() == 1 &&
+               !library.findInstrument(effect.createIdentifierString()).has_value(),
+           "publishing the complete scan should only expose available instruments");
 
     juce::KnownPluginList empty;
     setTestEnvironmentVariable(L"MIDI_PLAYER_TEST_SCAN_FAIL", L"1");
     const auto failed = PluginBridge::scanPluginListInChildProcess(empty, destination, {}, testExe);
     clearTestEnvironmentVariable(L"MIDI_PLAYER_TEST_SCAN_FAIL");
     expect(failed.failed() && failed.getErrorMessage().contains("scanner fixture failure marker") &&
-               destination.getNumTypes() == 1,
+               destination.getNumTypes() == 2,
            "a failed scan should include the final diagnostic and keep the previous catalog");
 
     const auto ready = directory.path.getChildFile("scanner-ready");
@@ -253,7 +295,7 @@ int runPluginBridgeTests() {
     const auto cancelled = PluginBridge::scanPluginListInChildProcess(
         empty, destination, [&] { return ready.existsAsFile(); }, testExe);
     clearTestEnvironmentVariable(L"MIDI_PLAYER_TEST_SCAN_READY");
-    expect(cancelled.failed() && ready.existsAsFile() && destination.getNumTypes() == 1,
+    expect(cancelled.failed() && ready.existsAsFile() && destination.getNumTypes() == 2,
            "cancellation after heavy output should finish without publishing a catalog");
   }
 
@@ -337,7 +379,10 @@ int runPluginBridgeTests() {
          "plugin worker command line should be recognised");
   expect(!PluginBridge::isPluginWorkerCommandLine(
              "--worker modern-midi-player-plugin-worker-v1"),
-         "stale v1 workers should be rejected by the v2 host protocol");
+         "stale v1 workers should be rejected by the current host protocol");
+  expect(!PluginBridge::isPluginWorkerCommandLine(
+             "--worker modern-midi-player-plugin-worker-v3"),
+         "workers using the old shared MIDI layout should be rejected");
   expect(!PluginBridge::isPluginWorkerCommandLine("C:\\song.mid"),
          "regular MIDI file command line should not start worker mode");
 
@@ -367,14 +412,38 @@ int runPluginBridgeTests() {
 
     juce::AudioBuffer<float> buffer(2, 64);
     juce::MidiBuffer midi;
-    expect(bridgeClient.processBlock(midi, buffer, 48000.0),
+    using BlockResult = PluginBridge::BlockResult;
+    expect(bridgeClient.processBlock(midi, buffer, 48000.0) == BlockResult::rendered,
            "the render thread should wait for a delayed block without dropping it");
     expect(bridgeClient.getStatus() == PluginBridge::BridgeStatus::ready,
            "one late realtime render should keep the worker recoverable");
-    expect(bridgeClient.processBlock(midi, buffer, 48000.0),
+    expect(bridgeClient.processBlock(midi, buffer, 48000.0) == BlockResult::rendered,
            "the next request should render after the previous request completes");
     expect(bridgeClient.getStatus() == PluginBridge::BridgeStatus::ready,
            "late render recovery should keep the bridge ready");
+
+    const auto note = juce::MidiMessage::noteOn(1, 60, (juce::uint8)100);
+    midi.addEvent(note, 3);
+    midi.addEvent(note, 7);
+    for (int index = 0; index < 900; ++index)
+      midi.addEvent(juce::MidiMessage::controllerEvent(1, 1, index % 128), 7);
+    midi.addEvent(juce::MidiMessage::noteOff(1, 60), 7);
+    midi.addEvent(note, 13);
+    expect(bridgeClient.processBlock(midi, buffer, 48000.0) == BlockResult::rendered &&
+               buffer.getSample(0, 3) == 0.5f && buffer.getSample(0, 7) == 0.0f &&
+               buffer.getSample(1, 13) == 0.5f,
+           "MIDI packets should render together, preserving sample offsets and same-sample order");
+    juce::MemoryBlock sysEx(PluginBridge::MidiPacketLimits::maxEventBytes - 1, true);
+    midi.addEvent(juce::MidiMessage::createSysExMessage(
+                      sysEx.getData(), static_cast<int>(sysEx.getSize())), 20);
+    expect(bridgeClient.processBlock(midi, buffer, 48000.0) == BlockResult::midiEventTooLarge &&
+               bridgeClient.isPluginLoaded() && buffer.getMagnitude(0, 64) == 0.0f,
+           "an oversized single MIDI event should fail before rendering with the worker intact");
+    midi.clear();
+    midi.addEvent(note, 19);
+    expect(bridgeClient.processBlock(midi, buffer, 48000.0) == BlockResult::rendered &&
+               buffer.getSample(0, 3) == 0.0f && buffer.getSample(0, 19) == 0.5f,
+           "the next render should start with a fresh MIDI block after rejection");
     bridgeClient.unloadPlugin();
     bridgeClient.stop();
     clearTestEnvironmentVariable(
@@ -528,26 +597,27 @@ int runPluginBridgeTests() {
          "a 4096-sample host block should use four bridge chunks");
   expect(PluginBridge::getSharedBlockChunkSize(2560, 2048) == 512,
          "the final bridge chunk should contain the remaining samples");
-  expect(PluginBridge::getWorkerProcessChannelCount(22) == 22,
-         "multi-output instruments should process with their full output count");
-  expect(PluginBridge::getWorkerProcessChannelCount(1) ==
-             PluginBridge::SharedBlockLayout::maxChannels,
-         "mono instruments should still render into the stereo bridge output");
-  expect(PluginBridge::shouldUseExplicitStereoHostConfig(2),
-         "stereo instruments should use the explicit stereo host layout");
-  expect(!PluginBridge::shouldUseExplicitStereoHostConfig(22),
-         "multi-output instruments should keep their default bus layout");
+  PluginBridge::SharedBlock shared;
+  juce::AudioBuffer<float> workerAudio(22, 64);
+  workerAudio.clear();
+  workerAudio.setSample(0, 5, 0.2f);
+  workerAudio.setSample(1, 5, 0.3f);
+  PluginBridge::copyWorkerOutput(workerAudio, 1, shared);
+  expect(shared.audio[0][5] == 0.2f && shared.audio[1][5] == 0.2f,
+         "a mono main bus should feed both channels even with additional buffer channels");
+  PluginBridge::copyWorkerOutput(workerAudio, 2, shared);
+  expect(shared.audio[0][5] == 0.2f && shared.audio[1][5] == 0.3f,
+         "a stereo main bus should preserve its left and right channels");
 
   juce::MidiBuffer bridgeMidi;
   bridgeMidi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)100), 7);
   bridgeMidi.addEvent(juce::MidiMessage::controllerEvent(1, 64, 127), 11);
-  unsigned char midiBytes[PluginBridge::SharedBlockLayout::maxMidiBytes]{};
-  const int written = PluginBridge::writeMidiBuffer(
-      bridgeMidi, midiBytes, PluginBridge::SharedBlockLayout::maxMidiBytes);
+  auto nextMidi = bridgeMidi.cbegin();
+  const int written = PluginBridge::writeMidiPacket(nextMidi, bridgeMidi.cend(), shared.midi, 0);
   expect(written > 0, "bridge MIDI serialization should write bytes");
   juce::MidiBuffer decodedBridgeMidi;
-  const bool decodedBridgeOk = PluginBridge::readMidiBuffer(
-      midiBytes, written, decodedBridgeMidi, 1024);
+  const bool decodedBridgeOk = PluginBridge::appendMidiPacket(
+      shared.midi, written, decodedBridgeMidi, 1024);
   expect(decodedBridgeOk &&
              findNoteSamplePosition(decodedBridgeMidi, true, 1, 60) == 7,
          "bridge MIDI serialization should preserve note sample position");
@@ -561,12 +631,12 @@ int runPluginBridgeTests() {
       juce::MidiMessage::noteOn(1, 61, (juce::uint8)100), 1100);
   rangedBridgeMidi.addEvent(
       juce::MidiMessage::noteOn(1, 62, (juce::uint8)100), 2500);
-  const int rangedBytes = PluginBridge::writeMidiBufferRange(
-      rangedBridgeMidi, midiBytes, PluginBridge::SharedBlockLayout::maxMidiBytes,
-      1024, 1024);
+  auto rangedNext = rangedBridgeMidi.findNextSamplePosition(1024);
+  const int rangedBytes = PluginBridge::writeMidiPacket(
+      rangedNext, rangedBridgeMidi.findNextSamplePosition(2048), shared.midi, 1024);
   juce::MidiBuffer decodedRange;
-  const bool decodedRangeOk = PluginBridge::readMidiBuffer(
-      midiBytes, rangedBytes, decodedRange, 1024);
+  const bool decodedRangeOk = PluginBridge::appendMidiPacket(
+      shared.midi, rangedBytes, decodedRange, 1024);
   expect(decodedRangeOk &&
              findNoteSamplePosition(decodedRange, true, 1, 61) == 76,
          "bridge chunk serialization should rebase MIDI sample positions");

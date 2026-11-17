@@ -1,4 +1,5 @@
 #include "CoreImpl.h"
+#include <unordered_map>
 
 namespace midi {
 
@@ -18,6 +19,10 @@ juce::File fileFromPath(const std::wstring &path) {
 
 std::wstring pathToW(const juce::File &file) {
   return toW(file.getFullPathName());
+}
+
+PlaylistEntry toPlaylistEntry(const PlaylistManager::Track &track) {
+  return {track.id, toW(track.name), pathToW(track.file), track.available};
 }
 
 } // namespace
@@ -45,6 +50,8 @@ AppState Core::Impl::buildState() {
   s.transport.currentTrackIndex = currentTrackIndex();
   s.transport.currentMidiName = toW(loadedTrack.source.getFileNameWithoutExtension());
   s.transport.lastError = toW(midiErrorText);
+  s.transport.skippedTracks = midiSkippedTracks;
+  s.transport.skipRevision = midiSkipRevision;
 
   s.playlist = buildPlaylistSummary();
 
@@ -71,15 +78,54 @@ PlaylistState Core::Impl::buildPlaylistState() {
   result.currentTrackIndex = currentTrackIndex();
   result.tracks.reserve(static_cast<size_t>(playlist.size()));
   for (const auto &track : playlist.getTracks())
-    result.tracks.push_back({track.id, toW(track.name), pathToW(track.file),
-                             track.available});
+    result.tracks.push_back(toPlaylistEntry(track));
+  return result;
+}
+
+PlaylistState Core::Impl::buildExportPlaylistState() {
+  struct FileCheck {
+    juce::File file;
+    uint64_t observation;
+    bool present = false;
+  };
+  std::unordered_map<TrackId, FileCheck> checks;
+  {
+    StateLock lock(stateMutex);
+    for (const auto &track : playlist.getTracks())
+      if (track.available)
+        checks.emplace(track.id, FileCheck{track.file, track.availabilityObservation});
+  }
+
+  // Concurrency: 慢盘和网络路径的文件探测不持有核心锁。
+  for (auto &entry : checks)
+    entry.second.present = entry.second.file.existsAsFile();
+
+  StateLock lock(stateMutex);
+  PlaylistState result;
+  result.tracks.reserve(checks.size());
+  for (int index = 0; index < playlist.size(); ++index) {
+    const auto &track = *playlist.getTrack(index);
+    const auto checked = checks.find(track.id);
+    if (checked == checks.end())
+      continue;
+    // Ordering: 保留探测期间完成的加载或刷新结果，即使可用性值相同。
+    if (track.availabilityObservation == checked->second.observation)
+      playlist.setTrackAvailable(index, checked->second.present);
+    if (!track.available)
+      continue;
+    if (track.id == loadedTrack.id)
+      result.currentTrackIndex = static_cast<int>(result.tracks.size());
+    result.tracks.push_back(toPlaylistEntry(track));
+  }
+  static_cast<PlaylistSummary &>(result) = buildPlaylistSummary();
   return result;
 }
 
 PlaylistSummary Core::Impl::buildPlaylistSummary() const {
   return {playlist.hasChanges(), toW(playlist.getChangeSummary()),
           pathToW(currentPlaylistFile), toW(playlistErrorText),
-          static_cast<int>(playlist.getPlaybackMode())};
+          static_cast<int>(playlist.getPlaybackMode()),
+          playlist.hasAvailableTracks(), playlist.getAvailabilityRevision()};
 }
 
 // ---- facade ----
@@ -90,6 +136,7 @@ Core::~Core() = default;
 
 AppState Core::state() const { return impl->buildState(); }
 PlaylistState Core::playlistState() const { return impl->buildPlaylistState(); }
+PlaylistState Core::exportPlaylistState() const { return impl->buildExportPlaylistState(); }
 
 void Core::setScrubbing(bool active) {
   impl->scrubbing = active;
@@ -102,7 +149,7 @@ juce::Result Core::scan(std::function<bool()> shouldCancel) {
 std::vector<PluginInfo> Core::plugins() const {
   Impl::StateLock lock(impl->stateMutex);
   std::vector<PluginInfo> result;
-  for (const auto &type : impl->library.plugins().getTypes())
+  for (const auto &type : impl->library.instruments())
     result.push_back({toW(type.createIdentifierString()), toW(type.name),
                       toW(type.manufacturerName), toW(type.pluginFormatName)});
   return result;
@@ -137,13 +184,13 @@ void Core::cancelPendingPluginOperation() {
 // player
 bool Core::openMidi(const std::wstring &path, std::function<void(bool)> completion) {
   Impl::StateLock lock(impl->stateMutex);
-  return impl->beginMidiLoad(fileFromPath(path), 0, std::move(completion));
+  return impl->beginMidiLoad({{fileFromPath(path)}}, std::move(completion));
 }
 bool Core::openMidiFromShell(const std::wstring &path,
                              std::function<void()> onPluginMissing,
                              std::function<void(bool)> completion) {
   Impl::StateLock lock(impl->stateMutex);
-  return impl->beginMidiLoad(fileFromPath(path), 0,
+  return impl->beginMidiLoad({{fileFromPath(path)}},
                              std::move(completion), std::move(onPluginMissing));
 }
 void Core::play() { impl->play(); }
@@ -158,8 +205,9 @@ void Core::playTrack(TrackId id) {
       !impl->audio.hasDevice() || !impl->engine.hasPluginLoaded() ||
       impl->engine.requiresPrepare())
     return;
-  if (const auto *track = impl->playlist.getTrack(impl->playlist.findTrackIndex(id)))
-    impl->beginMidiLoad(track->file, track->id);
+  const int index = impl->playlist.findTrackIndex(id);
+  if (const auto *track = impl->playlist.getTrack(index))
+    impl->beginMidiLoad({{track->file, index}});
 }
 void Core::seek(double ratio) { impl->seek(ratio); }
 void Core::volume(float value) { impl->volume(value); }

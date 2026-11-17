@@ -211,6 +211,32 @@ int runMidiPlaybackTests() {
   expect(pauseResumePlayer.getPositionInSamples() == draggedPausedPosition,
          "resume reconstruction should preserve the seek target");
 
+  pauseResumePlayer.setPlaying(false);
+  pauseResumePlayer.seekTo(750.0);
+  expect(pauseResumePlayer.getPositionInSamples() == 750.0,
+         "a pending paused seek must take precedence over the last rendered cursor");
+  pauseResumePlayer.seekTo(pauseResumePlayer.getPositionInSamples(), true);
+  pauseResumePlayer.setPlaying(true);
+  juce::MidiBuffer pendingResumeChase;
+  pauseResumePlayer.processBlock(pendingResumeChase, 128);
+  expect(pauseResumePlayer.getPositionInSamples() == 750.0,
+         "resume before the next render block must keep the pending seek target");
+
+  pauseResumePlayer.setPlaying(false);
+  pauseResumePlayer.seekTo(750.0);
+  pauseResumePlayer.setSampleRate(2000.0);
+  expect(pauseResumePlayer.getPositionInSamples() == 1500.0,
+         "a sample rate change must rescale the pending seek rather than the old cursor");
+  pauseResumePlayer.seekTo(0.0);
+  pauseResumePlayer.seekTo(pauseResumePlayer.getPositionInSamples(), true);
+  pauseResumePlayer.setPlaying(true);
+  juce::MidiBuffer restartCleanup, restartedPlayback;
+  pauseResumePlayer.processBlock(restartCleanup, 128);
+  pauseResumePlayer.processBlock(restartedPlayback, 128);
+  expect(findNoteSamplePosition(restartedPlayback, true, 1, 65) == 0 &&
+             pauseResumePlayer.getPositionInSamples() == 128.0,
+         "stop and play in the same render interval must restart at sample zero");
+
   MidiPlayer releasedNotePlayer;
   auto releasedNoteSequence = std::make_unique<juce::MidiMessageSequence>();
   addEvent(*releasedNoteSequence,
@@ -229,28 +255,44 @@ int runMidiPlaybackTests() {
   expect(!containsNoteOff(releasedNoteCleanup, 1, 63),
          "cleanup should not repeat a note-off already sent during playback");
 
-  MidiPlayer unfinishedNotePlayer;
-  auto unfinishedNoteSequence = std::make_unique<juce::MidiMessageSequence>();
-  addEvent(*unfinishedNoteSequence,
-           juce::MidiMessage::noteOn(1, 64, (juce::uint8)100), 0.0);
-  addEvent(*unfinishedNoteSequence,
-           juce::MidiMessage::controllerEvent(1, 1, 0), 0.1);
-  unfinishedNotePlayer.setSequence(std::move(unfinishedNoteSequence), 1000.0);
-  unfinishedNotePlayer.setPlaying(true);
-  juce::MidiBuffer unfinishedNotePlayback;
-  unfinishedNotePlayer.processBlock(unfinishedNotePlayback, 128);
-  expect(unfinishedNotePlayer.isWaitingForTail(),
-         "a naturally ended sequence should keep rendering its plugin tail");
-  expect(!unfinishedNotePlayer.hasFinished(),
-         "track completion should wait for the measured plugin tail");
-  unfinishedNotePlayer.finishTail();
-  expect(unfinishedNotePlayer.hasFinished(),
-         "tail completion should publish the natural track end");
-  unfinishedNotePlayer.triggerStopCleanup();
-  juce::MidiBuffer unfinishedNoteCleanup;
-  unfinishedNotePlayer.processBlock(unfinishedNoteCleanup, 128);
-  expect(containsNoteOff(unfinishedNoteCleanup, 1, 64),
-         "track-end cleanup should release an unmatched active note");
+  for (const auto mode : {MidiPlayer::ProcessMode::realtime, MidiPlayer::ProcessMode::offline}) {
+    MidiPlayer tailPlayer;
+    auto tailSequence = std::make_unique<juce::MidiMessageSequence>();
+    addEvent(*tailSequence, juce::MidiMessage::noteOn(1, 63, (juce::uint8)100), 0.0);
+    addEvent(*tailSequence, juce::MidiMessage::controllerEvent(1, 64, 127), 0.0);
+    addEvent(*tailSequence, juce::MidiMessage::controllerEvent(2, 66, 127), 0.001);
+    addEvent(*tailSequence, juce::MidiMessage::controllerEvent(2, 67, 36), 0.002);
+    addEvent(*tailSequence, juce::MidiMessage::controllerEvent(3, 64, 127), 0.0);
+    addEvent(*tailSequence, juce::MidiMessage::controllerEvent(3, 121, 0), 0.002);
+    addEvent(*tailSequence, juce::MidiMessage::noteOff(1, 63), 0.05);
+    addEvent(*tailSequence, juce::MidiMessage::noteOn(1, 64, (juce::uint8)100), 0.128);
+    tailPlayer.setSequence(std::move(tailSequence), 1000.0);
+    tailPlayer.setPlaying(true);
+    juce::MidiBuffer playback, lastEvent, release;
+    tailPlayer.processBlock(playback, 128, mode);
+    expect(!tailPlayer.isWaitingForTail(),
+           "a final event on a render block boundary must remain pending");
+    tailPlayer.processBlock(lastEvent, 1, mode);
+    expect(findNoteSamplePosition(lastEvent, true, 1, 64) == 0 && !tailPlayer.isWaitingForTail(),
+           "tail release must follow the note-on at the end of the sequence");
+    tailPlayer.processBlock(release, 128, mode);
+    expect(findNoteSamplePosition(release, false, 1, 64) == 0 &&
+               containsController(release, 1, 64, 0) &&
+               containsController(release, 2, 66, 0) &&
+               containsController(release, 2, 67, 0) &&
+               release.getNumEvents() == 4 && !tailPlayer.consumeCleanupOccurred(),
+           "natural end should release only held keys and pedals without cutting the tail");
+    expect(tailPlayer.isWaitingForTail() && !tailPlayer.hasFinished(),
+           "track completion should wait for the measured plugin tail");
+    if (mode == MidiPlayer::ProcessMode::realtime) {
+      tailPlayer.seekTo(50.0);
+      expect(!tailPlayer.finishTail() && tailPlayer.getPlaying(),
+             "a stale tail completion must not cancel a newer seek");
+    } else {
+      expect(tailPlayer.finishTail() && tailPlayer.hasFinished() && !tailPlayer.hasFinished(),
+             "tail completion should publish the natural track end once");
+    }
+  }
 
   MidiPlayer sysExPlayer;
   auto sysExSequence = std::make_unique<juce::MidiMessageSequence>();

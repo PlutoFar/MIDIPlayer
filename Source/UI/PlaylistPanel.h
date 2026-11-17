@@ -142,6 +142,11 @@ public:
 
   int getCurrentTrackIndex() const { return currentTrackIndex; }
 
+  void refreshTrackAvailability(uint64_t revision) {
+    if (playlistState.availabilityRevision != revision && animationState.getRemovingRow() < 0)
+      refresh();
+  }
+
   void refresh() {
     animationState.clearRemoval();
     playlistState = core.playlistState();

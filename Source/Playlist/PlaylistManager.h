@@ -2,9 +2,11 @@
 
 #include "PlaybackMode.h"
 #include "TrackId.h"
+#include "../Utils/AtomicTextFile.h"
 
 #include <juce_data_structures/juce_data_structures.h>
 #include <optional>
+#include <vector>
 
 // Responsibilities: 曲目顺序、可用性、未保存变更及 JSON 持久化；不控制音频播放。
 // Ownership: 持有曲目记录；返回的指针/引用只在下一次列表修改前有效。
@@ -16,8 +18,10 @@ public:
     juce::String name;
     bool available = false;
     midi::TrackId id = 0;
+    uint64_t availabilityObservation = 0;
   };
   using Tracks = juce::Array<Track>;
+  enum class Advance { next, previous, natural };
 
   struct ChangeLog {
     // Contract: 只表示尚未保存的增删/排序摘要，成功保存或加载后归零。
@@ -56,6 +60,7 @@ public:
       return juce::Result::fail(L"文件已在播放列表中");
 
     tracks.add({file, file.getFileNameWithoutExtension(), true, ++nextTrackId});
+    ++availableTrackCount;
     changeLog.added++;
     ++revision;
     return juce::Result::ok();
@@ -67,6 +72,7 @@ public:
     if (index < 0 || index >= tracks.size())
       return false;
 
+    availableTrackCount -= tracks.getReference(index).available;
     tracks.remove(index);
     changeLog.removed++;
     ++revision;
@@ -91,6 +97,7 @@ public:
     if (!tracks.isEmpty()) {
       changeLog.removed += tracks.size();
       tracks.clear();
+      availableTrackCount = 0;
       ++revision;
     }
   }
@@ -100,6 +107,8 @@ public:
 
   int size() const { return tracks.size(); }
   bool isEmpty() const { return tracks.isEmpty(); }
+  bool hasAvailableTracks() const { return availableTrackCount > 0; }
+  uint64_t getAvailabilityRevision() const { return availabilityRevision; }
 
   const Track *getTrack(int index) const {
     if (index < 0 || index >= tracks.size())
@@ -157,11 +166,21 @@ public:
     if (index < 0 || index >= tracks.size())
       return juce::Result::fail(L"曲目已不在播放列表中");
     auto &t = tracks.getReference(index);
-    t.available = t.file.existsAsFile();
+    setTrackAvailable(index, t.file.existsAsFile());
     if (!t.available)
       return juce::Result::fail(L"文件不存在或不可用");
     t.name = t.file.getFileNameWithoutExtension();
     return juce::Result::ok();
+  }
+
+  void setTrackAvailable(int index, bool available) {
+    auto &track = tracks.getReference(index);
+    ++track.availabilityObservation;
+    if (track.available == available)
+      return;
+    track.available = available;
+    availableTrackCount += available ? 1 : -1;
+    ++availabilityRevision;
   }
 
   // Ordering: JSON 完整写入并关闭临时文件后替换目标。
@@ -176,43 +195,8 @@ public:
       root->setProperty("version", 1);
       root->setProperty("tracks", trackList);
 
-      auto tempFile = file.getSiblingFile(file.getFileName() + ".tmp");
-      if (tempFile.exists() && !tempFile.deleteFile())
-        return juce::Result::fail(
-            "Unable to delete stale playlist temp file: " +
-            tempFile.getFullPathName());
-
-      auto stream = tempFile.createOutputStream();
-      if (stream == nullptr)
-        return juce::Result::fail("Unable to open playlist for writing: " +
-                                  tempFile.getFullPathName());
-
-      if (!stream->setPosition(0) || stream->truncate().failed()) {
-        const auto error = stream->getStatus().getErrorMessage();
-        stream.reset();
-        tempFile.deleteFile();
-        return juce::Result::fail(
-            "Unable to reset playlist temp file: " +
-            (error.isNotEmpty() ? error : tempFile.getFullPathName()));
-      }
-
-      juce::JSON::writeToStream(*stream, juce::var(root.get()), true);
-      stream->flush();
-      if (stream->getStatus().failed()) {
-        const auto error = stream->getStatus().getErrorMessage();
-        stream.reset();
-        tempFile.deleteFile();
-        return juce::Result::fail("Unable to write playlist JSON: " + error);
-      }
-      stream.reset();
-
-      if (!tempFile.replaceFileIn(file)) {
-        tempFile.deleteFile();
-        return juce::Result::fail("Unable to replace playlist file: " +
-                                  file.getFullPathName());
-      }
-
-      return juce::Result::ok();
+      return midi::writeTextFileAtomically(
+          file, juce::JSON::toString(juce::var(root.get()), true));
     } catch (...) {
       return juce::Result::fail("Unexpected exception while saving playlist: " +
                                 file.getFullPathName());
@@ -270,8 +254,11 @@ public:
   }
 
   void replace(Tracks loadedTracks) {
-    for (auto &track : loadedTracks)
+    availableTrackCount = 0;
+    for (auto &track : loadedTracks) {
       track.id = ++nextTrackId;
+      availableTrackCount += track.available;
+    }
     tracks.swapWith(loadedTracks);
     ++revision;
     changeLog.reset();
@@ -287,55 +274,46 @@ public:
   void setPlaybackMode(midi::PlaybackMode mode) { currentMode = mode; }
   midi::PlaybackMode getPlaybackMode() const { return currentMode; }
 
-  // Postconditions: 空列表或连续播放到末尾返回 -1；随机模式在多曲目时排除当前有效索引。
-  int getNextIndex(int currentIndex) const {
-    if (tracks.isEmpty())
-      return -1;
+  // Contract: 每个候选索引只出现一次。真实文件可用性由加载方判断。
+  std::vector<int> playbackCandidates(int currentIndex, Advance advance) const {
+    using midi::PlaybackMode;
+    const int count = tracks.size();
+    const bool hasCurrent = juce::isPositiveAndBelow(currentIndex, count);
+    if (currentMode == PlaybackMode::LoopSingle && advance == Advance::natural && hasCurrent)
+      return {currentIndex};
 
-    switch (currentMode) {
-    case midi::PlaybackMode::LoopSingle:
-      return juce::isPositiveAndBelow(currentIndex, tracks.size())
-                 ? currentIndex
-                 : 0;
-
-    case midi::PlaybackMode::Shuffle: {
-      if (tracks.size() == 1)
-        return 0;
-      if (!juce::isPositiveAndBelow(currentIndex, tracks.size()))
-        return juce::Random::getSystemRandom().nextInt(tracks.size());
-      const int next =
-          juce::Random::getSystemRandom().nextInt(tracks.size() - 1);
-      return next >= currentIndex ? next + 1 : next;
+    const bool backwards = advance == Advance::previous;
+    std::vector<int> candidates;
+    candidates.reserve(static_cast<size_t>(count));
+    if (currentMode == PlaybackMode::Shuffle && !backwards) {
+      for (int index = 0; index < count; ++index)
+        if (index != currentIndex)
+          candidates.push_back(index);
+      auto &random = juce::Random::getSystemRandom();
+      for (int remaining = static_cast<int>(candidates.size()); remaining > 1; --remaining)
+        std::swap(candidates[remaining - 1], candidates[random.nextInt(remaining)]);
+      if (hasCurrent)
+        candidates.push_back(currentIndex);
+      return candidates;
     }
 
-    case midi::PlaybackMode::LoopList:
-      return (currentIndex + 1) % tracks.size();
-
-    case midi::PlaybackMode::Sequential:
-    default:
-      if (currentIndex >= tracks.size() - 1)
-        return -1;
-      return currentIndex + 1;
+    // 随机模式的上一首仍按列表顺序。单曲循环的下一首先尝试重播当前曲目。
+    const bool wrap = currentMode == PlaybackMode::LoopList ||
+                      currentMode == PlaybackMode::LoopSingle;
+    const int step = backwards ? -1 : 1;
+    int index = hasCurrent ? currentIndex + step : (backwards ? -1 : 0);
+    if (currentMode == PlaybackMode::LoopSingle && !backwards && hasCurrent)
+      index = currentIndex;
+    for (int visited = 0; visited < count; ++visited) {
+      if (!juce::isPositiveAndBelow(index, count)) {
+        if (!wrap)
+          break;
+        index = backwards ? count - 1 : 0;
+      }
+      candidates.push_back(index);
+      index += step;
     }
-  }
-
-  // Contract: 上一曲不维护随机历史；`Shuffle` 与 `Sequential` 按列表前一项处理。
-  int getPreviousIndex(int currentIndex) const {
-    if (tracks.isEmpty())
-      return -1;
-
-    if (currentMode == midi::PlaybackMode::LoopList ||
-        currentMode == midi::PlaybackMode::LoopSingle) {
-      int prev = currentIndex - 1;
-      if (prev < 0)
-        prev = tracks.size() - 1;
-      return prev;
-    }
-
-    int prev = currentIndex - 1;
-    if (prev < 0)
-      return -1;
-    return prev;
+    return candidates;
   }
 
 private:
@@ -344,6 +322,8 @@ private:
   ChangeLog changeLog;
   midi::TrackId nextTrackId = 0;
   uint64_t revision = 0;
+  uint64_t availabilityRevision = 0;
+  int availableTrackCount = 0;
 
 public:
   const ChangeLog &getChangeLog() const { return changeLog; }

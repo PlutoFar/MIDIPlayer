@@ -1,4 +1,5 @@
 #include "PluginLibrary.h"
+#include "../PluginBridge/PluginListSupport.h"
 #include "../Utils/UserSettings.h"
 
 PluginLibrary::PluginLibrary(juce::File cacheFile) : file(std::move(cacheFile)) {
@@ -22,12 +23,26 @@ void PluginLibrary::publishPluginList(const juce::XmlElement &xml) {
   pluginList.recreateFromXml(xml);
 }
 
+juce::Array<juce::PluginDescription> PluginLibrary::instruments() const {
+  auto types = pluginList.getTypes();
+  types.removeIf([](const auto &type) { return !isVst3Instrument(type); });
+  return types;
+}
+
+std::optional<juce::PluginDescription> PluginLibrary::findInstrument(
+    const juce::String &id) const {
+  for (const auto &type : instruments())
+    if (type.createIdentifierString() == id)
+      return type;
+  return std::nullopt;
+}
+
 void PluginLibrary::loadKnownPluginList() {
   if (!file.existsAsFile())
     return;
   const auto tree = juce::XmlDocument::parse(file);
   if (tree != nullptr && tree->hasTagName("KNOWNPLUGINS")) {
-    pluginList.recreateFromXml(*tree);
+    publishPluginList(*tree);
     return;
   }
   juce::Logger::writeToLog(L"插件目录缓存格式无效: " + file.getFullPathName());

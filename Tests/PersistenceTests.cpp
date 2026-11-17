@@ -24,14 +24,30 @@ int runPersistenceTests() {
          "playlist should accept an available MIDI file");
   expect(failures, source.addFile(missing).wasOk(),
          "playlist should accept a second available MIDI file");
-  const auto playlistFile = tempDir.getChildFile("library.json");
+  const auto playlistFile = tempDir.getChildFile(juce::String(L"曲目列表.json"));
+  const auto playlistNeighbour = tempDir.getChildFile(juce::String(L"曲目列表.json.tmp"));
+  expect(failures, playlistNeighbour.replaceWithText("user file"),
+         "playlist test should create an unrelated .tmp file");
   const auto savedRevision = source.getRevision();
   expect(failures, PlaylistManager::write(playlistFile, source.getTracks()).wasOk(),
          "playlist JSON should save atomically");
+  expect(failures, playlistNeighbour.loadFileAsString() == "user file",
+         "playlist save should preserve an adjacent .tmp file");
   expect(failures, source.addFile(playlistFile).failed() && source.size() == 2,
          "import should reject an existing file with an unsupported extension");
   expect(failures, source.addFile(first, true).wasOk(),
          "existing playlist data can contain repeated paths");
+#if JUCE_WINDOWS
+  {
+    juce::FileOutputStream openTarget(playlistFile);
+    expect(failures, openTarget.openedOk(),
+           "playlist test should deny replacing the existing target");
+    const auto failedSave = PlaylistManager::write(playlistFile, source.getTracks());
+    expect(failures, failedSave.failed() &&
+                         failedSave.getErrorMessage().contains(playlistFile.getFullPathName()),
+           "a locked playlist replacement should report the target and leave it readable");
+  }
+#endif
   source.markSaved(savedRevision);
   expect(failures, source.hasChanges(),
          "completion of an older save should preserve later playlist edits");
@@ -81,6 +97,9 @@ int runPersistenceTests() {
          "duplicate paths should receive distinct session identities");
 
   const auto settingsFile = tempDir.getChildFile("Settings.xml");
+  const auto settingsNeighbour = tempDir.getChildFile("Settings.xml.tmp");
+  expect(failures, settingsNeighbour.replaceWithText("user settings file"),
+         "settings test should create an unrelated .tmp file");
   settingsFile.replaceWithText("<broken");
   {
     UserSettings settings(settingsFile);
@@ -159,6 +178,22 @@ int runPersistenceTests() {
     expect(failures, settings.getUIFontSize() == 14.0f,
            "Effective UI font size should clamp to the supported minimum");
   }
+  expect(failures, settingsNeighbour.loadFileAsString() == "user settings file",
+         "settings save should preserve an adjacent .tmp file");
+
+  const auto invalidTarget = tempDir.getChildFile("Directory.xml");
+  expect(failures, invalidTarget.createDirectory().wasOk(),
+         "settings test should create a directory where the target file belongs");
+  {
+    UserSettings settings(invalidTarget);
+    const auto failedSave = settings.saveDetailed();
+    expect(failures, failedSave.failed() && invalidTarget.isDirectory() &&
+                         failedSave.getErrorMessage() == settings.getLastSaveError(),
+           "settings should report failed replacement and preserve the target directory");
+    settings.finishPersistence();
+  }
+  expect(failures, tempDir.findChildFiles(juce::File::findFiles, false, "*_temp*").isEmpty(),
+         "atomic saves should remove their temporary files after success or failure");
 
   tempDir.deleteRecursively();
   return failures;

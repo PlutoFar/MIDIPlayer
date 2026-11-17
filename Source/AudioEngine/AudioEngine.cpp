@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "../PluginBridge/PluginListSupport.h"
 #include "../Utils/AudioThreadPriority.h"
 #include "../Utils/DebugLogger.h"
 #include "ExportAudioProcessing.h"
@@ -72,9 +73,12 @@ juce::Result AudioEngine::OfflineExportSession::finish() {
 
 juce::Result AudioEngine::OfflineExportSession::render(
     juce::AudioBuffer<float> &audio, juce::MidiBuffer &midi) {
-  if (engine.renderPluginBlock(player, MidiPlayer::ProcessMode::offline,
-                               audio, midi, rate))
+  const auto rendered = engine.renderPluginBlock(
+      player, MidiPlayer::ProcessMode::offline, audio, midi, rate);
+  if (rendered == PluginBridge::BlockResult::rendered)
     return juce::Result::ok();
+  if (rendered == PluginBridge::BlockResult::midiEventTooLarge)
+    return juce::Result::fail(PluginBridge::midiEventTooLargeError());
   const auto error = engine.bridge.getLastError();
   return juce::Result::fail(error.isEmpty() ? L"插件进程渲染失败。" : error);
 }
@@ -181,7 +185,7 @@ bool AudioEngine::startRealtimeRenderer(double rate, int devicePeriod) {
   // Reason: 缓存两个设备周期，分别用于当前输出和下一周期的跨进程渲染。
   realtimeAudio.prepare(devicePeriod * 2);
   realtimeBlock.setSize(2, renderQuantum);
-  realtimeMidi.ensureSize(PluginBridge::SharedBlockLayout::maxMidiBytes);
+  realtimeMidi.ensureSize(PluginBridge::MidiPacketLimits::maxPacketBytes);
   outputGain.reset(rate, 0.01);
   outputGain.setCurrentAndTargetValue(masterVolume.load());
   fadeOutDuration = juce::jmax(1, juce::roundToInt(rate * 0.05));
@@ -248,8 +252,17 @@ void AudioEngine::renderRealtimeBlock(juce::AudioBuffer<float> &buffer,
   }
 
   const double renderSampleRate = preparedRenderSampleRate;
-  if (!renderPluginBlock(midiPlayer, MidiPlayer::ProcessMode::realtime,
-                         buffer, midiMessages, renderSampleRate)) {
+  const auto rendered = renderPluginBlock(midiPlayer, MidiPlayer::ProcessMode::realtime,
+                                          buffer, midiMessages, renderSampleRate);
+  if (rendered != PluginBridge::BlockResult::rendered) {
+    if (rendered == PluginBridge::BlockResult::midiEventTooLarge) {
+      midiPlayer.setPlaying(false);
+      // 失败块已静音。下一个块直接释放当前声部，继续保持插件会话可用。
+      fadeOutSamples = 0;
+      stopCleanupDone = true;
+      midiPlayer.triggerStopCleanup();
+      realtimeMidiEventRejected.store(true);
+    }
     buffer.clear();
     return;
   }
@@ -270,9 +283,8 @@ void AudioEngine::renderRealtimeBlock(juce::AudioBuffer<float> &buffer,
         static_cast<int>(juce::jmax(1.0, renderSampleRate * 0.5));
     const int maximumTail =
         static_cast<int>(juce::jmax(1.0, renderSampleRate * 60.0));
-    if (tailSilentSamples >= silenceRequired ||
-        tailSamplesRendered >= maximumTail) {
-      midiPlayer.finishTail();
+    if ((tailSilentSamples >= silenceRequired || tailSamplesRendered >= maximumTail) &&
+        midiPlayer.finishTail()) {
       isPlaying = false;
     }
   } else {
@@ -341,6 +353,10 @@ void AudioEngine::renderRealtimeBlock(juce::AudioBuffer<float> &buffer,
 
 bool AudioEngine::loadPlugin(const juce::PluginDescription &description,
                              std::function<void(double)> prepareMidi) {
+  if (!isVst3Instrument(description)) {
+    setLastPluginError(L"请选择 VST3 乐器插件。");
+    return false;
+  }
 
   suspendProcessing(true);
   stopRealtimeRenderer();
@@ -371,10 +387,9 @@ bool AudioEngine::loadPlugin(const juce::PluginDescription &description,
   return true;
 }
 
-bool AudioEngine::renderPluginBlock(MidiPlayer &player, MidiPlayer::ProcessMode mode,
-                                    juce::AudioBuffer<float> &buffer,
-                                    juce::MidiBuffer &midiMessages,
-                                    double sampleRate) {
+PluginBridge::BlockResult AudioEngine::renderPluginBlock(
+    MidiPlayer &player, MidiPlayer::ProcessMode mode, juce::AudioBuffer<float> &buffer,
+    juce::MidiBuffer &midiMessages, double sampleRate) {
   midiMessages.clear();
   buffer.clear();
 
@@ -383,15 +398,11 @@ bool AudioEngine::renderPluginBlock(MidiPlayer &player, MidiPlayer::ProcessMode 
       player.setPlaying(false);
       setLastPluginError(L"插件未加载。");
     }
-    return false;
+    return PluginBridge::BlockResult::workerFailed;
   }
 
   const int totalSamples = buffer.getNumSamples();
-  if (totalSamples <= 0)
-    return true;
-
-  player.processBlock(midiMessages, totalSamples, mode,
-                      PluginBridge::SharedBlockLayout::maxMidiBytes);
+  player.processBlock(midiMessages, totalSamples, mode);
   for (int offset = 0; offset < totalSamples;
        offset += PluginBridge::SharedBlockLayout::maxSamples) {
     const int chunkSamples =
@@ -399,19 +410,18 @@ bool AudioEngine::renderPluginBlock(MidiPlayer &player, MidiPlayer::ProcessMode 
     juce::AudioBuffer<float> chunk(buffer.getArrayOfWritePointers(),
                                    buffer.getNumChannels(), offset,
                                    chunkSamples);
-    if (!bridge.processBlock(midiMessages, chunk, sampleRate, offset,
-                             player.getMusicalPosition(offset)))
-      break;
-    if (offset + chunkSamples >= totalSamples)
-      return true;
+    const auto rendered = bridge.processBlock(
+        midiMessages, chunk, sampleRate, offset, player.getMusicalPosition(offset));
+    if (rendered != PluginBridge::BlockResult::rendered) {
+      if (bridge.getStatus() == PluginBridge::BridgeStatus::crashed) {
+        player.setPlaying(false);
+        setLastPluginError(bridge.getLastError());
+      }
+      return rendered;
+    }
   }
 
-  if (bridge.getStatus() == PluginBridge::BridgeStatus::crashed) {
-    player.setPlaying(false);
-    setLastPluginError(bridge.getLastError());
-  }
-
-  return false;
+  return PluginBridge::BlockResult::rendered;
 }
 
 void AudioEngine::flushPluginStateBeforeUnload() {
@@ -431,13 +441,13 @@ void AudioEngine::flushPluginStateBeforeUnload() {
   }
 
   buffer.clear();
-  if (!bridge.processBlock(midi, buffer, sampleRate))
+  if (bridge.processBlock(midi, buffer, sampleRate) != PluginBridge::BlockResult::rendered)
     return;
 
   for (int i = 0; i < 3 && bridge.isPluginLoaded(); ++i) {
     midi.clear();
     buffer.clear();
-    if (!bridge.processBlock(midi, buffer, sampleRate))
+    if (bridge.processBlock(midi, buffer, sampleRate) != PluginBridge::BlockResult::rendered)
       return;
   }
 }

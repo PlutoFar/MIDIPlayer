@@ -1,5 +1,6 @@
 #include "CoreImpl.h"
 #include "../Midi/MidiFileLoader.h"
+#include <set>
 
 // Responsibilities: MIDI 解析、播放位置和切曲编排；界面通过 `Core` 快照更新显示。
 // Concurrency: 可变曲目状态和序列生产由 `stateMutex` 串行化；实时消费只读取已发布快照。
@@ -12,33 +13,68 @@ bool Core::Impl::canStartPlayback() {
          !engine.requiresPrepare() && audioSession.allowsSequenceChange();
 }
 
-bool Core::Impl::beginMidiLoad(const juce::File &file, TrackId trackId,
+bool Core::Impl::beginMidiLoad(std::vector<MidiLoadTarget> targets,
                               std::function<void(bool)> completion,
                               std::function<void()> onPluginMissing) {
   const int generation = trackSwitchGeneration + 1;
+  const bool navigation = targets.size() > 1;
   midiErrorText.clear();
   const auto accepted = startCommandTask(Operation::loadMidi,
-      [this, file, trackId] {
+      [this, targets = std::move(targets), navigation] {
         std::unique_ptr<juce::MidiMessageSequence> sequence;
-        const auto parsed = readMidiSequence(file, sequence);
-        if (parsed.failed())
-          return parsed;
+        std::set<juce::File> failedFiles;
+        juce::String firstError;
+        size_t loadedTarget = 0;
+        for (; loadedTarget < targets.size(); ++loadedTarget) {
+          const auto &target = targets[loadedTarget];
+          if (failedFiles.count(target.file) > 0)
+            continue;
+          const auto parsed = readMidiSequence(target.file, sequence);
+          if (parsed.wasOk())
+            break;
+          if (firstError.isEmpty())
+            firstError = parsed.getErrorMessage();
+          failedFiles.insert(target.file);
+        }
 
         StateLock resultLock(stateMutex);
+        // Operation::loadMidi 禁止列表结构变更，候选索引在命令结束前有效。
+        const auto availabilityBefore = playlist.getAvailabilityRevision();
+        for (size_t index = 0; index < loadedTarget; ++index)
+          if (const int row = targets[index].playlistIndex; row >= 0)
+            playlist.setTrackAvailable(row, false);
+        const bool discoveredUnavailable = availabilityBefore != playlist.getAvailabilityRevision();
+
+        if (sequence == nullptr) {
+          return juce::Result::fail(navigation
+              ? L"未找到可播放的曲目。\n" + firstError : firstError);
+        }
+
+        const auto &[file, row] = targets[loadedTarget];
         engine.getMidiPlayer().setSequence(std::move(sequence), engine.liveSampleRate());
-        loadedTrack = {file, trackId};
-        if (trackId == 0) {
+        loadedTrack = {file, 0};
+        if (row >= 0) {
+          playlist.setTrackAvailable(row, true);
+          loadedTrack.id = playlist.getTrack(row)->id;
+        } else {
           playlist.addFile(file);
-          if (const auto *entry = playlist.getTrack(playlist.findTrackIndex(file)))
+          const int existingRow = playlist.findTrackIndex(file);
+          if (const auto *entry = playlist.getTrack(existingRow)) {
+            playlist.setTrackAvailable(existingRow, true);
             loadedTrack.id = entry->id;
+          }
+        }
+        if (discoveredUnavailable) {
+          midiSkippedTracks = static_cast<int>(loadedTarget);
+          ++midiSkipRevision;
         }
         return juce::Result::ok();
       },
-      [this, file, generation, completion = std::move(completion),
+      [this, generation, completion = std::move(completion),
        onPluginMissing = std::move(onPluginMissing)](juce::Result result) {
         if (result.wasOk()) {
-          settings.setLastMidiDirectory(file.getParentDirectory().getFullPathName());
           StateLock resultLock(stateMutex);
+          settings.setLastMidiDirectory(loadedTrack.source.getParentDirectory().getFullPathName());
           if (generation == trackSwitchGeneration && canStartPlayback()) {
             // Ordering: 新曲目从 0 开始，禁止使用旧渲染块尚未完成交接的位置缓存。
             engine.getMidiPlayer().seekTo(0.0, true);
@@ -140,42 +176,35 @@ void Core::Impl::volume(float value) {
 
 void Core::Impl::next() {
   StateLock lock(stateMutex);
-  if (!audioSession.isIdle() || playlist.isEmpty() ||
-      !audio.hasDevice() || !engine.hasPluginLoaded() || engine.requiresPrepare())
-    return;
-
-  const int nextIndex = playlist.getNextIndex(currentTrackIndex());
-  if (nextIndex == -1) {
-    resetPlayback();
-    return;
-  }
-
-  if (const auto *track = playlist.getTrack(nextIndex)) {
-    beginMidiLoad(track->file, track->id);
-  }
+  loadAdjacentTrack(PlaylistManager::Advance::next);
 }
 
 void Core::Impl::prev() {
   StateLock lock(stateMutex);
+  loadAdjacentTrack(PlaylistManager::Advance::previous);
+}
+
+void Core::Impl::loadAdjacentTrack(PlaylistManager::Advance advance) {
   if (!audioSession.isIdle() || playlist.isEmpty() ||
       !audio.hasDevice() || !engine.hasPluginLoaded() || engine.requiresPrepare())
     return;
 
-  const int previousIndex = playlist.getPreviousIndex(currentTrackIndex());
-  if (previousIndex == -1) {
+  const auto candidates = playlist.playbackCandidates(currentTrackIndex(), advance);
+  if (candidates.empty()) {
     resetPlayback();
     return;
   }
-  if (const auto *track = playlist.getTrack(previousIndex)) {
-    beginMidiLoad(track->file, track->id);
-  }
+
+  std::vector<MidiLoadTarget> targets;
+  targets.reserve(candidates.size());
+  for (const int index : candidates)
+    targets.push_back({playlist.getTrack(index)->file, index});
+  beginMidiLoad(std::move(targets));
 }
 
 void Core::Impl::handleTrackEnd() {
   resetPlayback();
-  const int nextIndex = playlist.getNextIndex(currentTrackIndex());
-  if (const auto *track = playlist.getTrack(nextIndex))
-    beginMidiLoad(track->file, track->id);
+  loadAdjacentTrack(PlaylistManager::Advance::natural);
 }
 
 } // namespace midi

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AtomicTextFile.h"
 #include "WindowMaterial.h"
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -326,42 +327,13 @@ public:
     settings.setValue("uiScale", juce::jlimit(0.75f, 2.0f, scale));
   }
 
-  // Preconditions: 调用方独占目标路径及同名 .tmp 文件；不允许并发写同一设置文件。
-  // Ordering: XML 完整写入、flush 并关闭流后替换目标；文件错误通过 `Result` 返回。
   static juce::Result writeSettingsAtomically(const juce::PropertySet &source,
                                               const juce::File &targetFile) {
     auto xml = source.createXml("ModernMidiPlayerSettings");
     if (xml == nullptr)
       return juce::Result::fail("Unable to create settings XML");
 
-    auto tempFile =
-        targetFile.getSiblingFile(targetFile.getFileName() + ".tmp");
-    if (tempFile.exists() && !tempFile.deleteFile())
-      return juce::Result::fail("Unable to delete stale settings temp file: " +
-                                tempFile.getFullPathName());
-
-    auto stream = tempFile.createOutputStream();
-    if (stream == nullptr)
-      return juce::Result::fail("Unable to open settings file for writing: " +
-                                tempFile.getFullPathName());
-
-    xml->writeTo(*stream, {});
-    stream->flush();
-    if (stream->getStatus().failed()) {
-      const auto error = stream->getStatus().getErrorMessage();
-      stream.reset();
-      tempFile.deleteFile();
-      return juce::Result::fail("Unable to write settings XML: " + error);
-    }
-    stream.reset();
-
-    if (!tempFile.replaceFileIn(targetFile)) {
-      tempFile.deleteFile();
-      return juce::Result::fail("Unable to replace settings file: " +
-                                targetFile.getFullPathName());
-    }
-
-    return juce::Result::ok();
+    return midi::writeTextFileAtomically(targetFile, xml->toString());
   }
 
   // Postconditions: 更新 `lastSaveError`；`save` 是同一操作的布尔结果入口。

@@ -61,6 +61,7 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
   // Postconditions: 快照方法取得 `stateMutex` 后复制状态，不返回内部可修改引用。
   AppState buildState();
   PlaylistState buildPlaylistState();
+  PlaylistState buildExportPlaylistState();
   PlaylistSummary buildPlaylistSummary() const;
   // Preconditions: 消息线程持有 stateMutex；后台操作不能等待消息线程回调。
   // Postconditions: 返回受理结果，执行结果在消息线程无锁交付。
@@ -78,7 +79,6 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
 
   // Concurrency: 插件入口遵循 `Core` 的消息线程/扫描线程约定；目录引用访问由 `stateMutex` 串行化。
   juce::Result scan(std::function<bool()> shouldCancel);
-  bool findById(const PluginId &id, juce::PluginDescription &out);
   juce::Result loadAsync(const PluginId &id, CommandCompletion completion);
   juce::Result unloadAsync(CommandCompletion completion);
   juce::Result editorAsync(CommandCompletion completion);
@@ -88,10 +88,16 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
 
   // Preconditions: 查询和命令受理均由调用方持有 stateMutex。
   bool canStartPlayback();
-  bool beginMidiLoad(const juce::File &file, TrackId trackId,
+  struct MidiLoadTarget {
+    juce::File file;
+    int playlistIndex = -1;
+  };
+  bool beginMidiLoad(std::vector<MidiLoadTarget> targets,
                      std::function<void(bool)> completion = {},
                      std::function<void()> onPluginMissing = {});
   juce::String midiErrorText;
+  int midiSkippedTracks = 0;
+  uint64_t midiSkipRevision = 0;
   void play();
   void pause();
   void togglePlay();
@@ -104,6 +110,7 @@ struct Core::Impl : private juce::AsyncUpdater, private juce::Timer {
   void next();
   void prev();
   void handleTrackEnd();
+  void loadAdjacentTrack(PlaylistManager::Advance advance);
 
   // Postconditions: 列表命令在 `stateMutex` 内维护索引、路径及错误；失败以返回值报告。
   juce::Result addToPlaylist(const juce::File &file);

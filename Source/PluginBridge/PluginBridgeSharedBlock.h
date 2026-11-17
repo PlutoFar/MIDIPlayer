@@ -4,8 +4,9 @@
 // Ownership: 每个进程独立持有句柄；映射引用不得超过 `SharedBlockOwner` 的寿命。
 // Invariant: 两端使用相同布局；同时最多一项渲染请求，事件通知前写完对应数据和序列号。
 
-#include <juce_core/juce_core.h>
+#include <juce_audio_basics/juce_audio_basics.h>
 #include "../Midi/MusicalTimeline.h"
+#include "MidiPacketLimits.h"
 
 #include <cstdint>
 
@@ -64,7 +65,6 @@ namespace PluginBridge {
 struct SharedBlockLayout {
   static constexpr int maxChannels = 2;
   static constexpr int maxSamples = 1024;
-  static constexpr int maxMidiBytes = 8192;
 };
 
 // Preconditions: 宿主块长度可用 int 安全执行向上取整；非正长度返回 0。
@@ -90,6 +90,7 @@ struct SharedBlockHeader {
   std::uint64_t responseSequence = 0;
   int blockSize = 512;
   int midiBytes = 0;
+  bool hasMoreMidi = false;
   int resultCode = 0;
   MusicalPosition position;
   int latencySamples = 0;
@@ -98,17 +99,18 @@ struct SharedBlockHeader {
 struct SharedBlock {
   SharedBlockHeader header;
   float audio[SharedBlockLayout::maxChannels][SharedBlockLayout::maxSamples]{};
-  unsigned char midi[SharedBlockLayout::maxMidiBytes]{};
+  unsigned char midi[MidiPacketLimits::maxPacketBytes]{};
 };
 
-// Contract: 工作进程为插件保留完整输出通道；共享块仅回传前两个通道。
-inline int getWorkerProcessChannelCount(int pluginOutputChannels) {
-  return juce::jmax(SharedBlockLayout::maxChannels, pluginOutputChannels);
-}
-
-// Reason: 只有最多双输出的插件使用显式立体声配置，多输出插件保留原总线布局。
-inline bool shouldUseExplicitStereoHostConfig(int pluginOutputChannels) {
-  return pluginOutputChannels <= SharedBlockLayout::maxChannels;
+// Preconditions: 主输出是第一个已启用的输出总线，位于插件缓冲区的起始通道。
+inline void copyWorkerOutput(const juce::AudioBuffer<float> &buffer,
+                             int mainOutputChannels, SharedBlock &shared) {
+  const int samples = buffer.getNumSamples();
+  juce::FloatVectorOperations::copy(shared.audio[0], buffer.getReadPointer(0),
+                                   samples);
+  juce::FloatVectorOperations::copy(
+      shared.audio[1], buffer.getReadPointer(mainOutputChannels == 1 ? 0 : 1),
+      samples);
 }
 
 enum class WaitResult { signalled, timedOut, failed };

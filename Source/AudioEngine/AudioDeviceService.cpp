@@ -1,5 +1,15 @@
 #include "AudioDeviceService.h"
 
+namespace {
+
+bool hasOpenOutput(const juce::AudioDeviceManager &manager) {
+  auto *device = manager.getCurrentAudioDevice();
+  return device != nullptr && device->isOpen() &&
+         !device->getActiveOutputChannels().isZero();
+}
+
+} // namespace
+
 AudioDeviceService::AudioDeviceService(juce::AudioProcessor &processor,
                                        juce::File settingsFile)
     : file(std::move(settingsFile)) {
@@ -80,23 +90,62 @@ juce::String AudioDeviceService::save() {
 
 void AudioDeviceService::restore() {
   firstRun = !file.existsAsFile();
+  juce::String restoreError;
   if (!firstRun) {
-    if (auto xml = juce::XmlDocument::parse(file)) {
-      const auto diagnostic = manager.initialise(0, 2, xml.get(), true);
-      publishStatus(diagnostic);
-      if (diagnostic.isEmpty() && hasDevice())
-        return;
+    restoreError = openSavedDevice();
+    if (restoreError.isEmpty()) {
+      publishStatus({});
+      return;
     }
+    juce::Logger::writeToLog(restoreError);
+    manager.closeAudioDevice();
   }
-  auto diagnostic = manager.initialiseWithDefaultDevices(0, 2);
-  publishStatus(diagnostic);
-  if (diagnostic.isEmpty() && hasDevice()) {
+
+  auto diagnostic = openDefaultDevice();
+  if (diagnostic.isEmpty()) {
     restoredWithFallback = !firstRun;
+    if (restoredWithFallback) {
+      const auto setup = manager.getAudioDeviceSetup();
+      juce::Logger::writeToLog(L"已打开默认音频输出设备 " +
+                              setup.outputDeviceName + L" (" +
+                              manager.getCurrentAudioDeviceType() + L")");
+    }
     diagnostic = save();
-  } else if (diagnostic.isEmpty()) {
+  } else if (restoreError.isNotEmpty()) {
+    diagnostic = restoreError + L"\n" + diagnostic;
+  }
+  publishStatus(diagnostic);
+}
+
+juce::String AudioDeviceService::openSavedDevice() {
+  const auto xml = juce::XmlDocument::parse(file);
+  if (xml == nullptr || !xml->hasTagName("DEVICESETUP"))
+    return L"音频设备设置格式无效: " + file.getFullPathName();
+
+  // JUCE 可能根据设备名称改选驱动。以保存的输出名称和驱动核对实际打开的设备。
+  const auto savedDriver = xml->getStringAttribute("deviceType");
+  auto savedOutput = xml->getStringAttribute("audioDeviceName");
+  if (savedOutput.isEmpty())
+    savedOutput = xml->getStringAttribute("audioOutputDeviceName");
+  auto diagnostic = manager.initialise(0, 2, xml.get(), false);
+  if (diagnostic.isEmpty() &&
+      (!hasOpenOutput(manager) || savedOutput.isEmpty() ||
+       manager.getAudioDeviceSetup().outputDeviceName != savedOutput ||
+       (savedDriver.isNotEmpty() && manager.getCurrentAudioDeviceType() != savedDriver))) {
+    diagnostic = L"没有打开保存的音频输出设备 " + savedOutput;
+  }
+  if (diagnostic.isNotEmpty())
+    return L"无法恢复音频输出设置: " + diagnostic;
+  return {};
+}
+
+juce::String AudioDeviceService::openDefaultDevice() {
+  auto diagnostic = manager.initialiseWithDefaultDevices(0, 2);
+  if (diagnostic.isEmpty() && !hasOpenOutput(manager)) {
+    manager.closeAudioDevice();
     diagnostic = L"没有可用的音频输出设备";
   }
-  publishStatus(diagnostic);
+  return diagnostic;
 }
 
 juce::String AudioDeviceService::setDriver(const juce::String &name) {
@@ -139,10 +188,9 @@ juce::String AudioDeviceService::recoverDefaultDevice() {
   recoveryRequested = false;
   if (manager.getCurrentAudioDevice() != nullptr)
     return {};
-  auto diagnostic = manager.initialiseWithDefaultDevices(0, 2);
+  auto diagnostic = openDefaultDevice();
   if (diagnostic.isEmpty())
-    diagnostic = manager.getCurrentAudioDevice() != nullptr
-                     ? save() : juce::String(L"没有可用的音频输出设备");
+    diagnostic = save();
   publishStatus(diagnostic);
   sendChangeMessage();
   return diagnostic;

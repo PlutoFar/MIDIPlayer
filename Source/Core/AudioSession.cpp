@@ -66,6 +66,8 @@ void Core::Impl::handleAsyncUpdate() {
 void Core::Impl::timerCallback() {
   std::unique_lock lock(stateMutex);
   auto &player = engine.getMidiPlayer();
+  if (engine.takeRealtimeMidiEventRejection())
+    midiErrorText = PluginBridge::midiEventTooLargeError();
   if (engine.hasPluginWorkerCrashed()) {
     player.setPlaying(false);
     audioSession.noteWorkerFailure(engine.getPluginWorkerError());

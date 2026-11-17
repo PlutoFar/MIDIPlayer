@@ -70,7 +70,12 @@ public:
   }
 
   void systemRequestedQuit() override {
-    if (mainWindow != nullptr && !mainWindow->saveSettingsBeforeQuit())
+    if (evaluatingQuit || juce::MessageManager::getInstance()->hasStopMessageBeenSent())
+      return;
+
+    // 退出确认和另存为会处理嵌套消息，期间窗口关闭与 Windows 会话结束请求共用同一次决策。
+    const juce::ScopedValueSetter<bool> evaluating(evaluatingQuit, true);
+    if (mainWindow != nullptr && !mainWindow->confirmQuit())
       return;
     getAppSettings().finishPersistence();
     quit();
@@ -159,62 +164,38 @@ public:
       toFront(true);
     }
 
-    // Ordering: 窗口仍存活时完成设置保存；用户取消退出后保留窗口及内存配置。
-    bool saveSettingsBeforeQuit() {
+    bool confirmQuit() {
+      auto &content = *static_cast<MainContentComponent *>(getContentComponent());
+      if (content.hasUnsavedChanges()) {
+        // Windows 会隐藏最小化窗口拥有的对话框，必须先恢复主窗口再定位提示。
+        restoreAndActivate();
+        const int choice = juce::AlertWindow::showYesNoCancelBox(
+            juce::AlertWindow::QuestionIcon, L"未保存的更改",
+            content.getPlaylistChangeSummary(), L"保存并退出", L"不保存",
+            L"取消", this);
+        if (choice == 0 || (choice == 1 && !content.savePlaylist()))
+          return false;
+      }
+
       auto &settings = getAppSettings();
       if (settings.getRememberWindowBounds()) {
         settings.setWindowMaximized(isFullScreen());
         if (!isFullScreen())
           settings.setWindowBounds(getBounds());
       }
-      auto *content =
-          dynamic_cast<MainContentComponent *>(getContentComponent());
-      const auto result = content != nullptr ? content->saveSettings()
-                                             : settings.saveDetailed();
+      const auto result = content.saveSettings();
       if (result.wasOk())
         return true;
       restoreAndActivate();
-      const bool exitWithoutSaving = juce::AlertWindow::showOkCancelBox(
+      return juce::AlertWindow::showOkCancelBox(
           juce::AlertWindow::WarningIcon, L"设置未保存",
           L"无法保存设置。\n\n" + result.getErrorMessage() +
               L"\n\n是否仍然退出？",
           L"仍然退出", L"取消", this);
-      if (!exitWithoutSaving)
-        isClosing = false;
-      return exitWithoutSaving;
     }
 
     void closeButtonPressed() override {
-      if (isClosing)
-        return;
-
-      auto *content =
-          dynamic_cast<MainContentComponent *>(getContentComponent());
-      if (content && content->hasUnsavedChanges()) {
-        isClosing = true;
-
-        // Windows 会隐藏最小化窗口拥有的对话框，必须先恢复主窗口再定位提示。
-        restoreAndActivate();
-        const auto summary = content->getPlaylistChangeSummary();
-
-        int result = juce::AlertWindow::showYesNoCancelBox(
-            juce::AlertWindow::QuestionIcon, L"未保存的更改", summary,
-            L"保存并退出", L"不保存", L"取消", this);
-
-        if (result == 1) {
-          if (content->savePlaylist()) {
-            JUCEApplication::getInstance()->systemRequestedQuit();
-          } else {
-            isClosing = false;
-          }
-        } else if (result == 2) {
-          JUCEApplication::getInstance()->systemRequestedQuit();
-        } else {
-          isClosing = false;
-        }
-      } else {
-        JUCEApplication::getInstance()->systemRequestedQuit();
-      }
+      JUCEApplication::getInstance()->systemRequestedQuit();
     }
 
   private:
@@ -225,7 +206,6 @@ public:
           this, juce::Desktop::getInstance().isDarkModeActive());
     }
 
-    bool isClosing = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainWindow)
   };
 
@@ -233,6 +213,7 @@ private:
   std::unique_ptr<FluentLookAndFeel> applicationLookAndFeel;
   std::unique_ptr<midi::Core> core;
   std::unique_ptr<MainWindow> mainWindow;
+  bool evaluatingQuit = false;
 };
 
 START_JUCE_APPLICATION(ModernMidiPlayerApplication)

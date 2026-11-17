@@ -1,6 +1,7 @@
 #include "TestHarness.h"
 #include "UI/BackgroundComponent.h"
 #include "UI/BackgroundHistory.h"
+#include <algorithm>
 
 namespace miditest {
 namespace {
@@ -39,6 +40,43 @@ int runBackgroundTests() {
   using midi::background::RenderRequest;
   using midi::background::RenderResult;
   using midi::background::Renderer;
+
+  const juce::Colour swatchColour(37, 112, 221);
+  juce::Image opaque(juce::Image::RGB, 23, 9, false, juce::SoftwareImageType{});
+  opaque.clear(opaque.getBounds(), swatchColour);
+  const auto opaqueBlur = Renderer::renderInitial({1, {}, opaque, Material::GaussianBlur, 1, false}).processed;
+  expect(failures, opaqueBlur.isValid() && opaqueBlur.getPixelAt(0, 0) == swatchColour &&
+                       opaqueBlur.getPixelAt(22, 8) == swatchColour,
+         "Gaussian blur should preserve opaque RGB pixels and their colour at padded row edges");
+
+  juce::Image translucent(juce::Image::ARGB, 23, 9, true, juce::SoftwareImageType{});
+  translucent.clear({0, 0, 11, 9}, juce::Colours::red);
+  const auto translucentBlur = Renderer::renderInitial({1, {}, translucent, Material::GaussianBlur, 1, false}).processed;
+  const auto edgeColour = translucentBlur.getPixelAt(11, 4);
+  expect(failures, edgeColour.getAlpha() > 0 && edgeColour.getAlpha() < 255 &&
+                       edgeColour.getRed() == 255 && edgeColour.getGreen() == 0 &&
+                       edgeColour.getBlue() == 0 && translucentBlur.getPixelAt(22, 4).isTransparent(),
+         "Gaussian blur should average premultiplied colour and alpha together");
+
+  const auto acrylic = Renderer::renderInitial({1, {}, translucent, Material::Acrylic, 1, false}).processed;
+  bool premultipliedEdge = false;
+  if (acrylic.isValid()) {
+    const juce::Image::BitmapData pixels(acrylic, juce::Image::BitmapData::readOnly);
+    using Pixel = juce::PixelARGB;
+    const auto *edge = pixels.getPixelPointer(11, 4);
+    const auto alpha = edge[Pixel::indexA];
+    premultipliedEdge = alpha == edgeColour.getAlpha() && edge[Pixel::indexR] <= alpha &&
+                        edge[Pixel::indexG] <= alpha && edge[Pixel::indexB] <= alpha;
+  }
+  expect(failures, premultipliedEdge && acrylic.getPixelAt(22, 4).isTransparent(),
+         "Acrylic saturation and noise should preserve the premultiplied alpha bounds");
+
+  juce::Image alphaMask(juce::Image::SingleChannel, 23, 9, true, juce::SoftwareImageType{});
+  alphaMask.clear(alphaMask.getBounds(), juce::Colours::white.withAlpha(uint8_t{128}));
+  const auto maskBlur = Renderer::renderInitial({1, {}, alphaMask, Material::GaussianBlur, 1, false}).processed;
+  expect(failures, maskBlur.isValid() && maskBlur.getPixelAt(22, 8).getAlpha() == 128,
+         "Gaussian blur should preserve constant alpha in an alpha-only source");
+
   bool obsoleteDelivered = false;
   std::optional<RenderResult> latest;
   {
@@ -69,7 +107,26 @@ int runBackgroundTests() {
   UserSettings settings(directory.path.getChildFile("Settings.xml"));
   settings.finishPersistence();
   settings.setMonetEnabled(true);
+  const juce::Colour initialAccent(100, 100, 100);
+  const auto targetAccent = juce::Colour::fromRGBA(106, 96, 100, 252);
+  settings.setThemeAccentColor(initialAccent.toString());
   BackgroundComponent background(settings);
+  std::vector<juce::Colour> accentChanges;
+  background.onAccentColorChanged = [&](juce::Colour colour) {
+    accentChanges.push_back(colour);
+  };
+  background.setCurrentAccentColor(targetAccent);
+  expect(failures, waitForBackground([&] {
+    return background.getLastExtractedColor() == targetAccent;
+  }), "small RGB and alpha changes should converge to the precise target accent");
+  const auto completedChanges = accentChanges.size();
+  background.setCurrentAccentColor(targetAccent);
+  juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+  expect(failures, completedChanges > 0 && accentChanges.size() == completedChanges &&
+                       accentChanges.back() == targetAccent &&
+                       std::adjacent_find(accentChanges.begin(), accentChanges.end()) == accentChanges.end(),
+         "accent changes should be published once per colour and stop at the target");
+  background.onAccentColorChanged = {};
   settings.setBackgroundImagePath(redFile.getFullPathName());
   background.loadAsync();
   settings.setBackgroundImagePath({});

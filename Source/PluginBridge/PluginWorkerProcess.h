@@ -6,6 +6,7 @@
 
 #include "PluginBridgeProtocol.h"
 #include "PluginBridgeSharedBlock.h"
+#include "PluginListSupport.h"
 #include "../Utils/AudioThreadPriority.h"
 
 #include <cstdlib>
@@ -229,6 +230,12 @@ private:
   }
 
   void loadPlugin(const PluginLoadRequest &request) {
+    const auto desc = toPluginDescription(request);
+    if (!isVst3Instrument(desc)) {
+      sendStatus(StatusCode::pluginRouteFailed, "A VST3 instrument is required",
+                 Command::loadPlugin);
+      return;
+    }
     unloadPlugin();
 
     if (request.sharedBlockName.isEmpty()) {
@@ -245,7 +252,6 @@ private:
       return;
     }
 
-    const auto desc = toPluginDescription(request);
     const auto windowIcon = resolvePluginWindowIcon(desc.fileOrIdentifier);
     juce::String error;
     auto instance =
@@ -274,8 +280,6 @@ private:
 
     {
       const juce::ScopedLock lock(pluginLock);
-      processChannelCount =
-          getWorkerProcessChannelCount(instance->getTotalNumOutputChannels());
       plugin = std::move(instance);
       pluginLatency.store(plugin->getLatencySamples());
       plugin->addListener(this);
@@ -283,7 +287,7 @@ private:
       pluginWindowIcon = windowIcon;
     }
 
-    processMidi.ensureSize(SharedBlockLayout::maxMidiBytes);
+    processMidi.ensureSize(MidiPacketLimits::maxPacketBytes);
     sendStatus(StatusCode::ok, "plugin loaded", Command::loadPlugin);
   }
 
@@ -301,7 +305,6 @@ private:
     pluginWindowIcon = {};
     sharedBlock = nullptr;
     processBuffer.setSize(0, 0);
-    processChannelCount = SharedBlockLayout::maxChannels;
   }
 
   void prepare(const PrepareRequest &request, Command command) {
@@ -344,24 +347,33 @@ private:
     if (command == Command::beginExport || command == Command::endExport)
       plugin->setStateInformation(savedPluginState.getData(),
                                  static_cast<int>(savedPluginState.getSize()));
-    const int pluginOutputChannels = plugin->getTotalNumOutputChannels();
-    if (shouldUseExplicitStereoHostConfig(pluginOutputChannels)) {
-      plugin->setPlayConfigDetails(0, SharedBlockLayout::maxChannels,
-                                   request.sampleRate, request.blockSize);
-    } else {
-      // Invariant: 多输出插件保留原总线布局，只更新采样率和块大小。
-      // Reason: 将全部输出重声明为单一主总线会破坏 Vienna Synchron Pianos 等插件的通道配置。
-      plugin->setRateAndBufferSizeDetails(request.sampleRate,
-                                          request.blockSize);
+    // 只为单总线插件请求立体声，协商失败时保持已有单声道布局。
+    if (plugin->getBusCount(false) == 1 &&
+        plugin->getTotalNumOutputChannels() == 1) {
+      auto layout = plugin->getBusesLayout();
+      layout.outputBuses.set(0, juce::AudioChannelSet::stereo());
+      plugin->setBusesLayout(layout);
     }
 
-    processChannelCount =
-        getWorkerProcessChannelCount(plugin->getTotalNumOutputChannels());
-    processBuffer.setSize(processChannelCount, SharedBlockLayout::maxSamples,
-                          false, false, true);
+    plugin->setRateAndBufferSizeDetails(request.sampleRate, request.blockSize);
     plugin->setNonRealtime(request.nonRealtime);
     plugin->prepareToPlay(request.sampleRate, request.blockSize);
     plugin->reset();
+    const int outputChannels = plugin->getTotalNumOutputChannels();
+    if (outputChannels == 0) {
+      sendStatus(StatusCode::pluginRouteFailed, "Plugin has no enabled audio output",
+                 command);
+      return;
+    }
+    mainOutputChannels = 0;
+    for (int bus = 0; mainOutputChannels == 0; ++bus)
+      mainOutputChannels = plugin->getChannelCountOfBus(false, bus);
+    const int bufferChannels =
+        juce::jmax(plugin->getTotalNumInputChannels(), outputChannels);
+    processBuffer.setSize(bufferChannels, SharedBlockLayout::maxSamples,
+                          false, false, true);
+    processMidi.clear();
+    awaitingMidiPackets = false;
     const auto threadResult = blockThread.startProcessing(request.nonRealtime);
     if (threadResult.failed()) {
       sendStatus(StatusCode::renderFailed, threadResult.getErrorMessage(), command);
@@ -431,10 +443,12 @@ private:
 
       auto &block = blockOwner->block();
       const auto requestSequence = block.header.requestSequence;
+      const bool lastPacket = !block.header.hasMoreMidi;
       processSharedBlock(block);
       block.header.responseSequence = requestSequence;
       blockOwner->signalResponse();
-      if (terminateAfterFirstRender && ++renderBlocksProcessed == 1)
+      if (terminateAfterFirstRender && lastPacket &&
+          ++renderBlocksProcessed == 1)
         std::_Exit(42);
     }
   }
@@ -450,33 +464,33 @@ private:
     if (shared.header.blockSize <= 0 ||
         shared.header.blockSize > SharedBlockLayout::maxSamples ||
         shared.header.midiBytes < 0 ||
-        shared.header.midiBytes > SharedBlockLayout::maxMidiBytes) {
+        shared.header.midiBytes > MidiPacketLimits::maxPacketBytes) {
       shared.header.resultCode = static_cast<int>(StatusCode::invalidCommand);
       return;
     }
 
-    processBuffer.setSize(processChannelCount, shared.header.blockSize, false,
-                          false, true);
+    if (!awaitingMidiPackets)
+      processMidi.clear();
+    if (!appendMidiPacket(shared.midi, shared.header.midiBytes, processMidi,
+                          shared.header.blockSize)) {
+      shared.header.resultCode = static_cast<int>(StatusCode::invalidCommand);
+      return;
+    }
+    awaitingMidiPackets = shared.header.hasMoreMidi;
+    shared.header.resultCode = static_cast<int>(StatusCode::ok);
+    shared.header.latencySamples = pluginLatency.load();
+    if (awaitingMidiPackets)
+      return;
+
+    processBuffer.setSize(processBuffer.getNumChannels(), shared.header.blockSize,
+                          false, false, true);
     processBuffer.clear();
-
-    if (!readMidiBuffer(shared.midi, shared.header.midiBytes, processMidi,
-                        shared.header.blockSize)) {
-      shared.header.resultCode = static_cast<int>(StatusCode::invalidCommand);
-      return;
-    }
     playHead.position = shared.header.position;
     playHead.sampleRate = shared.header.sampleRate;
     plugin->processBlock(processBuffer, processMidi);
 
-    for (int ch = 0; ch < SharedBlockLayout::maxChannels; ++ch) {
-      const int sourceChannel =
-          processBuffer.getNumChannels() > 1 ? ch : 0;
-      juce::FloatVectorOperations::copy(
-          shared.audio[ch], processBuffer.getReadPointer(sourceChannel),
-          shared.header.blockSize);
-    }
+    copyWorkerOutput(processBuffer, mainOutputChannels, shared);
 
-    shared.header.resultCode = static_cast<int>(StatusCode::ok);
     shared.header.latencySamples = pluginLatency.load();
   }
 
@@ -503,6 +517,7 @@ private:
   HostedPlayHead playHead;
   std::atomic<int> pluginLatency{0};
   juce::MidiBuffer processMidi;
+  bool awaitingMidiPackets = false;
   juce::MemoryBlock savedPluginState;
   bool hasSavedPluginState = false;
   bool editorWasVisible = false;
@@ -511,7 +526,7 @@ private:
   juce::Image pluginWindowIcon;
   std::unique_ptr<juce::DocumentWindow> editorWindow;
   juce::AudioBuffer<float> processBuffer;
-  int processChannelCount = SharedBlockLayout::maxChannels;
+  int mainOutputChannels = 0;
   const bool terminateAfterFirstRender = false;
   int renderBlocksProcessed = 0;
   juce::CriticalSection pluginLock;

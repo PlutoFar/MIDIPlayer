@@ -289,7 +289,7 @@ void MainContentComponent::timerCallback() {
   prevBtn.setEnabled(canControlPlayback && !state.task.commandActive);
   nextBtn.setEnabled(canControlPlayback && !state.task.commandActive);
   progressSlider.setEnabled(canControlPlayback && hasTrack);
-  exportBtn.setEnabled(hasPlugin && hasTrack && !state.task.exportActive &&
+  exportBtn.setEnabled(hasPlugin && state.playlist.hasAvailableTracks && !state.task.exportActive &&
                        !state.task.commandActive);
 
   if (!hasPlugin) {
@@ -297,6 +297,7 @@ void MainContentComponent::timerCallback() {
     timeLabel.setText("0:00 / 0:00", juce::dontSendNotification);
   }
 
+  playlistPanel.refreshTrackAvailability(state.playlist.availabilityRevision);
   if (playlistPanel.getCurrentTrackIndex() != transport.currentTrackIndex)
     playlistPanel.setCurrentTrackIndex(transport.currentTrackIndex);
   trackLabel.setText(juce::String(transport.currentMidiName.c_str()),
@@ -305,7 +306,12 @@ void MainContentComponent::timerCallback() {
   if (midiError != lastMidiErrorShown) {
     lastMidiErrorShown = midiError;
     if (midiError.isNotEmpty())
-      showOperationError(L"MIDI 加载失败", transport.lastError);
+      showOperationError(L"MIDI 处理失败", transport.lastError);
+  }
+  if (transport.skipRevision != lastTrackSkipRevision) {
+    lastTrackSkipRevision = transport.skipRevision;
+    operationToast.showTopCenter(L"已跳过 " + juce::String(transport.skippedTracks) +
+                                     L" 首不可用曲目", getLocalBounds(), 3000);
   }
   if (state.audio.preparationError != lastAudioPreparationError) {
     lastAudioPreparationError = state.audio.preparationError;

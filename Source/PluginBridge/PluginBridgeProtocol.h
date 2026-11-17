@@ -4,6 +4,7 @@
 // Invariant: 两端必须使用一致的命令编号、字段含义和 `workerCommandLineUid`。
 // Trust Boundary: `ValueTree` 解码只恢复字段，不等同于完整请求校验；执行端仍负责业务有效性检查。
 
+#include "MidiPacketLimits.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <cmath>
@@ -12,7 +13,7 @@
 namespace PluginBridge {
 
 inline constexpr const char *workerCommandLineUid =
-    "modern-midi-player-plugin-worker-v3";
+    "modern-midi-player-plugin-worker-v4";
 inline constexpr int workerConnectionTimeoutMs = 15000;
 inline constexpr int workerCommandTimeoutMs = 30000;
 inline constexpr int workerShutdownTimeoutMs = 2000;
@@ -243,63 +244,35 @@ inline bool isPluginWorkerCommandLine(const juce::String &commandLine) {
   return commandLine.contains(workerCommandLineUid);
 }
 
-// Preconditions: `dest` 至少有 `maxBytes` 可写字节，容量非负；事件时间戳为采样偏移。
-// Postconditions: 返回已编码字节数；容量不足返回 -1，此时缓冲区可能含前缀，调用方必须丢弃整包。
-inline int writeMidiBuffer(const juce::MidiBuffer &source,
-                           unsigned char *dest, int maxBytes) {
-  juce::MemoryOutputStream out(dest, static_cast<size_t>(maxBytes));
-  for (const auto metadata : source) {
-    const int messageSize = metadata.numBytes;
-    const auto requiredBytes =
-        static_cast<int64_t>(sizeof(int) * 2 + messageSize);
-
-    if (out.getPosition() + requiredBytes > maxBytes)
-      return -1;
-
-    out.writeInt(metadata.samplePosition);
-    out.writeInt(messageSize);
-    out.write(metadata.data, static_cast<size_t>(messageSize));
-  }
-
-  return static_cast<int>(out.getPosition());
-}
-
-// Preconditions: 遵循完整编码的缓冲区契约，区间加法不得溢出。
-// Postconditions: 只编码 [startSample, startSample + numSamples) 内事件，并将偏移归零到分块起点。
-inline int writeMidiBufferRange(const juce::MidiBuffer &source,
-                                unsigned char *dest, int maxBytes,
-                                int startSample, int numSamples) {
-  juce::MemoryOutputStream out(dest, static_cast<size_t>(maxBytes));
-  const int endSample = startSample + juce::jmax(0, numSamples);
-
-  for (const auto metadata : source) {
-    if (metadata.samplePosition < startSample)
-      continue;
-    if (metadata.samplePosition >= endSample)
+// Preconditions: 每条消息都能单独装入共享块，迭代区间属于同一音频块。
+// Postconditions: 追加完整事件直到本包写满，保留原采样偏移与顺序，更新迭代位置。
+inline int writeMidiPacket(juce::MidiBufferIterator &next,
+                           juce::MidiBufferIterator end,
+                           unsigned char (&destination)[MidiPacketLimits::maxPacketBytes],
+                           int startSample) {
+  juce::MemoryOutputStream out(destination, sizeof(destination));
+  for (; next != end; ++next) {
+    const auto metadata = *next;
+    const int requiredBytes =
+        MidiPacketLimits::eventHeaderBytes + metadata.numBytes;
+    if (out.getPosition() + requiredBytes > MidiPacketLimits::maxPacketBytes)
       break;
-
-    const int messageSize = metadata.numBytes;
-    const auto requiredBytes =
-        static_cast<int64_t>(sizeof(int) * 2 + messageSize);
-    if (out.getPosition() + requiredBytes > maxBytes)
-      return -1;
-
     out.writeInt(metadata.samplePosition - startSample);
-    out.writeInt(messageSize);
-    out.write(metadata.data, static_cast<size_t>(messageSize));
+    out.writeInt(metadata.numBytes);
+    out.write(metadata.data, static_cast<size_t>(metadata.numBytes));
   }
-
   return static_cast<int>(out.getPosition());
 }
 
 // Preconditions: 接收端已验证 `numBytes` 在源缓冲区容量内，`numSamples` 为有效块长度。
-// Postconditions: 完整解码并验证块内偏移后替换 `dest`。
+// Postconditions: 完整解码并验证块内偏移后按顺序追加到 `dest`。
 // Failures: 截断、无效消息长度或越界采样偏移返回 `false`，保留原 `dest`，调用方拒绝整块。
-[[nodiscard]] inline bool readMidiBuffer(const unsigned char *source, int numBytes,
-                                       juce::MidiBuffer &dest, int numSamples) {
+[[nodiscard]] inline bool appendMidiPacket(const unsigned char *source,
+                                           int numBytes, juce::MidiBuffer &dest,
+                                           int numSamples) {
   juce::MemoryInputStream in(source, static_cast<size_t>(numBytes), false);
   while (in.getNumBytesRemaining() > 0) {
-    if (in.getNumBytesRemaining() < static_cast<int64_t>(sizeof(int) * 2))
+    if (in.getNumBytesRemaining() < MidiPacketLimits::eventHeaderBytes)
       return false;
     const int samplePosition = in.readInt();
     const int messageSize = in.readInt();
@@ -317,7 +290,6 @@ inline int writeMidiBufferRange(const juce::MidiBuffer &source,
       return false;
   }
   // Ordering: 先验证整包，再复用预分配存储；渲染时不创建逐消息堆块。
-  dest.clear();
   in.setPosition(0);
   while (in.getNumBytesRemaining() > 0) {
     const int samplePosition = in.readInt();

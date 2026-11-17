@@ -2,6 +2,7 @@
 #include "BackgroundEffectSupport.h"
 
 #include <algorithm>
+#include <array>
 #include <random>
 
 namespace midi::background {
@@ -12,23 +13,35 @@ using MaterialType = Material;
 struct ImageEffects {
     static juce::Image applyMaterial(const juce::Image &source, MaterialType type,
                                      int radius, const std::function<bool()> &cancelled) {
+      if (source.isNull() || type == MaterialType::None)
+        return source;
+
+      // 材质在软件位图上处理预乘 ARGB，统一 RGB、ARGB 和仅含透明度的输入。
+      juce::Image argb(juce::Image::ARGB, source.getWidth(), source.getHeight(),
+                       false, juce::SoftwareImageType{});
+      {
+        const juce::Image::BitmapData input(source, juce::Image::BitmapData::readOnly);
+        juce::Image::BitmapData output(argb, juce::Image::BitmapData::writeOnly);
+        output.convertFrom(input);
+      }
+
       switch (type) {
       case MaterialType::GaussianBlur:
-        return applyGaussianBlurStatic(source, radius, cancelled);
+        return applyGaussianBlurStatic(argb, radius, cancelled);
       case MaterialType::Aero:
-        return applyAeroEffectStatic(source, radius, cancelled);
+        return applyAeroEffectStatic(argb, radius, cancelled);
       case MaterialType::Acrylic:
-        return applyAcrylicEffectStatic(source, radius, cancelled);
+        return applyAcrylicEffectStatic(argb, radius, cancelled);
       case MaterialType::None:
-        return source;
+        break;
       }
       return {};
     }
     static juce::Image
     applyGaussianBlurStatic(const juce::Image &source, int radius,
                             std::function<bool()> shouldCancel) {
-      if (source.isNull() || radius < 1)
-        return source.createCopy();
+      if (radius < 1)
+        return source;
 
       // 根据半径动态缩放，避免低半径模糊出现块状感
       int scale = 1;
@@ -41,7 +54,7 @@ struct ImageEffects {
       int smallH = source.getHeight() / scale;
 
       if (smallW < 2 || smallH < 2)
-        return source.createCopy();
+        return source;
 
       auto small =
           source.rescaled(smallW, smallH, juce::Graphics::lowResamplingQuality);
@@ -51,12 +64,15 @@ struct ImageEffects {
       if (effectiveRadius < 1)
         effectiveRadius = 1;
 
+      juce::Image horizontal(juce::Image::ARGB, smallW, smallH, false,
+                             juce::SoftwareImageType{});
+      juce::Image filtered(juce::Image::ARGB, smallW, smallH, false,
+                           juce::SoftwareImageType{});
       for (int pass = 0; pass < 3; ++pass) {
-        if (shouldCancel())
-          return juce::Image();
-        small = boxBlurStatic(small, effectiveRadius + 1, shouldCancel);
-        if (small.isNull())
-          return juce::Image();
+        if (!blurAxis(small, horizontal, effectiveRadius + 1, false, shouldCancel) ||
+            !blurAxis(horizontal, filtered, effectiveRadius + 1, true, shouldCancel))
+          return {};
+        small = filtered;
       }
 
       if (shouldCancel())
@@ -66,131 +82,60 @@ struct ImageEffects {
                             juce::Graphics::mediumResamplingQuality);
     }
 
-    static juce::Image boxBlurStatic(const juce::Image &source, int radius,
-                                     std::function<bool()> shouldCancel) {
-      if (radius < 1)
-        return source.createCopy();
+    static bool blurAxis(const juce::Image &source, juce::Image &destination,
+                         int radius, bool vertical,
+                         const std::function<bool()> &shouldCancel) {
+      const juce::Image::BitmapData input(source, juce::Image::BitmapData::readOnly);
+      const juce::Image::BitmapData output(destination, juce::Image::BitmapData::writeOnly);
+      const int lineCount = vertical ? input.width : input.height;
+      const int lineLength = vertical ? input.height : input.width;
+      const int inputLineStride = vertical ? input.pixelStride : input.lineStride;
+      const int outputLineStride = vertical ? output.pixelStride : output.lineStride;
+      const int inputStep = vertical ? input.lineStride : input.pixelStride;
+      const int outputStep = vertical ? output.lineStride : output.pixelStride;
 
-      int w = source.getWidth();
-      int h = source.getHeight();
-      auto result = juce::Image(juce::Image::ARGB, w, h, true);
-
-      juce::Image::BitmapData srcData(source,
-                                      juce::Image::BitmapData::readOnly);
-      juce::Image::BitmapData dstData(result,
-                                      juce::Image::BitmapData::writeOnly);
-
-      auto temp = juce::Image(juce::Image::ARGB, w, h, true);
-      juce::Image::BitmapData tempData(temp,
-                                       juce::Image::BitmapData::writeOnly);
-
-      for (int y = 0; y < h; ++y) {
+      for (int line = 0; line < lineCount; ++line) {
         if (shouldCancel())
-          return juce::Image();
+          return false;
 
-        int r = 0, g = 0, b = 0, a = 0, count = 0;
+        const auto *inputLine = input.data + line * inputLineStride;
+        auto *outputLine = output.data + line * outputLineStride;
+        std::array<int, sizeof(juce::PixelARGB)> totals{};
+        int sampleCount = 0;
+        const auto updateWindow = [&](int index, int weight) {
+          const auto *pixel = inputLine + index * inputStep;
+          for (size_t channel = 0; channel < totals.size(); ++channel)
+            totals[channel] += weight * pixel[channel];
+          sampleCount += weight;
+        };
 
-        for (int x = 0; x <= radius && x < w; ++x) {
-          auto *p = srcData.getPixelPointer(x, y);
-          b += p[0];
-          g += p[1];
-          r += p[2];
-          a += p[3];
-          ++count;
-        }
+        for (int index = 0; index < std::min(radius + 1, lineLength); ++index)
+          updateWindow(index, 1);
 
-        for (int x = 0; x < w; ++x) {
-          auto *dst = tempData.getPixelPointer(x, y);
-          dst[0] = (uint8_t)(b / count);
-          dst[1] = (uint8_t)(g / count);
-          dst[2] = (uint8_t)(r / count);
-          dst[3] = (uint8_t)(a / count);
-
-          int addX = x + radius + 1;
-          int remX = x - radius;
-
-          if (addX < w) {
-            auto *p = srcData.getPixelPointer(addX, y);
-            b += p[0];
-            g += p[1];
-            r += p[2];
-            a += p[3];
-            ++count;
-          }
-          if (remX >= 0) {
-            auto *p = srcData.getPixelPointer(remX, y);
-            b -= p[0];
-            g -= p[1];
-            r -= p[2];
-            a -= p[3];
-            --count;
-          }
+        for (int index = 0; index < lineLength; ++index) {
+          auto *pixel = outputLine + index * outputStep;
+          // 颜色和透明度使用同一窗口，透明邻居不会污染剩余颜色。
+          for (size_t channel = 0; channel < totals.size(); ++channel)
+            pixel[channel] = static_cast<uint8_t>(totals[channel] / sampleCount);
+          if (index + radius + 1 < lineLength)
+            updateWindow(index + radius + 1, 1);
+          if (index >= radius)
+            updateWindow(index - radius, -1);
         }
       }
-
-      juce::Image::BitmapData tempReadData(temp,
-                                           juce::Image::BitmapData::readOnly);
-
-      for (int x = 0; x < w; ++x) {
-        if (shouldCancel())
-          return juce::Image();
-
-        int r = 0, g = 0, b = 0, a = 0, count = 0;
-
-        for (int y = 0; y <= radius && y < h; ++y) {
-          auto *p = tempReadData.getPixelPointer(x, y);
-          b += p[0];
-          g += p[1];
-          r += p[2];
-          a += p[3];
-          ++count;
-        }
-
-        for (int y = 0; y < h; ++y) {
-          auto *dst = dstData.getPixelPointer(x, y);
-          dst[0] = (uint8_t)(b / count);
-          dst[1] = (uint8_t)(g / count);
-          dst[2] = (uint8_t)(r / count);
-          dst[3] = (uint8_t)(a / count);
-
-          int addY = y + radius + 1;
-          int remY = y - radius;
-
-          if (addY < h) {
-            auto *p = tempReadData.getPixelPointer(x, addY);
-            b += p[0];
-            g += p[1];
-            r += p[2];
-            a += p[3];
-            ++count;
-          }
-          if (remY >= 0) {
-            auto *p = tempReadData.getPixelPointer(x, remY);
-            b -= p[0];
-            g -= p[1];
-            r -= p[2];
-            a -= p[3];
-            --count;
-          }
-        }
-      }
-
-      return result;
+      return true;
     }
 
     static juce::Image
     applyAeroEffectStatic(const juce::Image &source, int radius,
                           std::function<bool()> shouldCancel) {
-      if (source.isNull())
-        return source.createCopy();
-
       // Aero: 中等模糊和更明显的玻璃高光，区别于普通模糊
       auto blurred = applyGaussianBlurStatic(source, radius, shouldCancel);
       if (shouldCancel())
         return {};
 
       juce::Image result(juce::Image::ARGB, blurred.getWidth(),
-                         blurred.getHeight(), true);
+                         blurred.getHeight(), true, juce::SoftwareImageType{});
       {
         juce::Graphics g(result);
         g.drawImageAt(blurred, 0, 0);
@@ -217,15 +162,10 @@ struct ImageEffects {
                              std::function<bool()> shouldCancel) {
       // Acrylic = 模糊 + 饱和度增强 + 亮度噪点
 
-      auto blurred = applyGaussianBlurStatic(source, radius, shouldCancel);
+      auto result = applyGaussianBlurStatic(source, radius, shouldCancel);
 
       if (shouldCancel())
         return {};
-
-      juce::Image result = blurred.createCopy();
-      juce::Image::BitmapData data(result, 0, 0, result.getWidth(),
-                                   result.getHeight(),
-                                   juce::Image::BitmapData::readWrite);
 
       uint32_t seed = 123456;
       auto rand = [&seed]() {
@@ -233,37 +173,26 @@ struct ImageEffects {
         return (seed / 65536) % 32768;
       };
 
-      for (int y = 0; y < result.getHeight(); ++y) {
-        if (shouldCancel())
-          return {};
+      using Pixel = juce::PixelARGB;
+      {
+        const juce::Image::BitmapData data(result, juce::Image::BitmapData::readWrite);
+        for (int y = 0; y < result.getHeight(); ++y) {
+          if (shouldCancel())
+            return {};
 
-        uint8_t *p = data.getLinePointer(y);
-        for (int x = 0; x < result.getWidth(); ++x) {
-          // Reason: 各 RGB 分量相对灰阶扩大差值，以增强材质饱和度。
-          if (data.pixelStride >= 3) {
-            int b = p[0];
-            int g = p[1];
-            int r = p[2];
-            int grey = (r + g + b) / 3;
-
-            // RGB 分量相对灰阶扩大 30%
-            r = grey + (int)((r - grey) * 1.3f);
-            g = grey + (int)((g - grey) * 1.3f);
-            b = grey + (int)((b - grey) * 1.3f);
-
-            p[2] = (uint8_t)juce::jlimit(0, 255, r);
-            p[1] = (uint8_t)juce::jlimit(0, 255, g);
-            p[0] = (uint8_t)juce::jlimit(0, 255, b);
+          for (int x = 0; x < result.getWidth(); ++x) {
+            auto *pixel = data.getPixelPointer(x, y);
+            const int alpha = pixel[Pixel::indexA];
+            const int grey = (pixel[Pixel::indexR] + pixel[Pixel::indexG] +
+                              pixel[Pixel::indexB]) / 3;
+            // 噪点以透明度缩放，颜色分量始终处于预乘后的 [0, alpha] 范围。
+            const int noise = (static_cast<int>(rand() % 12) - 6) * alpha / 255;
+            for (const int channel : {Pixel::indexR, Pixel::indexG, Pixel::indexB}) {
+              const int saturated = grey + static_cast<int>((pixel[channel] - grey) * 1.3f);
+              const int boosted = juce::jlimit(0, alpha, saturated);
+              pixel[channel] = static_cast<uint8_t>(juce::jlimit(0, alpha, boosted + noise));
+            }
           }
-
-          // B. 添加单色亮度噪点，避免彩色噪声破坏质感
-          int noise = (rand() % 12) - 6; // Units: [-6,5] 的单色亮度扰动。
-
-          const int colourChannels = juce::jmin(3, data.pixelStride);
-          for (int c = 0; c < colourChannels; ++c) {
-            p[c] = (uint8_t)juce::jlimit(0, 255, (int)p[c] + noise);
-          }
-          p += data.pixelStride;
         }
       }
 

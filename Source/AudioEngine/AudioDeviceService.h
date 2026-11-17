@@ -36,6 +36,8 @@ private:
   // Ordering: 临时 XML 写入成功后才替换配置；失败返回路径诊断，不宣告持久化成功。
   juce::String save();
   void restore();
+  juce::String openSavedDevice();
+  juce::String openDefaultDevice();
   // Concurrency: 仅消息线程读取实际设备，再发布原子可用性与加锁错误；两者不组成原子快照。
   void publishStatus(const juce::String &diagnostic);
   void changeListenerCallback(juce::ChangeBroadcaster *) override;

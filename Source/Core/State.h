@@ -34,6 +34,8 @@ struct TransportState {
   int currentTrackIndex = -1;
   std::wstring currentMidiName;
   std::wstring lastError;
+  int skippedTracks = 0;
+  uint64_t skipRevision = 0;
 };
 
 struct PlaylistSummary {
@@ -42,6 +44,8 @@ struct PlaylistSummary {
   std::wstring currentListPath;
   std::wstring lastError;
   int playMode = 1;
+  bool hasAvailableTracks = false;
+  uint64_t availabilityRevision = 0;
 };
 
 struct PlaylistEntry {

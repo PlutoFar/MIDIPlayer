@@ -106,8 +106,13 @@ void MainContentComponent::playlistFilesDropped(
 }
 
 void MainContentComponent::showExportDialog() {
+  auto playlist = core.exportPlaylistState();
+  if (playlist.tracks.empty()) {
+    exportBtn.setEnabled(false);
+    showOperationError(L"无法导出", L"播放列表中没有可导出的 MIDI 文件。");
+    return;
+  }
   juce::StringArray trackNames;
-  auto playlist = core.playlistState();
   for (const auto &track : playlist.tracks)
     trackNames.add(juce::String(track.name.c_str()));
 

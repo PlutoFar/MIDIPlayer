@@ -115,6 +115,9 @@ public:
   bool loadList(const std::wstring &path);
   std::wstring lastPlaylistError() const;
 
+  // Postconditions: 返回当前可选的导出曲目及重新映射的当前曲目索引，同步标记已移走的文件。
+  PlaylistState exportPlaylistState() const;
+
   // Postconditions: 可用性为最近发布状态；首次运行和设备恢复标记仅描述本次启动。
   bool hasAudioDevice() const;
   bool isFirstRunAudio() const;

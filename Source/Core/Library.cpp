@@ -33,25 +33,15 @@ juce::Result Core::Impl::scan(std::function<bool()> shouldCancel) {
   return juce::Result::ok();
 }
 
-bool Core::Impl::findById(const PluginId &id, juce::PluginDescription &out) {
-  for (const auto &type : library.plugins().getTypes()) {
-    if (std::wstring(type.createIdentifierString().toWideCharPointer()) == id) {
-      out = type;
-      return true;
-    }
-  }
-  return false;
-}
-
 juce::Result Core::Impl::loadAsync(const PluginId &id, CommandCompletion completion) {
   StateLock lock(stateMutex);
-  juce::PluginDescription description;
   if (!audio.hasDevice())
     return juce::Result::fail(L"没有可用的音频输出设备");
-  if (!findById(id, description))
+  const auto description = library.findInstrument(juce::String(id.c_str()));
+  if (!description)
     return juce::Result::fail(L"未找到所选插件，请重新扫描");
   const auto accepted = startCommandTask(Operation::changePlugin,
-      [this, description] {
+      [this, description = *description] {
         const bool loaded = engine.loadPlugin(description, [this](double rate) {
           StateLock lock(stateMutex);
           engine.getMidiPlayer().setSampleRate(rate);
